@@ -421,7 +421,10 @@ class GetPxPlugin(Star):
                     comment = ai_comments.get(illust_id, "")
                     if comment:
                         content.append(Plain(f"🐱： {comment}"))
-                    await event.send(event.chain_result(content))
+                    try:
+                        await event.send(event.chain_result(content))
+                    except Exception as e:
+                        logger.warning(f"{LOG_PREFIX} 作品 {illust_id} 发送失败: {e}")
         finally:
             for p in temp_paths:
                 self._cleanup(p)
