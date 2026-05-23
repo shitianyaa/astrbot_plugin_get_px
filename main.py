@@ -362,7 +362,9 @@ class GetPxPlugin(Star):
                                 ai_comments[illust.get("id", 0)] = comment
                                 logger.info(f"{LOG_PREFIX} [AI] 作品 {illust.get('id')} 评论完成: {comment[:40]}...")
                         except Exception as e:
-                            logger.error(f"{LOG_PREFIX} [AI] 作品 {illust.get('id')} 识图失败: {e}")
+                            illust_id = illust.get("id", 0)
+                            logger.warning(f"{LOG_PREFIX} [AI] 作品 {illust_id} 识图失败: {e}，已降级跳过")
+                            ai_comments[illust_id] = "羞死啦 羞死啦 ~"
                     await asyncio.gather(*[_analyze(i, il, p) for i, (il, p) in enumerate(to_analyze)])
 
             # 统一发送（避免 yield 和 send 混用导致消息拆分）
