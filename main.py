@@ -420,7 +420,7 @@ class GetPxPlugin(Star):
                     ]
                     comment = ai_comments.get(illust_id, "")
                     if comment:
-                        content.append(Plain(f"🤖 {comment}"))
+                        content.append(Plain(f"🐱： {comment}"))
                     await event.send(event.chain_result(content))
         finally:
             for p in temp_paths:
