@@ -43,7 +43,14 @@
     "type": "string",
     "default": "original",
     "options": ["original", "large", "medium"],
-    "hint": "original=原图（最大，下载慢）, large=大图（推荐）, medium=中图（最小，下载快）。若指定质量不可用会自动降级。"
+    "hint": "original=原图（最大，下载慢）, large=大图（推荐）, medium=中图（最小，下载快）。若原图超过自动降级阈值会降级到更低质量，指定质量不可用也会自动降级。"
+  },
+  "auto_downgrade_original_mb": {
+    "description": "原图自动降级阈值（MiB）",
+    "type": "float",
+    "default": 3.0,
+    "slider": {"min": 0, "max": 100, "step": 0.5},
+    "hint": "当实际下载到的原图超过该大小时，自动改用 large/medium 等低质量图片。设为 0 可禁用自动降级。"
   },
   "send_as_forward": {
     "description": "合并转发发送",

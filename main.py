@@ -52,6 +52,8 @@ PIXIV_HEADERS = {
     "Referer": "https://www.pixiv.net/",
 }
 
+DEFAULT_AUTO_DOWNGRADE_ORIGINAL_LIMIT_MB = 3.0
+
 
 # ──────────────────────────────────────────────────────────────────────
 # Pixiv API 客户端
@@ -272,6 +274,13 @@ class GetPxPlugin(Star):
         ranking_mode = ranking_override or self._cfg_str("pixiv_ranking_mode", "week")
         timeout_sec = self._cfg_float("request_timeout", 30.0, 5.0, 120.0)
         quality = self._cfg_str("image_quality", "original")
+        downgrade_limit_mb = self._cfg_float(
+            "auto_downgrade_original_mb",
+            DEFAULT_AUTO_DOWNGRADE_ORIGINAL_LIMIT_MB,
+            0.0,
+            100.0,
+        )
+        downgrade_limit_bytes = int(downgrade_limit_mb * 1024 * 1024)
         ai_enabled = self._cfg_bool("ai_enabled", False)
         ai_prob = self._cfg_int("ai_probability", 30, 0, 100)
         ai_max = self._cfg_int("ai_max_images", 3, 1, 20)
@@ -326,18 +335,16 @@ class GetPxPlugin(Star):
                 illust_id = illust.get("id", "?")
                 title = illust.get("title", "无标题")
 
-                url = self._pick_image_url(illust, quality)
-                if not url:
-                    logger.warning(f"{LOG_PREFIX} [{idx}/{pick_count}] 作品 {illust_id} 「{title}」无可下载 URL")
-                    continue
-
-                actual_q = "original" if "original" in url else "large" if "large" in url else "medium" if "medium" in url else "square_medium"
-                logger.info(f"{LOG_PREFIX} [{idx}/{pick_count}] 下载作品 {illust_id} 「{title}」 quality={actual_q}")
-
                 try:
-                    path = await self._download_image(url, proxy=self._cfg_str("pixiv_proxy_url"), timeout=timeout_sec)
-                    file_size = os.path.getsize(path)
-                    logger.info(f"{LOG_PREFIX} [{idx}/{pick_count}] 下载完成 {illust_id} -> {path} ({file_size / 1024:.1f} KB)")
+                    path, actual_q, file_size = await self._download_image_for_send(
+                        illust,
+                        quality,
+                        proxy=self._cfg_str("pixiv_proxy_url"),
+                        timeout=timeout_sec,
+                        downgrade_limit_bytes=downgrade_limit_bytes,
+                        log_context=f"[{idx}/{pick_count}] 作品 {illust_id} 「{title}」",
+                    )
+                    logger.info(f"{LOG_PREFIX} [{idx}/{pick_count}] 下载完成 {illust_id} -> {path} ({file_size / 1024:.1f} KB, quality={actual_q})")
                     temp_paths.append(path)
                     downloaded.append((illust, path))
                 except asyncio.TimeoutError:
@@ -609,6 +616,96 @@ class GetPxPlugin(Star):
                     return first_urls[q]
 
         return ""
+
+    @staticmethod
+    def _pick_image_url_exact(illust: dict, quality: str) -> str:
+        """按指定质量提取图片 URL，不做质量回退。"""
+        meta_single = illust.get("meta_single_page") or {}
+        image_urls = illust.get("image_urls") or {}
+
+        if quality == "original":
+            url = meta_single.get("original_image_url") or image_urls.get("original")
+            if url:
+                return url
+        else:
+            url = image_urls.get(quality)
+            if url:
+                return url
+
+        meta_pages = illust.get("meta_pages") or []
+        if meta_pages:
+            first_urls = (meta_pages[0] or {}).get("image_urls") or {}
+            return first_urls.get(quality, "")
+
+        return ""
+
+    async def _download_image_for_send(
+        self,
+        illust: dict,
+        quality: str,
+        proxy: str,
+        timeout: float,
+        downgrade_limit_bytes: int,
+        log_context: str,
+    ) -> tuple[str, str, int]:
+        """下载待发送图片；原图超过配置阈值时自动降级。"""
+        tried_urls: set[str] = set()
+
+        def _quality_from_url(url: str) -> str:
+            return "original" if "original" in url else "large" if "large" in url else "medium" if "medium" in url else "square_medium"
+
+        url = self._pick_image_url(illust, quality)
+        if not url:
+            raise RuntimeError("无可下载 URL")
+        tried_urls.add(url)
+
+        actual_quality = _quality_from_url(url)
+        logger.info(f"{LOG_PREFIX} {log_context} 下载 quality={actual_quality}")
+        path = await self._download_image(url, proxy=proxy, timeout=timeout)
+        file_size = os.path.getsize(path)
+
+        if downgrade_limit_bytes <= 0 or actual_quality != "original" or file_size <= downgrade_limit_bytes:
+            return path, actual_quality, file_size
+
+        logger.info(
+            f"{LOG_PREFIX} {log_context} 原图超过 {downgrade_limit_bytes / 1024 / 1024:.2f} MiB "
+            f"({file_size / 1024 / 1024:.2f} MiB)，自动降低质量"
+        )
+
+        downgrade_succeeded = False
+        for candidate_quality in ("large", "medium", "square_medium"):
+            url = self._pick_image_url_exact(illust, candidate_quality)
+            if not url or url in tried_urls:
+                continue
+            tried_urls.add(url)
+
+            logger.info(f"{LOG_PREFIX} {log_context} 下载 quality={candidate_quality}")
+            try:
+                candidate_path = await self._download_image(url, proxy=proxy, timeout=timeout)
+                candidate_size = os.path.getsize(candidate_path)
+            except Exception as e:
+                logger.warning(f"{LOG_PREFIX} {log_context} 降级到 {candidate_quality} 失败: {e}")
+                continue
+
+            self._cleanup(path)
+            path = candidate_path
+            actual_quality = candidate_quality
+            file_size = candidate_size
+            downgrade_succeeded = True
+
+            if file_size <= downgrade_limit_bytes:
+                break
+
+            logger.info(
+                f"{LOG_PREFIX} {log_context} 降级后仍超过 {downgrade_limit_bytes / 1024 / 1024:.2f} MiB "
+                f"({file_size / 1024 / 1024:.2f} MiB)，继续尝试更低质量"
+            )
+
+        if not downgrade_succeeded:
+            self._cleanup(path)
+            raise RuntimeError(f"原图超过 {downgrade_limit_bytes / 1024 / 1024:.2f} MiB 且降级图片不可用")
+
+        return path, actual_quality, file_size
 
     async def _download_image(self, url: str, proxy: str, timeout: float) -> str:
         """下载图片到临时文件，返回路径。"""

@@ -55,7 +55,8 @@ AstrBot 插件 — 通过标签搜索 Pixiv 插画并发送图片。
 | `pixiv_ranking_mode` | 默认排行榜类型（无标签时使用） | week |
 | `max_count` | 单次最大发送数量（1-20） | 5 |
 | `request_timeout` | 单张图片下载超时（秒） | 30 |
-| `image_quality` | 图片质量：original / large / medium | original |
+| `image_quality` | 图片质量：original / large / medium；原图超过阈值自动降级 | original |
+| `auto_downgrade_original_mb` | 原图自动降级阈值（MiB），设为 0 禁用 | 3.0 |
 | `send_as_forward` | 合并转发发送（聊天记录形式，规避审查） | 开启 |
 | `rate_limit_seconds` | 同一用户请求频率限制（秒） | 3 |
 | `ai_enabled` | AI 识图开关 | 关闭 |
