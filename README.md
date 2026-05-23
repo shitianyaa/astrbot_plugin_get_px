@@ -12,6 +12,7 @@ AstrBot 插件 — 通过标签搜索 Pixiv 插画并发送图片。
 - 🌐 支持 HTTP/SOCKS5 代理
 - 📄 多页作品支持
 - 🤖 AI 识图评论（概率触发，支持自定义提示词）
+- 📱 多平台适配（QQ/微信等，非QQ平台自动降级为逐条发送，兼容性请自行测试）
 
 ## 指令
 
@@ -76,3 +77,7 @@ AstrBot 插件 — 通过标签搜索 Pixiv 插画并发送图片。
 
 1. **下载压缩包**：下载本项目为 zip，通过 AstrBot WebUI 插件页的「导入压缩包」安装
 2. **粘贴链接**：在 AstrBot WebUI 插件页点击「安装」，粘贴本项目 GitHub 链接
+
+## 致谢
+
+- Pixiv 图片获取基于 [pixivpy-async](https://github.com/Mikubill/pixivpy-async)
