@@ -257,6 +257,7 @@ class GetPxPlugin(Star):
         # 频率限制
         wait = self._check_rate_limit(event.get_sender_id())
         if wait > 0:
+            logger.warning(f"{LOG_PREFIX} 用户 {event.get_sender_id()} 触发频率限制，需等待 {wait} 秒")
             yield event.plain_result(f"⏳ 请求太频繁，请 {wait} 秒后再试")
             return
 
