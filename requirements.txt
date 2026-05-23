@@ -1,0 +1,2 @@
+pixivpy-async
+aiohttp

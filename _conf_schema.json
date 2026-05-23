@@ -1,0 +1,113 @@
+{
+  "pixiv_refresh_token": {
+    "description": "Pixiv refresh_token",
+    "type": "string",
+    "default": "",
+    "hint": "必填。用于登录 Pixiv API，长期有效。可用 pixiv-toolbox 获取。"
+  },
+  "pixiv_proxy_url": {
+    "description": "代理地址",
+    "type": "string",
+    "default": "",
+    "hint": "连接 Pixiv 用的代理，留空走直连。支持 http://、socks5://，如 http://127.0.0.1:7890。"
+  },
+  "pixiv_r18": {
+    "description": "R18 模式",
+    "type": "int",
+    "default": 0,
+    "hint": "0 = 仅非 R18，1 = 仅 R18，2 = 混合。"
+  },
+  "pixiv_ranking_mode": {
+    "description": "默认排行榜类型",
+    "type": "string",
+    "default": "week",
+    "options": ["day", "week", "month", "day_male", "day_female", "week_original", "week_rookie", "day_manga"],
+    "hint": "无标签时拉取的排行榜类型。发送 /pv rank list 查看全部类型说明。"
+  },
+  "max_count": {
+    "description": "单次最大发送数量",
+    "type": "int",
+    "default": 5,
+    "slider": {"min": 1, "max": 20, "step": 1},
+    "hint": "用户单次指令最多发送几张图。"
+  },
+  "request_timeout": {
+    "description": "下载超时（秒）",
+    "type": "float",
+    "default": 30.0,
+    "slider": {"min": 5, "max": 120, "step": 5},
+    "hint": "单张图片下载的最大等待时间。"
+  },
+  "image_quality": {
+    "description": "图片质量",
+    "type": "string",
+    "default": "original",
+    "options": ["original", "large", "medium"],
+    "hint": "original=原图（最大，下载慢）, large=大图（推荐）, medium=中图（最小，下载快）。若指定质量不可用会自动降级。"
+  },
+  "send_as_forward": {
+    "description": "合并转发发送",
+    "type": "bool",
+    "default": true,
+    "hint": "开启后多张图片以合并转发消息（聊天记录）形式发送，可规避内容审查风险。关闭则逐条发送。"
+  },
+  "rate_limit_seconds": {
+    "description": "请求频率限制（秒）",
+    "type": "int",
+    "default": 3,
+    "slider": {"min": 0, "max": 60, "step": 1},
+    "hint": "同一用户两次请求的最小间隔，设为 0 禁用。防止刷屏。"
+  },
+  "ai_enabled": {
+    "description": "AI 识图开关",
+    "type": "bool",
+    "default": false,
+    "hint": "开启后发送图片时有概率触发 AI 识图评论。需要 AstrBot 已配置大模型。"
+  },
+  "ai_probability": {
+    "description": "AI 识图触发概率（%）",
+    "type": "int",
+    "default": 30,
+    "slider": {"min": 0, "max": 100, "step": 5},
+    "hint": "每次发送图片时触发 AI 识图的概率，0=永不触发，100=每次都触发。触发后会同时调用识图模型和评论模型。"
+  },
+  "ai_max_images": {
+    "description": "AI 识图最大数量",
+    "type": "int",
+    "default": 3,
+    "slider": {"min": 1, "max": 20, "step": 1},
+    "hint": "触发 AI 识图时最多分析几张图片（从第一张开始）。设为 1 则只分析第一张。"
+  },
+  "ai_pre_message": {
+    "description": "AI 识图预回复消息",
+    "type": "string",
+    "default": "让我先品鉴一番，你稍等喵~",
+    "hint": "触发 AI 识图后先发送的提示消息。留空则不发送预回复。"
+  },
+  "ai_vision_provider_id": {
+    "description": "识图模型",
+    "type": "string",
+    "default": "",
+    "_special": "select_provider",
+    "hint": "用于分析图片内容的视觉模型。留空时优先使用 AstrBot 全局图片描述模型，再回退到当前会话模型。"
+  },
+  "ai_comment_provider_id": {
+    "description": "评论模型",
+    "type": "string",
+    "default": "",
+    "_special": "select_provider",
+    "hint": "用于根据识图结果生成评论的文本模型。留空时使用当前会话模型。"
+  },
+  "ai_vision_prompt": {
+    "description": "识图提示词",
+    "type": "text",
+    "default": "请详细描述这张插画的内容，包括画风、构图、配色、角色特征、表情、姿势、背景等。用简洁的中文描述。",
+    "hint": "发送给视觉模型的提示词，用于分析图片内容。"
+  },
+  "ai_comment_prompt": {
+    "description": "评论提示词",
+    "type": "text",
+    "default": "你是一个 Pixiv 插画鉴赏专家。根据以下图片描述，用轻松有趣的语气写一句简短评论（50字以内）。\n\n图片描述：{description}",
+    "hint": "发送给评论模型的提示词。用 {description} 代表识图结果的占位符。"
+  }
+}

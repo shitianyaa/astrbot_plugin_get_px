@@ -1,0 +1,10 @@
+name: astrbot_plugin_get_px
+display_name: 画境拾珍
+short_desc: 按标签搜索 Pixiv 作品并发送图片，支持排行榜、详情查询
+desc: 通过标签搜索 Pixiv 插画并发送图片。支持多种排行榜（日/周/月/男性向/女性向等）、R18 过滤、作品详情查看、请求频率限制、代理配置。
+version: 2.0.0
+author: Sham1k0
+repo: ""
+dependencies: []
+support_platforms:
+  - aiocqhttp
