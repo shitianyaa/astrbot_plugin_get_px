@@ -704,7 +704,7 @@ class GetPxPlugin(Star):
                         logger.warning(f"{LOG_PREFIX} {log_context} 降级到 {candidate_quality} 失败: {e}")
                         continue
                 else:
-                    yield event.plain_result(f"😢 原图过大且降级图片不可用")
+                    yield event.plain_result("😢 原图过大且降级图片不可用")
                     return
 
             logger.info(f"{LOG_PREFIX} 下载完成 {log_context} -> {path} ({file_size / 1024:.1f} KB)")
@@ -754,7 +754,7 @@ class GetPxPlugin(Star):
 
         except asyncio.TimeoutError:
             logger.warning(f"{LOG_PREFIX} {log_context} 下载超时 ({timeout_sec}s)")
-            yield event.plain_result(f"😢 下载超时，请稍后再试")
+            yield event.plain_result("😢 下载超时，请稍后再试")
         except Exception as e:
             logger.error(f"{LOG_PREFIX} {log_context} 下载失败: {e}")
             yield event.plain_result(f"😢 下载失败: {e}")
