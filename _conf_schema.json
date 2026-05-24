@@ -17,6 +17,12 @@
     "default": 0,
     "hint": "0 = 仅非 R18，1 = 仅 R18，2 = 混合。"
   },
+  "filter_manga": {
+    "description": "过滤漫画",
+    "type": "bool",
+    "default": true,
+    "hint": "开启后，搜索结果全是漫画时自动过滤掉；混合结果（插画+漫画）保留全部。"
+  },
   "pixiv_ranking_mode": {
     "description": "默认排行榜类型",
     "type": "string",
