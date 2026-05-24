@@ -465,7 +465,8 @@ class GetPxPlugin(Star):
                             logger.warning(f"{LOG_PREFIX} 合并转发失败 (第{attempt}次): {e}，{wait_sec}秒后重试...")
                             await asyncio.sleep(wait_sec)
                         else:
-                            logger.warning(f"{LOG_PREFIX} 合并转发失败 (已重试{max_retries}次): {e}，降级为逐条发送")
+                            friendly_err = self._friendly_send_error(e)
+                            logger.warning(f"{LOG_PREFIX} 合并转发失败 (已重试{max_retries}次): {friendly_err} | 原始错误: {e}，降级为逐条发送")
 
                 # 合并转发失败，降级为逐条发送
                 if not forward_success:
@@ -490,7 +491,8 @@ class GetPxPlugin(Star):
                                 if attempt < max_retries:
                                     await asyncio.sleep(attempt * 2)
                                 else:
-                                    logger.error(f"{LOG_PREFIX} [降级] 作品 {illust_id} 发送失败: {e}")
+                                    friendly_err = self._friendly_send_error(e)
+                                    logger.error(f"{LOG_PREFIX} [降级] 作品 {illust_id} 发送失败: {friendly_err} | 原始错误: {e}")
                                     try:
                                         await event.send(event.plain_result(f"⚠️ 作品 {illust_id}「{title}」发送失败，已跳过"))
                                     except Exception:
@@ -520,7 +522,8 @@ class GetPxPlugin(Star):
                                 logger.warning(f"{LOG_PREFIX} 作品 {illust_id} 发送失败 (第{attempt}次): {e}，{wait_sec}秒后重试...")
                                 await asyncio.sleep(wait_sec)
                             else:
-                                logger.error(f"{LOG_PREFIX} 作品 {illust_id} 发送失败 (已重试{max_retries}次): {e}")
+                                friendly_err = self._friendly_send_error(e)
+                                logger.error(f"{LOG_PREFIX} 作品 {illust_id} 发送失败 (已重试{max_retries}次): {friendly_err} | 原始错误: {e}")
                                 try:
                                     await event.send(event.plain_result(f"⚠️ 作品 {illust_id}「{title}」发送失败，已跳过"))
                                 except Exception:
@@ -737,7 +740,8 @@ class GetPxPlugin(Star):
                         logger.warning(f"{LOG_PREFIX} {log_context} 发送失败 (第{attempt}次): {e}，{wait_sec}秒后重试...")
                         await asyncio.sleep(wait_sec)
                     else:
-                        logger.error(f"{LOG_PREFIX} {log_context} 发送失败 (已重试{max_retries}次): {e}")
+                        friendly_err = self._friendly_send_error(e)
+                        logger.error(f"{LOG_PREFIX} {log_context} 发送失败 (已重试{max_retries}次): {friendly_err} | 原始错误: {e}")
                         yield event.plain_result(f"😢 发送失败（已重试{max_retries}次），请稍后再试")
 
         except asyncio.TimeoutError:
@@ -1013,6 +1017,18 @@ class GetPxPlugin(Star):
         if self.session is None or self.session.closed:
             self.session = aiohttp.ClientSession()
         return self.session
+
+    @staticmethod
+    def _friendly_send_error(error: Exception) -> str:
+        """生成友善的发送错误提示。"""
+        error_str = str(error).lower()
+        if isinstance(error, asyncio.TimeoutError) or "timeout" in error_str:
+            return "图片上传超时，可能是图片太大或网络较慢，建议降低图片质量设置"
+        if "cdn" in error_str or "upload" in error_str:
+            return "图片上传到服务器失败，请稍后再试"
+        if "network" in error_str or "connect" in error_str:
+            return "网络连接异常，请检查网络后重试"
+        return "发送失败，请稍后再试"
 
     @staticmethod
     def _cleanup(path: str):
