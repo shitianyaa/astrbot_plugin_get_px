@@ -234,6 +234,40 @@ class GetPxPlugin(Star):
         async for result in self._handle_info(event, int(illust_id)):
             yield result
 
+    @filter.command("pd")
+    async def cmd_download(self, event: AstrMessageEvent, illust_id: str = ""):
+        """通过作品ID下载并发送图片。用法: /pd <作品ID> [页码]"""
+        if not self._ensure_client_or_error(event):
+            yield event.plain_result("⚠️ 未配置 Pixiv Token，请在插件设置中填写 pixiv_refresh_token")
+            return
+        if not illust_id:
+            yield event.plain_result("⚠️ 用法: /pd <作品ID> [页码]\n示例: /pd 12345678\n多页作品可指定页码: /pd 12345678 2")
+            return
+        event.stop_event()
+
+        # 解析参数：/pd 12345678 或 /pd 12345678 2
+        parts = illust_id.split()
+        if len(parts) == 1:
+            id_str = parts[0]
+            page_str = "1"
+        elif len(parts) == 2:
+            id_str, page_str = parts
+        else:
+            yield event.plain_result("⚠️ 用法: /pd <作品ID> [页码]\n示例: /pd 12345678\n多页作品可指定页码: /pd 12345678 2")
+            return
+
+        if not id_str.isdigit():
+            yield event.plain_result("⚠️ 作品ID必须是数字\n用法: /pd <作品ID> [页码]")
+            return
+
+        try:
+            page = int(page_str) if page_str.isdigit() else 1
+        except (TypeError, ValueError):
+            page = 1
+
+        async for result in self._handle_download(event, int(id_str), page):
+            yield result
+
     @filter.command("ph")
     async def cmd_help(self, event: AstrMessageEvent):
         """查看 Pixiv 插件帮助。"""
@@ -481,6 +515,162 @@ class GetPxPlugin(Star):
 
         yield event.plain_result("\n".join(lines))
 
+    async def _handle_download(self, event: AstrMessageEvent, illust_id: int, page: int = 1):
+        """通过作品ID下载并发送图片。"""
+
+        # 频率限制
+        wait = self._check_rate_limit(event.get_sender_id())
+        if wait > 0:
+            logger.warning(f"{LOG_PREFIX} 用户 {event.get_sender_id()} 触发频率限制，需等待 {wait} 秒")
+            yield event.plain_result(f"⏳ 请求太频繁，请 {wait} 秒后再试")
+            return
+
+        # 获取作品详情
+        try:
+            illust = await self.client.illust_detail(illust_id)
+        except Exception as e:
+            yield event.plain_result(f"❌ 获取作品详情失败: {e}")
+            return
+
+        if not illust:
+            yield event.plain_result(f"😶 未找到作品 {illust_id}")
+            return
+
+        # R18 检查
+        r18_mode = self._cfg_int("pixiv_r18", 0, 0, 2)
+        x_restrict = int(illust.get("x_restrict", 0) or 0)
+        if r18_mode == 0 and x_restrict > 0:
+            yield event.plain_result("🔒 该作品为 R18 内容，当前配置不允许下载")
+            return
+        if r18_mode == 1 and x_restrict == 0:
+            yield event.plain_result("🔒 该作品非 R18 内容，当前配置仅允许下载 R18 作品")
+            return
+
+        title = illust.get("title", "无标题")
+        meta_pages = illust.get("meta_pages") or []
+        total_pages = len(meta_pages) if meta_pages else 1
+
+        # 页码校验
+        if page < 1 or page > total_pages:
+            if total_pages == 1:
+                yield event.plain_result(f"⚠️ 该作品只有 1 页，不需要指定页码\n用法: /pd {illust_id}")
+            else:
+                yield event.plain_result(f"⚠️ 页码无效，该作品共 {total_pages} 页\n用法: /pd {illust_id} [1-{total_pages}]")
+            return
+
+        # 获取指定页码的图片URL
+        quality = self._cfg_str("image_quality", "original")
+        proxy = self._cfg_str("pixiv_proxy_url")
+        timeout_sec = self._cfg_float("request_timeout", 30.0, 5.0, 120.0)
+        downgrade_limit_mb = self._cfg_float(
+            "auto_downgrade_original_mb",
+            DEFAULT_AUTO_DOWNGRADE_ORIGINAL_LIMIT_MB,
+            0.0,
+            100.0,
+        )
+        downgrade_limit_bytes = int(downgrade_limit_mb * 1024 * 1024)
+
+        if total_pages > 1:
+            # 多页作品：获取指定页的URL
+            page_data = meta_pages[page - 1] if page - 1 < len(meta_pages) else {}
+            page_urls = page_data.get("image_urls") or {}
+            quality_order = {
+                "original": ["original", "large", "medium", "square_medium"],
+                "large":    ["large", "medium", "square_medium", "original"],
+                "medium":   ["medium", "square_medium", "large", "original"],
+            }
+            order = quality_order.get(quality, quality_order["original"])
+            url = ""
+            for q in order:
+                if page_urls.get(q):
+                    url = page_urls[q]
+                    break
+            if not url:
+                yield event.plain_result(f"😢 作品 {illust_id} 第 {page} 页无可下载URL")
+                return
+        else:
+            # 单页作品
+            url = self._pick_image_url(illust, quality)
+            if not url:
+                yield event.plain_result(f"😢 作品 {illust_id} 无可下载URL")
+                return
+
+        # 下载图片
+        log_context = f"作品 {illust_id}「{title}」第 {page}/{total_pages} 页"
+        logger.info(f"{LOG_PREFIX} 下载 {log_context} quality={quality}")
+
+        try:
+            path = await self._download_image(url, proxy=proxy, timeout=timeout_sec)
+            file_size = os.path.getsize(path)
+
+            # 原图自动降级
+            actual_quality = "original" if "original" in url else "large" if "large" in url else "medium" if "medium" in url else "square_medium"
+            if downgrade_limit_bytes > 0 and actual_quality == "original" and file_size > downgrade_limit_bytes:
+                logger.info(f"{LOG_PREFIX} {log_context} 原图超过阈值，尝试降级")
+                self._cleanup(path)
+
+                # 尝试降级
+                for candidate_quality in ("large", "medium", "square_medium"):
+                    if total_pages > 1:
+                        candidate_url = page_urls.get(candidate_quality, "")
+                    else:
+                        candidate_url = self._pick_image_url_exact(illust, candidate_quality)
+                    if not candidate_url or candidate_url == url:
+                        continue
+                    try:
+                        path = await self._download_image(candidate_url, proxy=proxy, timeout=timeout_sec)
+                        file_size = os.path.getsize(path)
+                        actual_quality = candidate_quality
+                        logger.info(f"{LOG_PREFIX} {log_context} 降级到 {candidate_quality} ({file_size / 1024:.1f} KB)")
+                        break
+                    except Exception as e:
+                        logger.warning(f"{LOG_PREFIX} {log_context} 降级到 {candidate_quality} 失败: {e}")
+                        continue
+                else:
+                    yield event.plain_result(f"😢 原图过大且降级图片不可用")
+                    return
+
+            logger.info(f"{LOG_PREFIX} 下载完成 {log_context} -> {path} ({file_size / 1024:.1f} KB)")
+
+            # 构建发送内容
+            content = [
+                Plain(f"🎨 {title} (ID: {illust_id}, 第 {page}/{total_pages} 页)"),
+                Image.fromFileSystem(path),
+            ]
+
+            # AI 识图
+            ai_enabled = self._cfg_bool("ai_enabled", False)
+            ai_prob = self._cfg_int("ai_probability", 30, 0, 100)
+            if ai_enabled and ai_prob > 0 and random.randint(1, 100) <= ai_prob:
+                ai_pre_msg = self._cfg_str("ai_pre_message", "让我先品鉴一番，你稍等喵~")
+                if ai_pre_msg:
+                    await event.send(event.plain_result(ai_pre_msg))
+                try:
+                    ai_vision_pid = self._cfg_str("ai_vision_provider_id", "")
+                    ai_comment_pid = self._cfg_str("ai_comment_provider_id", "")
+                    ai_vision_prompt = self._cfg_str("ai_vision_prompt", "请详细描述这张插画的内容，包括画风、构图、配色、角色特征、表情、姿势、背景等。用简洁的中文描述。")
+                    ai_comment_prompt = self._cfg_str("ai_comment_prompt", "你是一个 Pixiv 插画鉴赏专家。根据以下图片描述，用轻松有趣的语气写一句简短评论（50字以内）。\n\n图片描述：{description}")
+                    comment = await self._ai_comment(event, path, ai_vision_pid, ai_comment_pid, ai_vision_prompt, ai_comment_prompt)
+                    if comment:
+                        content.append(Plain(f"🐱： {comment}"))
+                except Exception as e:
+                    logger.warning(f"{LOG_PREFIX} [AI] 识图失败: {e}")
+
+            # 发送
+            await event.send(event.chain_result(content))
+            logger.info(f"{LOG_PREFIX} 已发送 {log_context}")
+
+        except asyncio.TimeoutError:
+            logger.warning(f"{LOG_PREFIX} {log_context} 下载超时 ({timeout_sec}s)")
+            yield event.plain_result(f"😢 下载超时，请稍后再试")
+        except Exception as e:
+            logger.error(f"{LOG_PREFIX} {log_context} 下载失败: {e}")
+            yield event.plain_result(f"😢 下载失败: {e}")
+        finally:
+            # 清理临时文件
+            if 'path' in locals() and path:
+                self._cleanup(path)
+
     # ──────────────────────────────────────────────────────────────
     # 帮助
     # ──────────────────────────────────────────────────────────────
@@ -501,6 +691,12 @@ class GetPxPlugin(Star):
             "🔎 /pi <作品ID>",
             "　　查看作品详情",
             "　　示例: /pi 12345678",
+            "",
+            "📥 /pd <作品ID> [页码]",
+            "　　通过作品ID下载并发送图片",
+            "　　多页作品可指定页码",
+            "　　示例: /pd 12345678",
+            "　　示例: /pd 12345678 2",
             "",
             "❓ /ph 显示本帮助",
         ]
