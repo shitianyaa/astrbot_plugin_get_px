@@ -355,8 +355,8 @@ class GetPxPlugin(Star):
                 yield event.plain_result("🔒 过滤后没有可用作品")
             return
 
-        # 漫画过滤（全是漫画时过滤掉，混合结果保留）
-        if filter_manga:
+        # 漫画过滤（全是漫画时过滤掉，混合结果保留；漫画排行榜不过滤）
+        if filter_manga and ranking_mode != "day_manga":
             illusts = self._filter_manga(illusts)
             if not illusts:
                 yield event.plain_result("😶 过滤漫画后没有可用作品，可关闭漫画过滤后重试")
