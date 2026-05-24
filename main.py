@@ -323,6 +323,7 @@ class GetPxPlugin(Star):
         ai_comment_pid = self._cfg_str("ai_comment_provider_id", "")
         ai_vision_prompt = self._cfg_str("ai_vision_prompt", "请详细描述这张插画的内容，包括画风、构图、配色、角色特征、表情、姿势、背景等。用简洁的中文描述。")
         ai_comment_prompt = self._cfg_str("ai_comment_prompt", "你是一个 Pixiv 插画鉴赏专家。根据以下图片描述，用轻松有趣的语气写一句简短评论（50字以内）。\n\n图片描述：{description}")
+        filter_manga = self._cfg_bool("filter_manga", True)
 
         if ranking_mode not in RANKING_MODES:
             ranking_mode = "week"
@@ -353,6 +354,13 @@ class GetPxPlugin(Star):
             else:
                 yield event.plain_result("🔒 过滤后没有可用作品")
             return
+
+        # 漫画过滤（全是漫画时过滤掉，混合结果保留）
+        if filter_manga:
+            illusts = self._filter_manga(illusts)
+            if not illusts:
+                yield event.plain_result("😶 过滤漫画后没有可用作品，可关闭漫画过滤后重试")
+                return
 
         # 随机选取
         pick_count = min(count, len(illusts))
@@ -782,6 +790,10 @@ class GetPxPlugin(Star):
             "　　示例: /pd 12345678",
             "　　示例: /pd 12345678 2",
             "",
+            "⚙️ 漫画过滤（filter_manga）:",
+            "　　开启后，搜索结果全是漫画时自动过滤",
+            "　　混合结果（插画+漫画）保留全部",
+            "",
             "❓ /ph 显示本帮助",
         ]
         return "\n".join(lines)
@@ -866,6 +878,13 @@ class GetPxPlugin(Star):
                 return xr > 0
             return True
         return [i for i in illusts if keep(i)]
+
+    @staticmethod
+    def _filter_manga(illusts: list[dict]) -> list[dict]:
+        """当结果全是漫画时过滤掉；混合结果保留全部。"""
+        if any(il.get("type") == "illust" for il in illusts):
+            return illusts
+        return [il for il in illusts if il.get("type") != "manga"]
 
     @staticmethod
     def _pick_image_url(illust: dict, quality: str = "original") -> str:
