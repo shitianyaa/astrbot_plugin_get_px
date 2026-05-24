@@ -441,8 +441,60 @@ class GetPxPlugin(Star):
                         name="Pixiv",
                         content=content,
                     ))
-                await event.send(event.chain_result([nodes]))
-                logger.info(f"{LOG_PREFIX} 合并转发 {len(nodes.nodes)} 条作品")
+                # 如果有下载失败的图片，在合并消息末尾提示
+                failed_count = pick_count - len(downloaded)
+                if failed_count > 0:
+                    failed_ids = [str(il.get("id", "?")) for il in chosen if not any(d[0].get("id") == il.get("id") for d in downloaded)]
+                    nodes.nodes.append(Node(
+                        uin=self_id,
+                        name="Pixiv",
+                        content=[Plain(f"⚠️ {failed_count} 张图片下载失败（ID: {', '.join(failed_ids)}），已跳过")],
+                    ))
+                # 合并转发（带重试机制）
+                max_retries = 3
+                forward_success = False
+                for attempt in range(1, max_retries + 1):
+                    try:
+                        await event.send(event.chain_result([nodes]))
+                        logger.info(f"{LOG_PREFIX} 合并转发 {len(nodes.nodes)} 条作品" + (f" (第{attempt}次尝试)" if attempt > 1 else ""))
+                        forward_success = True
+                        break
+                    except (asyncio.TimeoutError, Exception) as e:
+                        if attempt < max_retries:
+                            wait_sec = attempt * 2
+                            logger.warning(f"{LOG_PREFIX} 合并转发失败 (第{attempt}次): {e}，{wait_sec}秒后重试...")
+                            await asyncio.sleep(wait_sec)
+                        else:
+                            logger.warning(f"{LOG_PREFIX} 合并转发失败 (已重试{max_retries}次): {e}，降级为逐条发送")
+
+                # 合并转发失败，降级为逐条发送
+                if not forward_success:
+                    await event.send(event.plain_result("⚠️ 合并转发失败，正在逐条发送..."))
+                    for illust, path in downloaded:
+                        title = illust.get("title", "无标题")
+                        illust_id = illust.get("id", "?")
+                        content = [
+                            Plain(f"🎨 {title} (ID: {illust_id})"),
+                            Image.fromFileSystem(path),
+                        ]
+                        comment = ai_comments.get(illust_id, "")
+                        if comment:
+                            content.append(Plain(f"🐱： {comment}"))
+                        # 逐条发送（带重试机制）
+                        for attempt in range(1, max_retries + 1):
+                            try:
+                                await event.send(event.chain_result(content))
+                                logger.info(f"{LOG_PREFIX} [降级] 作品 {illust_id} 已发送")
+                                break
+                            except (asyncio.TimeoutError, Exception) as e:
+                                if attempt < max_retries:
+                                    await asyncio.sleep(attempt * 2)
+                                else:
+                                    logger.error(f"{LOG_PREFIX} [降级] 作品 {illust_id} 发送失败: {e}")
+                                    try:
+                                        await event.send(event.plain_result(f"⚠️ 作品 {illust_id}「{title}」发送失败，已跳过"))
+                                    except Exception:
+                                        pass
             else:
                 # 逐条发送模式
                 for illust, path in downloaded:
@@ -455,10 +507,24 @@ class GetPxPlugin(Star):
                     comment = ai_comments.get(illust_id, "")
                     if comment:
                         content.append(Plain(f"🐱： {comment}"))
-                    try:
-                        await event.send(event.chain_result(content))
-                    except Exception as e:
-                        logger.warning(f"{LOG_PREFIX} 作品 {illust_id} 发送失败: {e}")
+                    # 逐条发送（带重试机制）
+                    max_retries = 3
+                    for attempt in range(1, max_retries + 1):
+                        try:
+                            await event.send(event.chain_result(content))
+                            logger.info(f"{LOG_PREFIX} 作品 {illust_id} 已发送" + (f" (第{attempt}次尝试)" if attempt > 1 else ""))
+                            break
+                        except (asyncio.TimeoutError, Exception) as e:
+                            if attempt < max_retries:
+                                wait_sec = attempt * 2
+                                logger.warning(f"{LOG_PREFIX} 作品 {illust_id} 发送失败 (第{attempt}次): {e}，{wait_sec}秒后重试...")
+                                await asyncio.sleep(wait_sec)
+                            else:
+                                logger.error(f"{LOG_PREFIX} 作品 {illust_id} 发送失败 (已重试{max_retries}次): {e}")
+                                try:
+                                    await event.send(event.plain_result(f"⚠️ 作品 {illust_id}「{title}」发送失败，已跳过"))
+                                except Exception:
+                                    pass
         finally:
             for p in temp_paths:
                 self._cleanup(p)
@@ -656,9 +722,23 @@ class GetPxPlugin(Star):
                 except Exception as e:
                     logger.warning(f"{LOG_PREFIX} [AI] 识图失败: {e}")
 
-            # 发送
-            await event.send(event.chain_result(content))
-            logger.info(f"{LOG_PREFIX} 已发送 {log_context}")
+            # 发送（带重试机制，最多3次）
+            max_retries = 3
+            send_success = False
+            for attempt in range(1, max_retries + 1):
+                try:
+                    await event.send(event.chain_result(content))
+                    logger.info(f"{LOG_PREFIX} 已发送 {log_context}" + (f" (第{attempt}次尝试)" if attempt > 1 else ""))
+                    send_success = True
+                    break
+                except (asyncio.TimeoutError, Exception) as e:
+                    if attempt < max_retries:
+                        wait_sec = attempt * 2  # 递增等待：2秒、4秒
+                        logger.warning(f"{LOG_PREFIX} {log_context} 发送失败 (第{attempt}次): {e}，{wait_sec}秒后重试...")
+                        await asyncio.sleep(wait_sec)
+                    else:
+                        logger.error(f"{LOG_PREFIX} {log_context} 发送失败 (已重试{max_retries}次): {e}")
+                        yield event.plain_result(f"😢 发送失败（已重试{max_retries}次），请稍后再试")
 
         except asyncio.TimeoutError:
             logger.warning(f"{LOG_PREFIX} {log_context} 下载超时 ({timeout_sec}s)")
