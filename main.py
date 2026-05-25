@@ -71,17 +71,23 @@ RANKING_MODES = {
 }
 
 DEFAULT_AUTO_DOWNGRADE_ORIGINAL_LIMIT_MB = 3.0
-DEFAULT_FORTUNE_AI_PROMPT = """根据今日运势结果，写一段适合聊天机器人发送的中文文案。
+DEFAULT_FORTUNE_AI_PROMPT = """请根据下面的今日运势结果，写一段适合聊天机器人发送的中文运势文案。
 
 要求：
-- 必须准确包含运势等级、星级、宜、忌
-- 不编造额外结果，不和原结果冲突
-- 语气轻松自然，略可爱即可
-- 输出纯文本，不要 Markdown
-- 控制在 80-160 字
+- 必须准确保留运势等级、星级、说明、宜、忌、提示
+- 不要新增与结果冲突的信息
+- 语气轻松自然，可以稍微可爱，但不要过度卖萌
+- 输出纯文本，不要 Markdown，不要代码块
+- 严格按示例格式输出
 
-示例风格（不要照抄具体事项）：
-小夏今天是中吉，星星也挺亮：★★★★★★☆。宜写代码、喝水、整理收藏；忌熬夜和冲动消费。按自己的节奏来，把重要的事先做掉，今天会更顺一点。
+输出格式：
+{username}
+今天 {date_str} {title}
+星级{stars}
+{description}
+宜：{good}
+忌：{bad}
+{extra_message}
 
 用户：{username}
 日期：{date_str}
