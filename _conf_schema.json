@@ -64,6 +64,12 @@
     "default": true,
     "hint": "开启后多张图片以合并转发消息（聊天记录）形式发送，可规避内容审查风险。非 QQ 平台不支持合并转发时会自动拆分成单条消息发送；关闭则始终逐条发送。"
   },
+  "auto_trigger_enabled": {
+    "description": "自然语言自动触发",
+    "type": "bool",
+    "default": false,
+    "hint": "开启后，群内发送包含「来份/张图」等自然语言时自动触发 Pixiv 发图。无需命令前缀。"
+  },
   "rate_limit_seconds": {
     "description": "请求频率限制（秒）",
     "type": "int",

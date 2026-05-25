@@ -1,9 +1,13 @@
 """AstrBot 插件 — Pixiv 发图
 
-通过标签搜索 Pixiv 插画并发送图片，支持排行榜、R18 过滤、多页作品、代理配置。
+通过标签搜索 Pixiv 插画并发送图片，支持排行榜、R18 过滤、多页作品、代理配置、自然语言自动触发。
 
 搜索指令：
     /p [标签] [数量]           搜索并发送图片
+
+自动触发（需在配置中开启）：
+    来一份图                   发送 1 张排行榜图片
+    来三张初音ミク图             搜索标签「初音ミク」发送 3 张
 
 管理指令：
     /pr [排行类型] [数量]      获取排行榜
@@ -18,22 +22,29 @@ import asyncio
 import os
 import random
 import re
-import tempfile
 import time
-from dataclasses import dataclass, field
-
-import aiohttp
 
 from astrbot.api.all import AstrBotConfig, Image, Plain, logger
 from astrbot.api.event import AstrMessageEvent, filter
 from astrbot.api.message_components import Node, Nodes
 from astrbot.api.star import Context, Star
 
+from .ai_commenter import AiCommenter
+from .downloader import ImageDownloader, cleanup, pick_image_url, pick_image_url_exact
+from .pixiv_client import PixivClient
+
 # ──────────────────────────────────────────────────────────────────────
 # 常量
 # ──────────────────────────────────────────────────────────────────────
 
 LOG_PREFIX = "[GetPx]"
+
+AUTO_TRIGGER_PATTERN = r"^/?(来\s*(.*?)(份|个|张|点))(.*?)(?:图)?$"
+
+CHINESE_NUMBER_MAP = {
+    "一": "1", "二": "2", "两": "2", "三": "3", "四": "4",
+    "五": "5", "六": "6", "七": "7", "八": "8", "九": "9", "十": "10",
+}
 
 RANKING_MODES = {
     "day":           "今日",
@@ -46,93 +57,7 @@ RANKING_MODES = {
     "day_manga":     "漫画",
 }
 
-PIXIV_HEADERS = {
-    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
-                  "(KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36",
-    "Referer": "https://www.pixiv.net/",
-}
-
 DEFAULT_AUTO_DOWNGRADE_ORIGINAL_LIMIT_MB = 3.0
-
-
-# ──────────────────────────────────────────────────────────────────────
-# Pixiv API 客户端
-# ──────────────────────────────────────────────────────────────────────
-
-@dataclass
-class PixivClient:
-    """封装 pixivpy-async 的登录与缓存逻辑。"""
-
-    refresh_token: str
-    proxy: str = ""
-
-    _api: object = field(default=None, repr=False)
-    _cached_token: str = field(default="", repr=False)
-    _expires_at: float = field(default=0.0, repr=False)
-    _lock: asyncio.Lock = field(default_factory=asyncio.Lock, repr=False)
-
-    # ── 登录 ──
-
-    async def ensure_logged_in(self):
-        """确保 API 已登录，带 50 分钟自动刷新。"""
-        async with self._lock:
-            now = time.monotonic()
-            if self._api is not None and self._cached_token == self.refresh_token and now < self._expires_at:
-                return
-
-            try:
-                from pixivpy_async import AppPixivAPI
-            except ImportError:
-                raise RuntimeError("未安装 pixivpy-async，请运行: pip install pixivpy-async")
-
-            api = AppPixivAPI(proxy=self.proxy) if self.proxy else AppPixivAPI()
-            await api.login(refresh_token=self.refresh_token)
-
-            self._api = api
-            self._cached_token = self.refresh_token
-            self._expires_at = now + 3000  # 50 分钟
-            logger.info(f"{LOG_PREFIX} Pixiv 登录成功")
-
-    @property
-    def api(self):
-        return self._api
-
-    # ── 搜索 ──
-
-    async def search(self, tag: str) -> list[dict]:
-        """按标签搜索插画。"""
-        await self.ensure_logged_in()
-        resp = await self._api.search_illust(tag, search_target="partial_match_for_tags", sort="date_desc")
-        return list(resp.get("illusts") or [])
-
-    async def ranking(self, mode: str = "week") -> list[dict]:
-        """获取排行榜。"""
-        await self.ensure_logged_in()
-        resp = await self._api.illust_ranking(mode=mode)
-        return list(resp.get("illusts") or [])
-
-    async def illust_detail(self, illust_id: int) -> dict | None:
-        """获取单个作品详情。"""
-        await self.ensure_logged_in()
-        try:
-            resp = await self._api.illust_detail(illust_id)
-            return resp.get("illust")
-        except Exception:
-            return None
-
-    # ── 关闭 ──
-
-    async def close(self):
-        if self._api is not None:
-            close = getattr(self._api, "close", None)
-            if callable(close):
-                try:
-                    result = close()
-                    if asyncio.iscoroutine(result):
-                        await result
-                except Exception:
-                    pass
-            self._api = None
 
 
 # ──────────────────────────────────────────────────────────────────────
@@ -144,7 +69,8 @@ class GetPxPlugin(Star):
         super().__init__(context)
         self.config = config
         self.client: PixivClient | None = None
-        self.session: aiohttp.ClientSession | None = None
+        self.downloader = ImageDownloader()
+        self.ai = AiCommenter(context)
         self._last_request: dict[str, float] = {}  # 用户频率限制
 
     # ──────────────────────────────────────────────────────────────
@@ -172,9 +98,7 @@ class GetPxPlugin(Star):
         if self.client is not None:
             await self.client.close()
             self.client = None
-        if self.session is not None and not self.session.closed:
-            await self.session.close()
-            self.session = None
+        await self.downloader.close()
         self._last_request.clear()
         logger.info(f"{LOG_PREFIX} 插件已停止")
 
@@ -273,6 +197,40 @@ class GetPxPlugin(Star):
         """查看 Pixiv 插件帮助。"""
         event.stop_event()
         yield event.plain_result(self._build_help())
+
+    @filter.regex(AUTO_TRIGGER_PATTERN)
+    async def auto_trigger(self, event: AstrMessageEvent):
+        """自然语言自动触发 Pixiv 发图。"""
+        if not self._cfg_bool("auto_trigger_enabled", False):
+            return
+        if not self._ensure_client_or_error(event):
+            return
+
+        message = event.get_message_str().strip()
+        match = re.match(AUTO_TRIGGER_PATTERN, message)
+        if not match:
+            return
+
+        count_part = match.group(2).strip() if match.group(2) else ""
+        tag_part = (match.group(4) or "").strip()
+
+        # 解析数量：中文数字、阿拉伯数字
+        count_str = ""
+        raw = count_part if count_part else "1"
+        if raw.isdigit():
+            count_str = raw
+        else:
+            for cn_digit, arabic in CHINESE_NUMBER_MAP.items():
+                if raw == cn_digit:
+                    count_str = arabic
+                    break
+            if not count_str:
+                count_str = "1"
+
+        event.stop_event()
+        logger.info(f"{LOG_PREFIX} 自然语言触发: count={count_str} tag={tag_part!r}")
+        async for result in self._handle_search(event, tag=tag_part, count_str=count_str):
+            yield result
 
     # ──────────────────────────────────────────────────────────────
     # 子指令实现
@@ -378,7 +336,7 @@ class GetPxPlugin(Star):
                 title = illust.get("title", "无标题")
 
                 try:
-                    path, actual_q, file_size = await self._download_image_for_send(
+                    path, actual_q, file_size = await self.downloader.download_for_send(
                         illust,
                         quality,
                         proxy=self._cfg_str("pixiv_proxy_url"),
@@ -407,7 +365,7 @@ class GetPxPlugin(Star):
                         logger.info(f"{LOG_PREFIX} [AI] 共 {len(downloaded)} 张图，仅分析前 {ai_max} 张")
                     async def _analyze(idx: int, illust: dict, path: str):
                         try:
-                            comment = await self._ai_comment(event, path, ai_vision_pid, ai_comment_pid, ai_vision_prompt, ai_comment_prompt)
+                            comment = await self.ai.comment(event, path, ai_vision_pid, ai_comment_pid, ai_vision_prompt, ai_comment_prompt)
                             if comment:
                                 ai_comments[illust.get("id", 0)] = comment
                                 logger.info(f"{LOG_PREFIX} [AI] 作品 {illust.get('id')} 评论完成: {comment[:40]}...")
@@ -538,7 +496,7 @@ class GetPxPlugin(Star):
                                     pass
         finally:
             for p in temp_paths:
-                self._cleanup(p)
+                cleanup(p)
 
     async def _handle_rank(self, event: AstrMessageEvent, mode: str, count_str: str = ""):
         """排行榜模式。"""
@@ -667,7 +625,7 @@ class GetPxPlugin(Star):
                 return
         else:
             # 单页作品
-            url = self._pick_image_url(illust, quality)
+            url = pick_image_url(illust, quality)
             if not url:
                 yield event.plain_result(f"😢 作品 {illust_id} 无可下载URL")
                 return
@@ -677,25 +635,25 @@ class GetPxPlugin(Star):
         logger.info(f"{LOG_PREFIX} 下载 {log_context} quality={quality}")
 
         try:
-            path = await self._download_image(url, proxy=proxy, timeout=timeout_sec)
+            path = await self.downloader.download(url, proxy=proxy, timeout=timeout_sec)
             file_size = os.path.getsize(path)
 
             # 原图自动降级
             actual_quality = "original" if "original" in url else "large" if "large" in url else "medium" if "medium" in url else "square_medium"
             if downgrade_limit_bytes > 0 and actual_quality == "original" and file_size > downgrade_limit_bytes:
                 logger.info(f"{LOG_PREFIX} {log_context} 原图超过阈值，尝试降级")
-                self._cleanup(path)
+                cleanup(path)
 
                 # 尝试降级
                 for candidate_quality in ("large", "medium", "square_medium"):
                     if total_pages > 1:
                         candidate_url = page_urls.get(candidate_quality, "")
                     else:
-                        candidate_url = self._pick_image_url_exact(illust, candidate_quality)
+                        candidate_url = pick_image_url_exact(illust, candidate_quality)
                     if not candidate_url or candidate_url == url:
                         continue
                     try:
-                        path = await self._download_image(candidate_url, proxy=proxy, timeout=timeout_sec)
+                        path = await self.downloader.download(candidate_url, proxy=proxy, timeout=timeout_sec)
                         file_size = os.path.getsize(path)
                         actual_quality = candidate_quality
                         logger.info(f"{LOG_PREFIX} {log_context} 降级到 {candidate_quality} ({file_size / 1024:.1f} KB)")
@@ -727,7 +685,7 @@ class GetPxPlugin(Star):
                     ai_comment_pid = self._cfg_str("ai_comment_provider_id", "")
                     ai_vision_prompt = self._cfg_str("ai_vision_prompt", "请详细描述这张插画的内容，包括画风、构图、配色、角色特征、表情、姿势、背景等。用简洁的中文描述。")
                     ai_comment_prompt = self._cfg_str("ai_comment_prompt", "你是一个 Pixiv 插画鉴赏专家。根据以下图片描述，用轻松有趣的语气写一句简短评论（50字以内）。\n\n图片描述：{description}")
-                    comment = await self._ai_comment(event, path, ai_vision_pid, ai_comment_pid, ai_vision_prompt, ai_comment_prompt)
+                    comment = await self.ai.comment(event, path, ai_vision_pid, ai_comment_pid, ai_vision_prompt, ai_comment_prompt)
                     if comment:
                         content.append(Plain(f"🐱： {comment}"))
                 except Exception as e:
@@ -761,7 +719,7 @@ class GetPxPlugin(Star):
         finally:
             # 清理临时文件
             if 'path' in locals() and path:
-                self._cleanup(path)
+                cleanup(path)
 
     # ──────────────────────────────────────────────────────────────
     # 帮助
@@ -790,6 +748,11 @@ class GetPxPlugin(Star):
             "　　示例: /pd 12345678",
             "　　示例: /pd 12345678 2",
             "",
+            "🤖 自然语言触发（需配置开启 auto_trigger_enabled）",
+            "　　来一份图 → 发送 1 张排行榜图片",
+            "　　来三张初音ミク图 → 搜标签发送 3 张",
+            "　　来两张萝莉 → 搜标签发送 2 张",
+            "",
             "⚙️ 漫画过滤（filter_manga）:",
             "　　开启后，搜索结果全是漫画时自动过滤",
             "　　混合结果（插画+漫画）保留全部",
@@ -797,71 +760,6 @@ class GetPxPlugin(Star):
             "❓ /ph 显示本帮助",
         ]
         return "\n".join(lines)
-
-    # ──────────────────────────────────────────────────────────────
-    # AI 识图
-    # ──────────────────────────────────────────────────────────────
-
-    async def _ai_comment(self, event: AstrMessageEvent, image_path: str,
-                           vision_pid: str, comment_pid: str,
-                           vision_prompt: str, comment_prompt: str) -> str:
-        """两步 AI 识图：1. 视觉模型描述图片 → 2. 文本模型评论。"""
-        from pathlib import Path
-        image_url = Path(image_path).as_uri()
-        umo = event.unified_msg_origin
-
-        # ── 解析识图模型 ──
-        v_pid = await self._resolve_provider(vision_pid, umo, prefer_vision=True)
-        if not v_pid:
-            raise RuntimeError("未配置视觉模型，无法进行 AI 识图")
-        logger.info(f"{LOG_PREFIX} [AI] 识图模型: {v_pid}")
-
-        # 第一步：视觉模型识图
-        vision_resp = await self.context.llm_generate(
-            chat_provider_id=v_pid,
-            prompt=vision_prompt,
-            image_urls=[image_url],
-        )
-        description = (vision_resp.completion_text or "").strip()
-        if not description:
-            raise RuntimeError("视觉模型返回空结果")
-        logger.info(f"{LOG_PREFIX} [AI] 识图结果: {description[:80]}...")
-
-        # ── 解析评论模型 ──
-        c_pid = await self._resolve_provider(comment_pid, umo)
-        if not c_pid:
-            raise RuntimeError("未配置评论模型")
-        logger.info(f"{LOG_PREFIX} [AI] 评论模型: {c_pid}")
-
-        # 第二步：文本模型评论
-        final_prompt = comment_prompt.replace("{description}", description)
-        comment_resp = await self.context.llm_generate(
-            chat_provider_id=c_pid,
-            prompt=final_prompt,
-        )
-        return (comment_resp.completion_text or "").strip()
-
-    async def _resolve_provider(self, config_pid: str, umo: str, prefer_vision: bool = False) -> str:
-        """解析 provider ID。优先级：配置 > 框架全局视觉模型 > 当前会话模型。"""
-        if config_pid:
-            return config_pid
-        if prefer_vision:
-            # 尝试框架全局图片描述模型
-            try:
-                cfg = self.context.get_config()
-                vlm_id = str((cfg.get("provider_settings") or {}).get("default_image_caption_provider_id", "") or "").strip()
-                if vlm_id:
-                    return vlm_id
-            except Exception:
-                pass
-        # 回退到当前会话模型
-        try:
-            pid = await self.context.get_current_chat_provider_id(umo=umo)
-            if pid:
-                return str(pid).strip()
-        except Exception:
-            pass
-        return ""
 
     # ──────────────────────────────────────────────────────────────
     # 工具方法
@@ -887,157 +785,6 @@ class GetPxPlugin(Star):
         return [il for il in illusts if il.get("type") != "manga"]
 
     @staticmethod
-    def _pick_image_url(illust: dict, quality: str = "original") -> str:
-        """从作品数据中提取图片 URL。quality: original / large / medium。"""
-        # 质量优先级
-        quality_order = {
-            "original": ["original", "large", "medium", "square_medium"],
-            "large":    ["large", "medium", "square_medium", "original"],
-            "medium":   ["medium", "square_medium", "large", "original"],
-        }
-        order = quality_order.get(quality, quality_order["original"])
-
-        # 单页作品
-        meta_single = illust.get("meta_single_page") or {}
-        image_urls = illust.get("image_urls") or {}
-        for q in order:
-            if q == "original":
-                url = meta_single.get("original_image_url")
-                if url:
-                    return url
-            else:
-                if image_urls.get(q):
-                    return image_urls[q]
-
-        # 多页作品：取第一页
-        meta_pages = illust.get("meta_pages") or []
-        if meta_pages:
-            first_urls = (meta_pages[0] or {}).get("image_urls") or {}
-            for q in order:
-                if first_urls.get(q):
-                    return first_urls[q]
-
-        return ""
-
-    @staticmethod
-    def _pick_image_url_exact(illust: dict, quality: str) -> str:
-        """按指定质量提取图片 URL，不做质量回退。"""
-        meta_single = illust.get("meta_single_page") or {}
-        image_urls = illust.get("image_urls") or {}
-
-        if quality == "original":
-            url = meta_single.get("original_image_url") or image_urls.get("original")
-            if url:
-                return url
-        else:
-            url = image_urls.get(quality)
-            if url:
-                return url
-
-        meta_pages = illust.get("meta_pages") or []
-        if meta_pages:
-            first_urls = (meta_pages[0] or {}).get("image_urls") or {}
-            return first_urls.get(quality, "")
-
-        return ""
-
-    async def _download_image_for_send(
-        self,
-        illust: dict,
-        quality: str,
-        proxy: str,
-        timeout: float,
-        downgrade_limit_bytes: int,
-        log_context: str,
-    ) -> tuple[str, str, int]:
-        """下载待发送图片；原图超过配置阈值时自动降级。"""
-        tried_urls: set[str] = set()
-
-        def _quality_from_url(url: str) -> str:
-            return "original" if "original" in url else "large" if "large" in url else "medium" if "medium" in url else "square_medium"
-
-        url = self._pick_image_url(illust, quality)
-        if not url:
-            raise RuntimeError("无可下载 URL")
-        tried_urls.add(url)
-
-        actual_quality = _quality_from_url(url)
-        logger.info(f"{LOG_PREFIX} {log_context} 下载 quality={actual_quality}")
-        path = await self._download_image(url, proxy=proxy, timeout=timeout)
-        file_size = os.path.getsize(path)
-
-        if downgrade_limit_bytes <= 0 or actual_quality != "original" or file_size <= downgrade_limit_bytes:
-            return path, actual_quality, file_size
-
-        logger.info(
-            f"{LOG_PREFIX} {log_context} 原图超过 {downgrade_limit_bytes / 1024 / 1024:.2f} MiB "
-            f"({file_size / 1024 / 1024:.2f} MiB)，自动降低质量"
-        )
-
-        downgrade_succeeded = False
-        for candidate_quality in ("large", "medium", "square_medium"):
-            url = self._pick_image_url_exact(illust, candidate_quality)
-            if not url or url in tried_urls:
-                continue
-            tried_urls.add(url)
-
-            logger.info(f"{LOG_PREFIX} {log_context} 下载 quality={candidate_quality}")
-            try:
-                candidate_path = await self._download_image(url, proxy=proxy, timeout=timeout)
-                candidate_size = os.path.getsize(candidate_path)
-            except Exception as e:
-                logger.warning(f"{LOG_PREFIX} {log_context} 降级到 {candidate_quality} 失败: {e}")
-                continue
-
-            self._cleanup(path)
-            path = candidate_path
-            actual_quality = candidate_quality
-            file_size = candidate_size
-            downgrade_succeeded = True
-
-            if file_size <= downgrade_limit_bytes:
-                break
-
-            logger.info(
-                f"{LOG_PREFIX} {log_context} 降级后仍超过 {downgrade_limit_bytes / 1024 / 1024:.2f} MiB "
-                f"({file_size / 1024 / 1024:.2f} MiB)，继续尝试更低质量"
-            )
-
-        if not downgrade_succeeded:
-            self._cleanup(path)
-            raise RuntimeError(f"原图超过 {downgrade_limit_bytes / 1024 / 1024:.2f} MiB 且降级图片不可用")
-
-        return path, actual_quality, file_size
-
-    async def _download_image(self, url: str, proxy: str, timeout: float) -> str:
-        """下载图片到临时文件，返回路径。"""
-        session = self._ensure_session()
-        client_timeout = aiohttp.ClientTimeout(total=timeout)
-        async with session.get(url, headers=PIXIV_HEADERS, proxy=proxy or None, timeout=client_timeout) as resp:
-            if resp.status != 200:
-                raise RuntimeError(f"HTTP {resp.status}")
-            body = await resp.read()
-
-        # 根据 URL 判断后缀
-        suffix = ".jpg"
-        lower_path = url.split("?")[0].lower()
-        for ext in (".png", ".gif", ".webp", ".jpeg"):
-            if lower_path.endswith(ext):
-                suffix = ext
-                break
-
-        fd, path = tempfile.mkstemp(prefix="get_px_", suffix=suffix)
-        with os.fdopen(fd, "wb") as f:
-            f.write(body)
-        return path
-
-    def _ensure_session(self) -> aiohttp.ClientSession:
-        """确保全局 aiohttp 会话存在。"""
-        if self.session is None or self.session.closed:
-            self.session = aiohttp.ClientSession()
-        return self.session
-
-    @staticmethod
     def _friendly_send_error(error: Exception) -> str:
         """生成友善的发送错误提示。"""
         error_str = str(error).lower()
@@ -1048,15 +795,6 @@ class GetPxPlugin(Star):
         if "network" in error_str or "connect" in error_str:
             return "网络连接异常，请检查网络后重试"
         return "发送失败，请稍后再试"
-
-    @staticmethod
-    def _cleanup(path: str):
-        """安全删除临时文件。"""
-        try:
-            if path and os.path.exists(path):
-                os.remove(path)
-        except OSError:
-            pass
 
     def _check_rate_limit(self, user_id: str) -> int:
         """检查用户请求频率，返回需等待秒数（0 表示可立即请求）。"""

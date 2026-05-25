@@ -1,5 +1,24 @@
 # 更新日志
 
+## v2.3.0 (2026-05-25)
+
+### ✨ 新增
+- **自然语言自动触发**（需在配置中开启 `auto_trigger_enabled`）
+  - 群内发送「来一份图」「来三张初音ミク图」等自然语言时自动触发 Pixiv 发图
+  - 支持中文数字（一到十、两）和阿拉伯数字
+  - 支持标签搜索和排行榜（无标签时）
+  - 受频率限制保护
+
+### 🔧 改进
+- **模块拆分**：将 PixivClient、ImageDownloader、AiCommenter 拆分为独立模块
+  - `pixiv_client.py` — Pixiv API 客户端
+  - `downloader.py` — 图片下载、URL 提取、临时文件管理
+  - `ai_commenter.py` — AI 识图评论管道
+- 减少代码重复，提升可维护性
+
+### 📝 配置
+- 新增 `auto_trigger_enabled` 配置项（自然语言自动触发开关）
+
 ## v2.2.0 (2026-05-24)
 
 ### ✨ 新增
