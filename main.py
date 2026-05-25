@@ -20,6 +20,7 @@
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import os
 import random
 import re
@@ -70,6 +71,23 @@ RANKING_MODES = {
 }
 
 DEFAULT_AUTO_DOWNGRADE_ORIGINAL_LIMIT_MB = 3.0
+DEFAULT_FORTUNE_AI_PROMPT = """请根据下面的今日运势结果，写一段适合聊天机器人发送的中文运势文案。
+
+要求：
+- 保留并准确表达运势等级、星级、宜、忌
+- 不要新增与结果冲突的信息
+- 语气轻松自然，可以可爱一点，但不要过度卖萌
+- 输出纯文本，不要 Markdown，不要代码块
+- 控制在 180 字以内
+
+用户：{username}
+日期：{date_str}
+运势：{title}
+星级：{stars}
+说明：{description}
+宜：{good}
+忌：{bad}
+提示：{extra_message}"""
 
 
 # ──────────────────────────────────────────────────────────────────────
@@ -86,6 +104,7 @@ class GetPxPlugin(Star):
         self.ai = AiCommenter(context)
         self._last_request: dict[str, float] = {}
         self._recent_illusts: dict[str, dict[str, float]] = {}
+        self._fortune_text_cache: dict[str, str] = {}
 
     # ──────────────────────────────────────────────────────────────
     # 生命周期
@@ -115,6 +134,7 @@ class GetPxPlugin(Star):
         await self.downloader.close()
         self._last_request.clear()
         self._recent_illusts.clear()
+        self._fortune_text_cache.clear()
         logger.info(f"{LOG_PREFIX} 插件已停止")
 
     # ──────────────────────────────────────────────────────────────
@@ -225,7 +245,7 @@ class GetPxPlugin(Star):
         event.stop_event()
         yield event.plain_result(self._build_help())
 
-    @filter.command("今日运势", alias={"jrys"})
+    @filter.command("今日运势", alias=["jrys"])
     async def cmd_fortune(self, event: AstrMessageEvent):
         """查看今日运势。"""
         event.stop_event()
@@ -305,11 +325,233 @@ class GetPxPlugin(Star):
         result = build_fortune(
             user_id or username, username, str(group_id) if group_id else None
         )
-        yield event.plain_result(format_fortune(result))
+        fallback_text = format_fortune(result)
+        fortune_text = await self._build_fortune_text(event, result, fallback_text)
+
+        if self._cfg_bool("fortune_image_enabled", True):
+            fortune_image = await self._download_fortune_image(event, result)
+            if fortune_image:
+                illust, image_path = fortune_image
+                try:
+                    if await self._send_fortune_with_image(
+                        event, fortune_text, illust, image_path
+                    ):
+                        return
+                finally:
+                    cleanup(image_path)
+
+        yield event.plain_result(fortune_text)
+
+    async def _build_fortune_text(
+        self, event: AstrMessageEvent, result, fallback_text: str
+    ) -> str:
+        """Build fortune text, optionally rewritten by a text model."""
+        if not self._cfg_bool("fortune_ai_text_enabled", False):
+            return fallback_text
+
+        provider_id = await self.ai._resolve_provider(
+            self._cfg_str("fortune_ai_provider_id", ""),
+            event.unified_msg_origin,
+        )
+        if not provider_id:
+            logger.warning(f"{LOG_PREFIX} 今日运势文案生成跳过：未配置文本模型")
+            return fallback_text
+
+        stars = "★" * result.star_count + "☆" * (result.max_stars - result.star_count)
+        prompt_template = self._cfg_str("fortune_ai_prompt", DEFAULT_FORTUNE_AI_PROMPT)
+        prompt_data = {
+            "username": result.username,
+            "date_str": result.date_str,
+            "title": result.title,
+            "star_count": result.star_count,
+            "max_stars": result.max_stars,
+            "stars": stars,
+            "description": result.description,
+            "good": result.good,
+            "bad": result.bad,
+            "extra_message": result.extra_message,
+        }
+        try:
+            prompt = self._format_prompt_template(prompt_template, prompt_data)
+        except ValueError as e:
+            logger.warning(f"{LOG_PREFIX} 今日运势文案提示词格式错误: {e}，回退预置文案")
+            return fallback_text
+        prompt_hash = hashlib.sha256(prompt.encode("utf-8")).hexdigest()[:16]
+        cache_key = (
+            f"{result.date_str}|{event.get_sender_id() or ''}|"
+            f"{event.get_group_id() or 'private'}|{provider_id}|{prompt_hash}"
+        )
+        cached = self._fortune_text_cache.get(cache_key)
+        if cached:
+            return cached
+
+        try:
+            resp = await self.context.llm_generate(
+                chat_provider_id=provider_id,
+                prompt=prompt,
+            )
+            if isinstance(resp, str):
+                text = resp.strip()
+            else:
+                text = (getattr(resp, "completion_text", "") or "").strip()
+            if not text:
+                logger.warning(f"{LOG_PREFIX} 今日运势文案模型返回空结果，回退预置文案")
+                return fallback_text
+            text = self._strip_code_fence(text)
+            if len(text) > 600:
+                text = text[:600].rstrip()
+            self._fortune_text_cache[cache_key] = text
+            logger.info(f"{LOG_PREFIX} 今日运势文案已由模型生成 provider={provider_id}")
+            return text
+        except Exception as e:
+            logger.warning(f"{LOG_PREFIX} 今日运势文案生成失败: {e}，回退预置文案")
+            return fallback_text
+
+    @staticmethod
+    def _format_prompt_template(template: str, data: dict) -> str:
+        class SafeDict(dict):
+            def __missing__(self, key):
+                return "{" + key + "}"
+
+        return template.format_map(SafeDict(data))
+
+    @staticmethod
+    def _strip_code_fence(text: str) -> str:
+        stripped = text.strip()
+        if stripped.startswith("```") and stripped.endswith("```"):
+            lines = stripped.splitlines()
+            if len(lines) >= 3:
+                return "\n".join(lines[1:-1]).strip()
+        return stripped
+
+    async def _download_fortune_image(self, event: AstrMessageEvent, result):
+        """Fetch one Pixiv image for today's fortune, falling back silently on failure."""
+        token = self._cfg_str("pixiv_refresh_token")
+        if not token:
+            logger.info(f"{LOG_PREFIX} 今日运势配图跳过：未配置 Pixiv refresh_token")
+            return None
+        if self.client is None:
+            self._init_client()
+        if self.client is None:
+            return None
+
+        tag = self._cfg_str("fortune_image_tag", "")
+        ranking_mode = self._cfg_str("pixiv_ranking_mode", "week")
+        if ranking_mode not in RANKING_MODES:
+            ranking_mode = "week"
+
+        try:
+            if tag:
+                illusts = await self.client.search(tag)
+                source_desc = f"tag={tag!r}"
+            else:
+                illusts = await self.client.ranking(ranking_mode)
+                source_desc = f"rank={ranking_mode}"
+        except Exception as e:
+            logger.warning(f"{LOG_PREFIX} 今日运势配图获取失败: {e}")
+            return None
+
+        r18_mode = self._cfg_int("pixiv_r18", 0, 0, 2)
+        illusts = self._filter_r18(illusts, r18_mode)
+        is_manga_ranking = not tag and ranking_mode == "day_manga"
+        if self._cfg_bool("filter_manga", True) and not is_manga_ranking:
+            illusts = self._filter_manga(illusts)
+        if not illusts:
+            logger.info(f"{LOG_PREFIX} 今日运势配图无可用作品 ({source_desc})")
+            return None
+
+        quality = self._cfg_str("image_quality", "original")
+        timeout_sec = self._cfg_float("request_timeout", 30.0, 5.0, 120.0)
+        downgrade_limit_mb = self._cfg_float(
+            "auto_downgrade_original_mb",
+            DEFAULT_AUTO_DOWNGRADE_ORIGINAL_LIMIT_MB,
+            0.0,
+            100.0,
+        )
+        downgrade_limit_bytes = int(downgrade_limit_mb * 1024 * 1024)
+
+        seed_text = (
+            f"fortune-image|{result.date_str}|{event.get_sender_id() or ''}|"
+            f"{event.get_group_id() or 'private'}|{tag}|{ranking_mode}"
+        )
+        seed = int.from_bytes(
+            hashlib.sha256(seed_text.encode("utf-8")).digest()[:8], "big"
+        )
+        start = seed % len(illusts)
+        ordered = illusts[start:] + illusts[:start]
+
+        for idx, illust in enumerate(ordered[:5], 1):
+            illust_id = illust.get("id", "?")
+            title = illust.get("title", "无标题")
+            try:
+                path, actual_q, file_size = await self.downloader.download_for_send(
+                    illust,
+                    quality,
+                    proxy=self._cfg_str("pixiv_proxy_url"),
+                    timeout=timeout_sec,
+                    downgrade_limit_bytes=downgrade_limit_bytes,
+                    log_context=f"[今日运势配图 {idx}] 作品 {illust_id} 「{title}」",
+                )
+                logger.info(
+                    f"{LOG_PREFIX} 今日运势配图下载完成 {illust_id} -> {path} "
+                    f"({file_size / 1024:.1f} KB, quality={actual_q})"
+                )
+                return illust, path
+            except asyncio.TimeoutError:
+                logger.warning(
+                    f"{LOG_PREFIX} 今日运势配图 {illust_id} 下载超时 ({timeout_sec}s)"
+                )
+            except Exception as e:
+                logger.warning(f"{LOG_PREFIX} 今日运势配图 {illust_id} 下载失败: {e}")
+
+        return None
+
+    async def _send_fortune_with_image(
+        self, event: AstrMessageEvent, fortune_text: str, illust: dict, image_path: str
+    ) -> bool:
+        """Send fortune text with one Pixiv image."""
+        title = illust.get("title", "无标题")
+        illust_id = illust.get("id", "?")
+        content = [
+            Plain(fortune_text),
+            Image.fromFileSystem(image_path),
+            Plain(f"配图：{title} (ID: {illust_id})"),
+        ]
+
+        max_retries = 3
+        for attempt in range(1, max_retries + 1):
+            try:
+                await event.send(event.chain_result(content))
+                logger.info(
+                    f"{LOG_PREFIX} 今日运势配图已发送 {illust_id}"
+                    + (f" (第{attempt}次尝试)" if attempt > 1 else "")
+                )
+                return True
+            except (asyncio.TimeoutError, Exception) as e:
+                if attempt < max_retries:
+                    wait_sec = attempt * 2
+                    logger.warning(
+                        f"{LOG_PREFIX} 今日运势配图发送失败 (第{attempt}次): {e}，{wait_sec}秒后重试..."
+                    )
+                    await asyncio.sleep(wait_sec)
+                    continue
+                friendly_err = self._friendly_send_error(e)
+                logger.warning(
+                    f"{LOG_PREFIX} 今日运势配图发送失败 (已重试{max_retries}次): "
+                    f"{friendly_err} | 原始错误: {e}，回退纯文字"
+                )
+        return False
 
     @staticmethod
     def _event_username(event: AstrMessageEvent, default: str) -> str:
         """从事件中提取用户昵称。"""
+        try:
+            value = event.get_sender_name()
+        except Exception:
+            value = None
+        if value:
+            return str(value)
+
         message_obj = getattr(event, "message_obj", None)
         sender = getattr(message_obj, "sender", None)
         for attr in ("nickname", "name", "user_name"):
