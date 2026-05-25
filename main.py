@@ -66,7 +66,7 @@ DEFAULT_AUTO_DOWNGRADE_ORIGINAL_LIMIT_MB = 3.0
 
 class GetPxPlugin(Star):
     def __init__(self, context: Context, config: AstrBotConfig):
-        super().__init__(context)
+        super().__init__(context, config)
         self.config = config
         self.client: PixivClient | None = None
         self.downloader = ImageDownloader()
@@ -227,7 +227,6 @@ class GetPxPlugin(Star):
             if not count_str:
                 count_str = "1"
 
-        event.stop_event()
         logger.info(f"{LOG_PREFIX} 自然语言触发: count={count_str} tag={tag_part!r}")
         async for result in self._handle_search(event, tag=tag_part, count_str=count_str):
             yield result
