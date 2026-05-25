@@ -107,6 +107,7 @@ class GetPxPlugin(Star):
         self.ai = AiCommenter(context)
         self._last_request: dict[str, float] = {}
         self._recent_illusts: dict[str, dict[str, float]] = {}
+        self._fortune_image_assignments: dict[str, str] = {}
         self._fortune_text_cache: dict[str, str] = {}
 
     # ──────────────────────────────────────────────────────────────
@@ -137,6 +138,7 @@ class GetPxPlugin(Star):
         await self.downloader.close()
         self._last_request.clear()
         self._recent_illusts.clear()
+        self._fortune_image_assignments.clear()
         self._fortune_text_cache.clear()
         logger.info(f"{LOG_PREFIX} 插件已停止")
 
@@ -334,11 +336,14 @@ class GetPxPlugin(Star):
         if self._cfg_bool("fortune_image_enabled", True):
             fortune_image = await self._download_fortune_image(event, result)
             if fortune_image:
-                illust, image_path = fortune_image
+                illust, image_path, dedupe_key, assignment_key = fortune_image
                 try:
                     if await self._send_fortune_with_image(
                         event, fortune_text, illust, image_path
                     ):
+                        self._mark_fortune_image_sent(
+                            dedupe_key, assignment_key, illust
+                        )
                         return
                 finally:
                     cleanup(image_path)
@@ -442,6 +447,7 @@ class GetPxPlugin(Star):
         if self.client is None:
             return None
 
+        self._prune_fortune_image_assignments(result.date_str)
         tag_config = self._cfg_str("fortune_image_tag", "")
         tags = self._split_config_tags(tag_config)
         selected_tag = ""
@@ -497,6 +503,18 @@ class GetPxPlugin(Star):
         )
         start = seed % len(illusts)
         ordered = illusts[start:] + illusts[:start]
+        dedupe_ttl_hours = self._cfg_float("dedupe_ttl_hours", 24.0, 0.0, 720.0)
+        dedupe_key = self._fortune_image_dedupe_key(event, result.date_str)
+        source_key = self._fortune_image_source_key(selected_tag, ranking_mode)
+        assignment_key = self._fortune_image_assignment_key(
+            event, result.date_str, source_key
+        )
+        ordered = self._prioritize_fortune_image_candidates(
+            ordered,
+            dedupe_key=dedupe_key,
+            assignment_key=assignment_key,
+            ttl_hours=dedupe_ttl_hours,
+        )
 
         for idx, illust in enumerate(ordered[:5], 1):
             illust_id = illust.get("id", "?")
@@ -514,7 +532,7 @@ class GetPxPlugin(Star):
                     f"{LOG_PREFIX} 今日运势配图下载完成 {illust_id} -> {path} "
                     f"({file_size / 1024:.1f} KB, quality={actual_q})"
                 )
-                return illust, path
+                return illust, path, dedupe_key, assignment_key
             except asyncio.TimeoutError:
                 logger.warning(
                     f"{LOG_PREFIX} 今日运势配图 {illust_id} 下载超时 ({timeout_sec}s)"
@@ -1321,6 +1339,82 @@ class GetPxPlugin(Star):
             if illust_id:
                 recent[illust_id] = now
         return chosen
+
+    def _prioritize_fortune_image_candidates(
+        self,
+        illusts: list[dict],
+        *,
+        dedupe_key: str,
+        assignment_key: str,
+        ttl_hours: float,
+    ) -> list[dict]:
+        if not illusts:
+            return illusts
+
+        assigned_id = self._fortune_image_assignments.get(assignment_key)
+        assigned = [i for i in illusts if str(i.get("id", "")) == assigned_id]
+        assigned_ids = {str(i.get("id", "")) for i in assigned}
+        remaining = [i for i in illusts if str(i.get("id", "")) not in assigned_ids]
+
+        if ttl_hours <= 0:
+            return assigned + remaining
+
+        recent = self._recent_illusts.setdefault(dedupe_key, {})
+        self._prune_recent_illusts(recent, ttl_hours)
+        fresh = [i for i in remaining if str(i.get("id", "")) not in recent]
+        repeated = [i for i in remaining if str(i.get("id", "")) in recent]
+        return assigned + fresh + repeated
+
+    def _mark_fortune_image_sent(
+        self, dedupe_key: str, assignment_key: str, illust: dict
+    ) -> None:
+        illust_id = str(illust.get("id", ""))
+        if not illust_id:
+            return
+
+        self._fortune_image_assignments[assignment_key] = illust_id
+        recent = self._recent_illusts.setdefault(dedupe_key, {})
+        recent[illust_id] = time.monotonic()
+
+    def _prune_fortune_image_assignments(self, date_str: str) -> None:
+        current_prefix = f"fortune:{date_str}:"
+        for key in list(self._fortune_image_assignments):
+            if not key.startswith(current_prefix):
+                self._fortune_image_assignments.pop(key, None)
+
+    @staticmethod
+    def _prune_recent_illusts(recent: dict[str, float], ttl_hours: float) -> None:
+        expires_before = time.monotonic() - ttl_hours * 3600
+        for illust_id, sent_at in list(recent.items()):
+            if sent_at < expires_before:
+                recent.pop(illust_id, None)
+
+    @staticmethod
+    def _fortune_image_source_key(tag: str, ranking_mode: str) -> str:
+        return f"search:{tag.strip().casefold()}" if tag else f"rank:{ranking_mode}"
+
+    @staticmethod
+    def _fortune_image_dedupe_key(event: AstrMessageEvent, date_str: str) -> str:
+        group_id = event.get_group_id()
+        if group_id:
+            scope = f"group:{group_id}"
+        else:
+            scope = f"private:{event.get_sender_id()}"
+        return f"fortune:{date_str}:{scope}"
+
+    @staticmethod
+    def _fortune_image_assignment_key(
+        event: AstrMessageEvent, date_str: str, source_key: str
+    ) -> str:
+        group_id = event.get_group_id()
+        if group_id:
+            scope = f"group:{group_id}"
+        else:
+            scope = f"private:{event.get_sender_id()}"
+        return (
+            f"fortune:{date_str}:{scope}:user:{event.get_sender_id() or ''}:"
+            f"{source_key}"
+        )
 
     @staticmethod
     def _dedupe_key(event: AstrMessageEvent, *, tag: str, ranking_mode: str) -> str:
