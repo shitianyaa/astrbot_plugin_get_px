@@ -39,7 +39,7 @@ from .pixiv_client import PixivClient
 
 LOG_PREFIX = "[GetPx]"
 
-AUTO_TRIGGER_PATTERN = r"^/?(来\s*(.*?)(份|个|张|点))(.*?)(?:图)?$"
+AUTO_TRIGGER_PATTERN = r"^/?(来\s*(.*?)(份|个|张|点))(.*?)(福利|色|瑟|涩|塞)?图$"
 
 CHINESE_NUMBER_MAP = {
     "一": "1", "二": "2", "两": "2", "三": "3", "四": "4",
