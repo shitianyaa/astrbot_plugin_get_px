@@ -80,7 +80,7 @@ AstrBot 插件 — 通过标签搜索 Pixiv 插画、发送图片并查看今日
 | `auto_trigger_enabled` | 自然语言自动触发（来份图→搜图发图） | 关闭 |
 | `fortune_enabled` | 今日运势开关 | 开启 |
 | `fortune_image_enabled` | 今日运势 Pixiv 配图；失败时回退纯文字 | 开启 |
-| `fortune_image_tag` | 今日运势配图标签，留空使用默认排行榜 | 空 |
+| `fortune_image_tag` | 今日运势配图标签；多个标签用英文逗号分隔，留空使用默认排行榜 | 空 |
 | `fortune_ai_text_enabled` | 今日运势模型文案；失败时回退预置文案 | 关闭 |
 | `fortune_ai_provider_id` | 今日运势文案模型（下拉选择，留空自动） | 空 |
 | `fortune_ai_prompt` | 今日运势文案提示词 | 根据运势结果生成短文案 |

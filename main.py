@@ -71,14 +71,17 @@ RANKING_MODES = {
 }
 
 DEFAULT_AUTO_DOWNGRADE_ORIGINAL_LIMIT_MB = 3.0
-DEFAULT_FORTUNE_AI_PROMPT = """请根据下面的今日运势结果，写一段适合聊天机器人发送的中文运势文案。
+DEFAULT_FORTUNE_AI_PROMPT = """根据今日运势结果，写一段适合聊天机器人发送的中文文案。
 
 要求：
-- 保留并准确表达运势等级、星级、宜、忌
-- 不要新增与结果冲突的信息
-- 语气轻松自然，可以可爱一点，但不要过度卖萌
-- 输出纯文本，不要 Markdown，不要代码块
-- 控制在 180 字以内
+- 必须准确包含运势等级、星级、宜、忌
+- 不编造额外结果，不和原结果冲突
+- 语气轻松自然，略可爱即可
+- 输出纯文本，不要 Markdown
+- 控制在 80-160 字
+
+示例风格（不要照抄具体事项）：
+小夏今天是中吉，星星也挺亮：★★★★★★☆。宜写代码、喝水、整理收藏；忌熬夜和冲动消费。按自己的节奏来，把重要的事先做掉，今天会更顺一点。
 
 用户：{username}
 日期：{date_str}
@@ -424,6 +427,10 @@ class GetPxPlugin(Star):
                 return "\n".join(lines[1:-1]).strip()
         return stripped
 
+    @staticmethod
+    def _split_config_tags(value: str) -> list[str]:
+        return [tag.strip() for tag in value.split(",") if tag.strip()]
+
     async def _download_fortune_image(self, event: AstrMessageEvent, result):
         """Fetch one Pixiv image for today's fortune, falling back silently on failure."""
         token = self._cfg_str("pixiv_refresh_token")
@@ -435,15 +442,26 @@ class GetPxPlugin(Star):
         if self.client is None:
             return None
 
-        tag = self._cfg_str("fortune_image_tag", "")
+        tag_config = self._cfg_str("fortune_image_tag", "")
+        tags = self._split_config_tags(tag_config)
+        selected_tag = ""
+        if tags:
+            tag_seed_text = (
+                f"fortune-image-tag|{result.date_str}|{event.get_sender_id() or ''}|"
+                f"{event.get_group_id() or 'private'}|{tag_config}"
+            )
+            tag_seed = int.from_bytes(
+                hashlib.sha256(tag_seed_text.encode("utf-8")).digest()[:8], "big"
+            )
+            selected_tag = tags[tag_seed % len(tags)]
         ranking_mode = self._cfg_str("pixiv_ranking_mode", "week")
         if ranking_mode not in RANKING_MODES:
             ranking_mode = "week"
 
         try:
-            if tag:
-                illusts = await self.client.search(tag)
-                source_desc = f"tag={tag!r}"
+            if selected_tag:
+                illusts = await self.client.search(selected_tag)
+                source_desc = f"tag={selected_tag!r}"
             else:
                 illusts = await self.client.ranking(ranking_mode)
                 source_desc = f"rank={ranking_mode}"
@@ -453,7 +471,7 @@ class GetPxPlugin(Star):
 
         r18_mode = self._cfg_int("pixiv_r18", 0, 0, 2)
         illusts = self._filter_r18(illusts, r18_mode)
-        is_manga_ranking = not tag and ranking_mode == "day_manga"
+        is_manga_ranking = not selected_tag and ranking_mode == "day_manga"
         if self._cfg_bool("filter_manga", True) and not is_manga_ranking:
             illusts = self._filter_manga(illusts)
         if not illusts:
@@ -472,7 +490,7 @@ class GetPxPlugin(Star):
 
         seed_text = (
             f"fortune-image|{result.date_str}|{event.get_sender_id() or ''}|"
-            f"{event.get_group_id() or 'private'}|{tag}|{ranking_mode}"
+            f"{event.get_group_id() or 'private'}|{tag_config}|{selected_tag}|{ranking_mode}"
         )
         seed = int.from_bytes(
             hashlib.sha256(seed_text.encode("utf-8")).digest()[:8], "big"

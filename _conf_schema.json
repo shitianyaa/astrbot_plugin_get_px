@@ -93,7 +93,7 @@
     "description": "今日运势配图标签",
     "type": "string",
     "default": "",
-    "hint": "今日运势配图使用的 Pixiv 搜索标签。留空时使用默认排行榜类型。"
+    "hint": "今日运势配图使用的 Pixiv 搜索标签；多个标签用英文逗号 , 分隔，会按用户和日期稳定选择一个。留空时使用默认排行榜类型。"
   },
   "fortune_ai_text_enabled": {
     "description": "今日运势模型文案",
@@ -111,7 +111,7 @@
   "fortune_ai_prompt": {
     "description": "今日运势文案提示词",
     "type": "text",
-    "default": "请根据下面的今日运势结果，写一段适合聊天机器人发送的中文运势文案。\n\n要求：\n- 保留并准确表达运势等级、星级、宜、忌\n- 不要新增与结果冲突的信息\n- 语气轻松自然，可以可爱一点，但不要过度卖萌\n- 输出纯文本，不要 Markdown，不要代码块\n- 控制在 180 字以内\n\n用户：{username}\n日期：{date_str}\n运势：{title}\n星级：{stars}\n说明：{description}\n宜：{good}\n忌：{bad}\n提示：{extra_message}",
+    "default": "根据今日运势结果，写一段适合聊天机器人发送的中文文案。\n\n要求：\n- 必须准确包含运势等级、星级、宜、忌\n- 不编造额外结果，不和原结果冲突\n- 语气轻松自然，略可爱即可\n- 输出纯文本，不要 Markdown\n- 控制在 80-160 字\n\n示例风格（不要照抄具体事项）：\n小夏今天是中吉，星星也挺亮：★★★★★★☆。宜写代码、喝水、整理收藏；忌熬夜和冲动消费。按自己的节奏来，把重要的事先做掉，今天会更顺一点。\n\n用户：{username}\n日期：{date_str}\n运势：{title}\n星级：{stars}\n说明：{description}\n宜：{good}\n忌：{bad}\n提示：{extra_message}",
     "hint": "支持占位符：{username}、{date_str}、{title}、{stars}、{star_count}、{max_stars}、{description}、{good}、{bad}、{extra_message}。"
   },
   "rate_limit_seconds": {
