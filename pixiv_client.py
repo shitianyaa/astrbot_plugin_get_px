@@ -22,13 +22,19 @@ class PixivClient:
     async def ensure_logged_in(self):
         async with self._lock:
             now = time.monotonic()
-            if self._api is not None and self._cached_token == self.refresh_token and now < self._expires_at:
+            if (
+                self._api is not None
+                and self._cached_token == self.refresh_token
+                and now < self._expires_at
+            ):
                 return
 
             try:
                 from pixivpy_async import AppPixivAPI
             except ImportError:
-                raise RuntimeError("未安装 pixivpy-async，请运行: pip install pixivpy-async")
+                raise RuntimeError(
+                    "未安装 pixivpy-async，请运行: pip install pixivpy-async"
+                )
 
             api = AppPixivAPI(proxy=self.proxy) if self.proxy else AppPixivAPI()
             await api.login(refresh_token=self.refresh_token)
@@ -44,7 +50,9 @@ class PixivClient:
 
     async def search(self, tag: str) -> list[dict]:
         await self.ensure_logged_in()
-        resp = await self._api.search_illust(tag, search_target="partial_match_for_tags", sort="date_desc")
+        resp = await self._api.search_illust(
+            tag, search_target="partial_match_for_tags", sort="date_desc"
+        )
         return list(resp.get("illusts") or [])
 
     async def ranking(self, mode: str = "week") -> list[dict]:

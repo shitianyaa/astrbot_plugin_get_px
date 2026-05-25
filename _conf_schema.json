@@ -37,6 +37,13 @@
     "slider": {"min": 1, "max": 20, "step": 1},
     "hint": "用户单次指令最多发送几张图。"
   },
+  "dedupe_ttl_hours": {
+    "description": "近期去重保留时间（小时）",
+    "type": "float",
+    "default": 24.0,
+    "slider": {"min": 0, "max": 720, "step": 1},
+    "hint": "同一群聊同一标签/排行榜在指定小时内尽量不重复发送同一作品。设为 0 可关闭去重；重启插件后内存记录会清空。"
+  },
   "request_timeout": {
     "description": "下载超时（秒）",
     "type": "float",
@@ -69,6 +76,12 @@
     "type": "bool",
     "default": false,
     "hint": "开启后，群内发送包含「来份/张图」等自然语言时自动触发 Pixiv 发图。无需命令前缀。"
+  },
+  "fortune_enabled": {
+    "description": "今日运势开关",
+    "type": "bool",
+    "default": true,
+    "hint": "开启后可使用 /今日运势、/jrys，或直接发送「今日运势」「jrys」查看每日稳定运势。"
   },
   "rate_limit_seconds": {
     "description": "请求频率限制（秒）",

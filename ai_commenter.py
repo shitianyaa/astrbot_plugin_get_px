@@ -52,13 +52,20 @@ class AiCommenter:
         )
         return (comment_resp.completion_text or "").strip()
 
-    async def _resolve_provider(self, config_pid: str, umo: str, prefer_vision: bool = False) -> str:
+    async def _resolve_provider(
+        self, config_pid: str, umo: str, prefer_vision: bool = False
+    ) -> str:
         if config_pid:
             return config_pid
         if prefer_vision:
             try:
                 cfg = self.context.get_config()
-                vlm_id = str((cfg.get("provider_settings") or {}).get("default_image_caption_provider_id", "") or "").strip()
+                vlm_id = str(
+                    (cfg.get("provider_settings") or {}).get(
+                        "default_image_caption_provider_id", ""
+                    )
+                    or ""
+                ).strip()
                 if vlm_id:
                     return vlm_id
             except Exception:

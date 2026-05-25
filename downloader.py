@@ -11,7 +11,7 @@ LOG_PREFIX = "[GetPx]"
 
 PIXIV_HEADERS = {
     "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
-                  "(KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36",
+    "(KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36",
     "Referer": "https://www.pixiv.net/",
 }
 
@@ -33,7 +33,9 @@ class ImageDownloader:
     async def download(self, url: str, proxy: str, timeout: float) -> str:
         session = self._ensure_session()
         client_timeout = aiohttp.ClientTimeout(total=timeout)
-        async with session.get(url, headers=PIXIV_HEADERS, proxy=proxy or None, timeout=client_timeout) as resp:
+        async with session.get(
+            url, headers=PIXIV_HEADERS, proxy=proxy or None, timeout=client_timeout
+        ) as resp:
             if resp.status != 200:
                 raise RuntimeError(f"HTTP {resp.status}")
             body = await resp.read()
@@ -71,7 +73,11 @@ class ImageDownloader:
         path = await self.download(url, proxy=proxy, timeout=timeout)
         file_size = os.path.getsize(path)
 
-        if downgrade_limit_bytes <= 0 or actual_quality != "original" or file_size <= downgrade_limit_bytes:
+        if (
+            downgrade_limit_bytes <= 0
+            or actual_quality != "original"
+            or file_size <= downgrade_limit_bytes
+        ):
             return path, actual_quality, file_size
 
         logger.info(
@@ -91,7 +97,9 @@ class ImageDownloader:
                 candidate_path = await self.download(url, proxy=proxy, timeout=timeout)
                 candidate_size = os.path.getsize(candidate_path)
             except Exception as e:
-                logger.warning(f"{LOG_PREFIX} {log_context} 降级到 {candidate_quality} 失败: {e}")
+                logger.warning(
+                    f"{LOG_PREFIX} {log_context} 降级到 {candidate_quality} 失败: {e}"
+                )
                 continue
 
             cleanup(path)
@@ -110,20 +118,30 @@ class ImageDownloader:
 
         if not downgrade_succeeded:
             cleanup(path)
-            raise RuntimeError(f"原图超过 {downgrade_limit_bytes / 1024 / 1024:.2f} MiB 且降级图片不可用")
+            raise RuntimeError(
+                f"原图超过 {downgrade_limit_bytes / 1024 / 1024:.2f} MiB 且降级图片不可用"
+            )
 
         return path, actual_quality, file_size
 
 
 def _quality_from_url(url: str) -> str:
-    return "original" if "original" in url else "large" if "large" in url else "medium" if "medium" in url else "square_medium"
+    return (
+        "original"
+        if "original" in url
+        else "large"
+        if "large" in url
+        else "medium"
+        if "medium" in url
+        else "square_medium"
+    )
 
 
 def pick_image_url(illust: dict, quality: str = "original") -> str:
     quality_order = {
         "original": ["original", "large", "medium", "square_medium"],
-        "large":    ["large", "medium", "square_medium", "original"],
-        "medium":   ["medium", "square_medium", "large", "original"],
+        "large": ["large", "medium", "square_medium", "original"],
+        "medium": ["medium", "square_medium", "large", "original"],
     }
     order = quality_order.get(quality, quality_order["original"])
 

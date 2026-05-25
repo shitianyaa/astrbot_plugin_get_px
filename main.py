@@ -1,6 +1,6 @@
 """AstrBot 插件 — Pixiv 发图
 
-通过标签搜索 Pixiv 插画并发送图片，支持排行榜、R18 过滤、多页作品、代理配置、自然语言自动触发。
+通过标签搜索 Pixiv 插画并发送图片，支持排行榜、R18 过滤、多页作品、代理配置、自然语言自动触发和今日运势。
 
 搜索指令：
     /p [标签] [数量]           搜索并发送图片
@@ -13,6 +13,7 @@
     /pr [排行类型] [数量]      获取排行榜
     /prl                       查看所有排行榜类型
     /pi <作品ID>               查看作品详情
+    /今日运势, /jrys            查看今日运势
     /ph                        查看帮助
 """
 
@@ -31,6 +32,7 @@ from astrbot.api.star import Context, Star
 
 from .ai_commenter import AiCommenter
 from .downloader import ImageDownloader, cleanup, pick_image_url, pick_image_url_exact
+from .fortune import build_fortune, format_fortune
 from .pixiv_client import PixivClient
 
 # ──────────────────────────────────────────────────────────────────────
@@ -40,21 +42,31 @@ from .pixiv_client import PixivClient
 LOG_PREFIX = "[GetPx]"
 
 AUTO_TRIGGER_PATTERN = r"^/?(来\s*(.*?)(份|个|张|点))(.*?)(福利|色|瑟|涩|塞)?图$"
+FORTUNE_REGEX_PATTERN = r"^(?!/)(今日运势|jrys)$"
 
 CHINESE_NUMBER_MAP = {
-    "一": "1", "二": "2", "两": "2", "三": "3", "四": "4",
-    "五": "5", "六": "6", "七": "7", "八": "8", "九": "9", "十": "10",
+    "一": "1",
+    "二": "2",
+    "两": "2",
+    "三": "3",
+    "四": "4",
+    "五": "5",
+    "六": "6",
+    "七": "7",
+    "八": "8",
+    "九": "9",
+    "十": "10",
 }
 
 RANKING_MODES = {
-    "day":           "今日",
-    "week":          "本周",
-    "month":         "本月",
-    "day_male":      "男性向",
-    "day_female":    "女性向",
+    "day": "今日",
+    "week": "本周",
+    "month": "本月",
+    "day_male": "男性向",
+    "day_female": "女性向",
     "week_original": "原创",
-    "week_rookie":   "新人",
-    "day_manga":     "漫画",
+    "week_rookie": "新人",
+    "day_manga": "漫画",
 }
 
 DEFAULT_AUTO_DOWNGRADE_ORIGINAL_LIMIT_MB = 3.0
@@ -64,6 +76,7 @@ DEFAULT_AUTO_DOWNGRADE_ORIGINAL_LIMIT_MB = 3.0
 # 插件主类
 # ──────────────────────────────────────────────────────────────────────
 
+
 class GetPxPlugin(Star):
     def __init__(self, context: Context, config: AstrBotConfig):
         super().__init__(context, config)
@@ -71,7 +84,8 @@ class GetPxPlugin(Star):
         self.client: PixivClient | None = None
         self.downloader = ImageDownloader()
         self.ai = AiCommenter(context)
-        self._last_request: dict[str, float] = {}  # 用户频率限制
+        self._last_request: dict[str, float] = {}
+        self._recent_illusts: dict[str, dict[str, float]] = {}
 
     # ──────────────────────────────────────────────────────────────
     # 生命周期
@@ -100,6 +114,7 @@ class GetPxPlugin(Star):
             self.client = None
         await self.downloader.close()
         self._last_request.clear()
+        self._recent_illusts.clear()
         logger.info(f"{LOG_PREFIX} 插件已停止")
 
     # ──────────────────────────────────────────────────────────────
@@ -110,7 +125,9 @@ class GetPxPlugin(Star):
     async def cmd_p(self, event: AstrMessageEvent, tag: str = "", count: str = ""):
         """搜索 Pixiv 并发送图片。用法: /p [标签] [数量]"""
         if not self._ensure_client_or_error(event):
-            yield event.plain_result("⚠️ 未配置 Pixiv Token，请在插件设置中填写 pixiv_refresh_token")
+            yield event.plain_result(
+                "⚠️ 未配置 Pixiv Token，请在插件设置中填写 pixiv_refresh_token"
+            )
             return
         event.stop_event()
         # 如果 tag 是纯数字，视为数量（无标签搜索排行榜）
@@ -129,7 +146,9 @@ class GetPxPlugin(Star):
     async def cmd_rank(self, event: AstrMessageEvent, mode: str = "", count: str = ""):
         """获取 Pixiv 排行榜。用法: /pr [类型] [数量]"""
         if not self._ensure_client_or_error(event):
-            yield event.plain_result("⚠️ 未配置 Pixiv Token，请在插件设置中填写 pixiv_refresh_token")
+            yield event.plain_result(
+                "⚠️ 未配置 Pixiv Token，请在插件设置中填写 pixiv_refresh_token"
+            )
             return
         event.stop_event()
         async for result in self._handle_rank(event, mode, count):
@@ -149,7 +168,9 @@ class GetPxPlugin(Star):
     async def cmd_info(self, event: AstrMessageEvent, illust_id: str = ""):
         """查看 Pixiv 作品详情。用法: /pi <作品ID>"""
         if not self._ensure_client_or_error(event):
-            yield event.plain_result("⚠️ 未配置 Pixiv Token，请在插件设置中填写 pixiv_refresh_token")
+            yield event.plain_result(
+                "⚠️ 未配置 Pixiv Token，请在插件设置中填写 pixiv_refresh_token"
+            )
             return
         if not illust_id or not illust_id.isdigit():
             yield event.plain_result("⚠️ 用法: /pi <作品ID>\n示例: /pi 12345678")
@@ -162,10 +183,14 @@ class GetPxPlugin(Star):
     async def cmd_download(self, event: AstrMessageEvent, illust_id: str = ""):
         """通过作品ID下载并发送图片。用法: /pd <作品ID> [页码]"""
         if not self._ensure_client_or_error(event):
-            yield event.plain_result("⚠️ 未配置 Pixiv Token，请在插件设置中填写 pixiv_refresh_token")
+            yield event.plain_result(
+                "⚠️ 未配置 Pixiv Token，请在插件设置中填写 pixiv_refresh_token"
+            )
             return
         if not illust_id:
-            yield event.plain_result("⚠️ 用法: /pd <作品ID> [页码]\n示例: /pd 12345678\n多页作品可指定页码: /pd 12345678 2")
+            yield event.plain_result(
+                "⚠️ 用法: /pd <作品ID> [页码]\n示例: /pd 12345678\n多页作品可指定页码: /pd 12345678 2"
+            )
             return
         event.stop_event()
 
@@ -177,7 +202,9 @@ class GetPxPlugin(Star):
         elif len(parts) == 2:
             id_str, page_str = parts
         else:
-            yield event.plain_result("⚠️ 用法: /pd <作品ID> [页码]\n示例: /pd 12345678\n多页作品可指定页码: /pd 12345678 2")
+            yield event.plain_result(
+                "⚠️ 用法: /pd <作品ID> [页码]\n示例: /pd 12345678\n多页作品可指定页码: /pd 12345678 2"
+            )
             return
 
         if not id_str.isdigit():
@@ -197,6 +224,22 @@ class GetPxPlugin(Star):
         """查看 Pixiv 插件帮助。"""
         event.stop_event()
         yield event.plain_result(self._build_help())
+
+    @filter.command("今日运势", alias={"jrys"})
+    async def cmd_fortune(self, event: AstrMessageEvent):
+        """查看今日运势。"""
+        event.stop_event()
+        async for result in self._handle_fortune(event):
+            yield result
+
+    @filter.regex(FORTUNE_REGEX_PATTERN)
+    async def fortune_auto_trigger(self, event: AstrMessageEvent):
+        """纯文本触发今日运势。"""
+        if not self._cfg_bool("fortune_enabled", True):
+            return
+        event.stop_event()
+        async for result in self._handle_fortune(event, silent_when_disabled=True):
+            yield result
 
     @filter.regex(AUTO_TRIGGER_PATTERN)
     async def auto_trigger(self, event: AstrMessageEvent):
@@ -228,7 +271,9 @@ class GetPxPlugin(Star):
                 count_str = "1"
 
         logger.info(f"{LOG_PREFIX} 自然语言触发: count={count_str} tag={tag_part!r}")
-        async for result in self._handle_search(event, tag=tag_part, count_str=count_str):
+        async for result in self._handle_search(
+            event, tag=tag_part, count_str=count_str
+        ):
             yield result
 
     # ──────────────────────────────────────────────────────────────
@@ -245,12 +290,49 @@ class GetPxPlugin(Star):
         self._init_client()
         return self.client is not None
 
-    async def _handle_search(self, event: AstrMessageEvent, tag: str, count_str: str, *, ranking_override: str = ""):
+    async def _handle_fortune(
+        self, event: AstrMessageEvent, *, silent_when_disabled: bool = False
+    ):
+        """生成并发送今日运势。"""
+        if not self._cfg_bool("fortune_enabled", True):
+            if not silent_when_disabled:
+                yield event.plain_result("今日运势功能已关闭")
+            return
+
+        user_id = str(event.get_sender_id() or "")
+        group_id = event.get_group_id()
+        username = self._event_username(event, user_id or "用户")
+        result = build_fortune(
+            user_id or username, username, str(group_id) if group_id else None
+        )
+        yield event.plain_result(format_fortune(result))
+
+    @staticmethod
+    def _event_username(event: AstrMessageEvent, default: str) -> str:
+        """从事件中提取用户昵称。"""
+        message_obj = getattr(event, "message_obj", None)
+        sender = getattr(message_obj, "sender", None)
+        for attr in ("nickname", "name", "user_name"):
+            value = getattr(sender, attr, None)
+            if value:
+                return str(value)
+        return default
+
+    async def _handle_search(
+        self,
+        event: AstrMessageEvent,
+        tag: str,
+        count_str: str,
+        *,
+        ranking_override: str = "",
+    ):
         """搜索并发送图片。ranking_override 非空时覆盖配置中的排行榜类型。"""
         # 频率限制
         wait = self._check_rate_limit(event.get_sender_id())
         if wait > 0:
-            logger.warning(f"{LOG_PREFIX} 用户 {event.get_sender_id()} 触发频率限制，需等待 {wait} 秒")
+            logger.warning(
+                f"{LOG_PREFIX} 用户 {event.get_sender_id()} 触发频率限制，需等待 {wait} 秒"
+            )
             yield event.plain_result(f"⏳ 请求太频繁，请 {wait} 秒后再试")
             return
 
@@ -278,15 +360,23 @@ class GetPxPlugin(Star):
         ai_pre_msg = self._cfg_str("ai_pre_message", "让我先品鉴一番，你稍等喵~")
         ai_vision_pid = self._cfg_str("ai_vision_provider_id", "")
         ai_comment_pid = self._cfg_str("ai_comment_provider_id", "")
-        ai_vision_prompt = self._cfg_str("ai_vision_prompt", "请详细描述这张插画的内容，包括画风、构图、配色、角色特征、表情、姿势、背景等。用简洁的中文描述。")
-        ai_comment_prompt = self._cfg_str("ai_comment_prompt", "你是一个 Pixiv 插画鉴赏专家。根据以下图片描述，用轻松有趣的语气写一句简短评论（50字以内）。\n\n图片描述：{description}")
+        ai_vision_prompt = self._cfg_str(
+            "ai_vision_prompt",
+            "请详细描述这张插画的内容，包括画风、构图、配色、角色特征、表情、姿势、背景等。用简洁的中文描述。",
+        )
+        ai_comment_prompt = self._cfg_str(
+            "ai_comment_prompt",
+            "你是一个 Pixiv 插画鉴赏专家。根据以下图片描述，用轻松有趣的语气写一句简短评论（50字以内）。\n\n图片描述：{description}",
+        )
         filter_manga = self._cfg_bool("filter_manga", True)
 
         if ranking_mode not in RANKING_MODES:
             ranking_mode = "week"
 
         # 获取作品列表
-        logger.info(f"{LOG_PREFIX} 搜索: tag={tag!r} rank={ranking_mode} count={count} quality={quality}")
+        logger.info(
+            f"{LOG_PREFIX} 搜索: tag={tag!r} rank={ranking_mode} count={count} quality={quality}"
+        )
         try:
             if tag:
                 illusts = await self.client.search(tag)
@@ -305,9 +395,13 @@ class GetPxPlugin(Star):
         illusts = self._filter_r18(illusts, r18_mode)
         if not illusts:
             if r18_mode == 0:
-                yield event.plain_result("🔒 过滤后没有可用作品。如果目标内容包含敏感作品，请到 Pixiv 官网「设置 > 显示设置」中开启「显示作品」选项，然后将插件 R18 设置改为 2（混合）。")
+                yield event.plain_result(
+                    "🔒 过滤后没有可用作品。如果目标内容包含敏感作品，请到 Pixiv 官网「设置 > 显示设置」中开启「显示作品」选项，然后将插件 R18 设置改为 2（混合）。"
+                )
             elif r18_mode == 1:
-                yield event.plain_result("🔒 没有找到 R18 作品。请确认你的 Pixiv 账号已在官网「显示设置」中开启了「显示敏感作品」和「显示 R-18 作品」。")
+                yield event.plain_result(
+                    "🔒 没有找到 R18 作品。请确认你的 Pixiv 账号已在官网「显示设置」中开启了「显示敏感作品」和「显示 R-18 作品」。"
+                )
             else:
                 yield event.plain_result("🔒 过滤后没有可用作品")
             return
@@ -316,12 +410,21 @@ class GetPxPlugin(Star):
         if filter_manga and ranking_mode != "day_manga":
             illusts = self._filter_manga(illusts)
             if not illusts:
-                yield event.plain_result("😶 过滤漫画后没有可用作品，可关闭漫画过滤后重试")
+                yield event.plain_result(
+                    "😶 过滤漫画后没有可用作品，可关闭漫画过滤后重试"
+                )
                 return
 
-        # 随机选取
         pick_count = min(count, len(illusts))
-        chosen = random.sample(illusts, pick_count)
+        dedupe_ttl_hours = self._cfg_float("dedupe_ttl_hours", 24.0, 0.0, 720.0)
+        chosen = self._pick_illusts(
+            event,
+            illusts,
+            pick_count,
+            tag=tag,
+            ranking_mode=ranking_mode,
+            ttl_hours=dedupe_ttl_hours,
+        )
 
         # 判断发送模式
         send_as_forward = self._cfg_bool("send_as_forward", True)
@@ -343,13 +446,19 @@ class GetPxPlugin(Star):
                         downgrade_limit_bytes=downgrade_limit_bytes,
                         log_context=f"[{idx}/{pick_count}] 作品 {illust_id} 「{title}」",
                     )
-                    logger.info(f"{LOG_PREFIX} [{idx}/{pick_count}] 下载完成 {illust_id} -> {path} ({file_size / 1024:.1f} KB, quality={actual_q})")
+                    logger.info(
+                        f"{LOG_PREFIX} [{idx}/{pick_count}] 下载完成 {illust_id} -> {path} ({file_size / 1024:.1f} KB, quality={actual_q})"
+                    )
                     temp_paths.append(path)
                     downloaded.append((illust, path))
                 except asyncio.TimeoutError:
-                    logger.warning(f"{LOG_PREFIX} [{idx}/{pick_count}] 作品 {illust_id} 下载超时 ({timeout_sec}s)")
+                    logger.warning(
+                        f"{LOG_PREFIX} [{idx}/{pick_count}] 作品 {illust_id} 下载超时 ({timeout_sec}s)"
+                    )
                 except Exception as e:
-                    logger.error(f"{LOG_PREFIX} [{idx}/{pick_count}] 作品 {illust_id} 下载失败: {e}")
+                    logger.error(
+                        f"{LOG_PREFIX} [{idx}/{pick_count}] 作品 {illust_id} 下载失败: {e}"
+                    )
 
             # AI 识图（每张图片单独评论）
             ai_comments: dict[int, str] = {}  # illust_id -> comment
@@ -361,18 +470,35 @@ class GetPxPlugin(Star):
                     # 并发分析图片（受 ai_max 限制）
                     to_analyze = downloaded[:ai_max]
                     if len(downloaded) > ai_max:
-                        logger.info(f"{LOG_PREFIX} [AI] 共 {len(downloaded)} 张图，仅分析前 {ai_max} 张")
+                        logger.info(
+                            f"{LOG_PREFIX} [AI] 共 {len(downloaded)} 张图，仅分析前 {ai_max} 张"
+                        )
+
                     async def _analyze(idx: int, illust: dict, path: str):
                         try:
-                            comment = await self.ai.comment(event, path, ai_vision_pid, ai_comment_pid, ai_vision_prompt, ai_comment_prompt)
+                            comment = await self.ai.comment(
+                                event,
+                                path,
+                                ai_vision_pid,
+                                ai_comment_pid,
+                                ai_vision_prompt,
+                                ai_comment_prompt,
+                            )
                             if comment:
                                 ai_comments[illust.get("id", 0)] = comment
-                                logger.info(f"{LOG_PREFIX} [AI] 作品 {illust.get('id')} 评论完成: {comment[:40]}...")
+                                logger.info(
+                                    f"{LOG_PREFIX} [AI] 作品 {illust.get('id')} 评论完成: {comment[:40]}..."
+                                )
                         except Exception as e:
                             illust_id = illust.get("id", 0)
-                            logger.warning(f"{LOG_PREFIX} [AI] 作品 {illust_id} 识图失败: {e}，已降级跳过")
+                            logger.warning(
+                                f"{LOG_PREFIX} [AI] 作品 {illust_id} 识图失败: {e}，已降级跳过"
+                            )
                             ai_comments[illust_id] = "羞死啦 羞死啦 ~"
-                    await asyncio.gather(*[_analyze(i, il, p) for i, (il, p) in enumerate(to_analyze)])
+
+                    await asyncio.gather(
+                        *[_analyze(i, il, p) for i, (il, p) in enumerate(to_analyze)]
+                    )
 
             # 统一发送（避免 yield 和 send 混用导致消息拆分）
             if not downloaded:
@@ -401,41 +527,62 @@ class GetPxPlugin(Star):
                     comment = ai_comments.get(illust_id, "")
                     if comment:
                         content.append(Plain(f"🐱： {comment}"))
-                    nodes.nodes.append(Node(
-                        uin=self_id,
-                        name="Pixiv",
-                        content=content,
-                    ))
+                    nodes.nodes.append(
+                        Node(
+                            uin=self_id,
+                            name="Pixiv",
+                            content=content,
+                        )
+                    )
                 # 如果有下载失败的图片，在合并消息末尾提示
                 failed_count = pick_count - len(downloaded)
                 if failed_count > 0:
-                    failed_ids = [str(il.get("id", "?")) for il in chosen if not any(d[0].get("id") == il.get("id") for d in downloaded)]
-                    nodes.nodes.append(Node(
-                        uin=self_id,
-                        name="Pixiv",
-                        content=[Plain(f"⚠️ {failed_count} 张图片下载失败（ID: {', '.join(failed_ids)}），已跳过")],
-                    ))
+                    failed_ids = [
+                        str(il.get("id", "?"))
+                        for il in chosen
+                        if not any(d[0].get("id") == il.get("id") for d in downloaded)
+                    ]
+                    nodes.nodes.append(
+                        Node(
+                            uin=self_id,
+                            name="Pixiv",
+                            content=[
+                                Plain(
+                                    f"⚠️ {failed_count} 张图片下载失败（ID: {', '.join(failed_ids)}），已跳过"
+                                )
+                            ],
+                        )
+                    )
                 # 合并转发（带重试机制）
                 max_retries = 3
                 forward_success = False
                 for attempt in range(1, max_retries + 1):
                     try:
                         await event.send(event.chain_result([nodes]))
-                        logger.info(f"{LOG_PREFIX} 合并转发 {len(nodes.nodes)} 条作品" + (f" (第{attempt}次尝试)" if attempt > 1 else ""))
+                        logger.info(
+                            f"{LOG_PREFIX} 合并转发 {len(nodes.nodes)} 条作品"
+                            + (f" (第{attempt}次尝试)" if attempt > 1 else "")
+                        )
                         forward_success = True
                         break
                     except (asyncio.TimeoutError, Exception) as e:
                         if attempt < max_retries:
                             wait_sec = attempt * 2
-                            logger.warning(f"{LOG_PREFIX} 合并转发失败 (第{attempt}次): {e}，{wait_sec}秒后重试...")
+                            logger.warning(
+                                f"{LOG_PREFIX} 合并转发失败 (第{attempt}次): {e}，{wait_sec}秒后重试..."
+                            )
                             await asyncio.sleep(wait_sec)
                         else:
                             friendly_err = self._friendly_send_error(e)
-                            logger.warning(f"{LOG_PREFIX} 合并转发失败 (已重试{max_retries}次): {friendly_err} | 原始错误: {e}，降级为逐条发送")
+                            logger.warning(
+                                f"{LOG_PREFIX} 合并转发失败 (已重试{max_retries}次): {friendly_err} | 原始错误: {e}，降级为逐条发送"
+                            )
 
                 # 合并转发失败，降级为逐条发送
                 if not forward_success:
-                    await event.send(event.plain_result("⚠️ 合并转发失败，正在逐条发送..."))
+                    await event.send(
+                        event.plain_result("⚠️ 合并转发失败，正在逐条发送...")
+                    )
                     for illust, path in downloaded:
                         title = illust.get("title", "无标题")
                         illust_id = illust.get("id", "?")
@@ -450,16 +597,24 @@ class GetPxPlugin(Star):
                         for attempt in range(1, max_retries + 1):
                             try:
                                 await event.send(event.chain_result(content))
-                                logger.info(f"{LOG_PREFIX} [降级] 作品 {illust_id} 已发送")
+                                logger.info(
+                                    f"{LOG_PREFIX} [降级] 作品 {illust_id} 已发送"
+                                )
                                 break
                             except (asyncio.TimeoutError, Exception) as e:
                                 if attempt < max_retries:
                                     await asyncio.sleep(attempt * 2)
                                 else:
                                     friendly_err = self._friendly_send_error(e)
-                                    logger.error(f"{LOG_PREFIX} [降级] 作品 {illust_id} 发送失败: {friendly_err} | 原始错误: {e}")
+                                    logger.error(
+                                        f"{LOG_PREFIX} [降级] 作品 {illust_id} 发送失败: {friendly_err} | 原始错误: {e}"
+                                    )
                                     try:
-                                        await event.send(event.plain_result(f"⚠️ 作品 {illust_id}「{title}」发送失败，已跳过"))
+                                        await event.send(
+                                            event.plain_result(
+                                                f"⚠️ 作品 {illust_id}「{title}」发送失败，已跳过"
+                                            )
+                                        )
                                     except Exception:
                                         pass
             else:
@@ -479,34 +634,51 @@ class GetPxPlugin(Star):
                     for attempt in range(1, max_retries + 1):
                         try:
                             await event.send(event.chain_result(content))
-                            logger.info(f"{LOG_PREFIX} 作品 {illust_id} 已发送" + (f" (第{attempt}次尝试)" if attempt > 1 else ""))
+                            logger.info(
+                                f"{LOG_PREFIX} 作品 {illust_id} 已发送"
+                                + (f" (第{attempt}次尝试)" if attempt > 1 else "")
+                            )
                             break
                         except (asyncio.TimeoutError, Exception) as e:
                             if attempt < max_retries:
                                 wait_sec = attempt * 2
-                                logger.warning(f"{LOG_PREFIX} 作品 {illust_id} 发送失败 (第{attempt}次): {e}，{wait_sec}秒后重试...")
+                                logger.warning(
+                                    f"{LOG_PREFIX} 作品 {illust_id} 发送失败 (第{attempt}次): {e}，{wait_sec}秒后重试..."
+                                )
                                 await asyncio.sleep(wait_sec)
                             else:
                                 friendly_err = self._friendly_send_error(e)
-                                logger.error(f"{LOG_PREFIX} 作品 {illust_id} 发送失败 (已重试{max_retries}次): {friendly_err} | 原始错误: {e}")
+                                logger.error(
+                                    f"{LOG_PREFIX} 作品 {illust_id} 发送失败 (已重试{max_retries}次): {friendly_err} | 原始错误: {e}"
+                                )
                                 try:
-                                    await event.send(event.plain_result(f"⚠️ 作品 {illust_id}「{title}」发送失败，已跳过"))
+                                    await event.send(
+                                        event.plain_result(
+                                            f"⚠️ 作品 {illust_id}「{title}」发送失败，已跳过"
+                                        )
+                                    )
                                 except Exception:
                                     pass
         finally:
             for p in temp_paths:
                 cleanup(p)
 
-    async def _handle_rank(self, event: AstrMessageEvent, mode: str, count_str: str = ""):
+    async def _handle_rank(
+        self, event: AstrMessageEvent, mode: str, count_str: str = ""
+    ):
         """排行榜模式。"""
         mode = mode.lower().strip() if mode else "week"
 
         if mode not in RANKING_MODES:
-            yield event.plain_result(f"⚠️ 未知排行榜类型: {mode}\n发送 /prl 查看所有类型")
+            yield event.plain_result(
+                f"⚠️ 未知排行榜类型: {mode}\n发送 /prl 查看所有类型"
+            )
             return
 
         # 走搜索逻辑，通过参数传递排行榜类型
-        async for result in self._handle_search(event, tag="", count_str=count_str, ranking_override=mode):
+        async for result in self._handle_search(
+            event, tag="", count_str=count_str, ranking_override=mode
+        ):
             yield result
 
     async def _handle_info(self, event: AstrMessageEvent, illust_id: int):
@@ -549,13 +721,17 @@ class GetPxPlugin(Star):
 
         yield event.plain_result("\n".join(lines))
 
-    async def _handle_download(self, event: AstrMessageEvent, illust_id: int, page: int = 1):
+    async def _handle_download(
+        self, event: AstrMessageEvent, illust_id: int, page: int = 1
+    ):
         """通过作品ID下载并发送图片。"""
 
         # 频率限制
         wait = self._check_rate_limit(event.get_sender_id())
         if wait > 0:
-            logger.warning(f"{LOG_PREFIX} 用户 {event.get_sender_id()} 触发频率限制，需等待 {wait} 秒")
+            logger.warning(
+                f"{LOG_PREFIX} 用户 {event.get_sender_id()} 触发频率限制，需等待 {wait} 秒"
+            )
             yield event.plain_result(f"⏳ 请求太频繁，请 {wait} 秒后再试")
             return
 
@@ -577,7 +753,9 @@ class GetPxPlugin(Star):
             yield event.plain_result("🔒 该作品为 R18 内容，当前配置不允许下载")
             return
         if r18_mode == 1 and x_restrict == 0:
-            yield event.plain_result("🔒 该作品非 R18 内容，当前配置仅允许下载 R18 作品")
+            yield event.plain_result(
+                "🔒 该作品非 R18 内容，当前配置仅允许下载 R18 作品"
+            )
             return
 
         title = illust.get("title", "无标题")
@@ -587,9 +765,13 @@ class GetPxPlugin(Star):
         # 页码校验
         if page < 1 or page > total_pages:
             if total_pages == 1:
-                yield event.plain_result(f"⚠️ 该作品只有 1 页，不需要指定页码\n用法: /pd {illust_id}")
+                yield event.plain_result(
+                    f"⚠️ 该作品只有 1 页，不需要指定页码\n用法: /pd {illust_id}"
+                )
             else:
-                yield event.plain_result(f"⚠️ 页码无效，该作品共 {total_pages} 页\n用法: /pd {illust_id} [1-{total_pages}]")
+                yield event.plain_result(
+                    f"⚠️ 页码无效，该作品共 {total_pages} 页\n用法: /pd {illust_id} [1-{total_pages}]"
+                )
             return
 
         # 获取指定页码的图片URL
@@ -610,8 +792,8 @@ class GetPxPlugin(Star):
             page_urls = page_data.get("image_urls") or {}
             quality_order = {
                 "original": ["original", "large", "medium", "square_medium"],
-                "large":    ["large", "medium", "square_medium", "original"],
-                "medium":   ["medium", "square_medium", "large", "original"],
+                "large": ["large", "medium", "square_medium", "original"],
+                "medium": ["medium", "square_medium", "large", "original"],
             }
             order = quality_order.get(quality, quality_order["original"])
             url = ""
@@ -638,8 +820,20 @@ class GetPxPlugin(Star):
             file_size = os.path.getsize(path)
 
             # 原图自动降级
-            actual_quality = "original" if "original" in url else "large" if "large" in url else "medium" if "medium" in url else "square_medium"
-            if downgrade_limit_bytes > 0 and actual_quality == "original" and file_size > downgrade_limit_bytes:
+            actual_quality = (
+                "original"
+                if "original" in url
+                else "large"
+                if "large" in url
+                else "medium"
+                if "medium" in url
+                else "square_medium"
+            )
+            if (
+                downgrade_limit_bytes > 0
+                and actual_quality == "original"
+                and file_size > downgrade_limit_bytes
+            ):
                 logger.info(f"{LOG_PREFIX} {log_context} 原图超过阈值，尝试降级")
                 cleanup(path)
 
@@ -652,19 +846,27 @@ class GetPxPlugin(Star):
                     if not candidate_url or candidate_url == url:
                         continue
                     try:
-                        path = await self.downloader.download(candidate_url, proxy=proxy, timeout=timeout_sec)
+                        path = await self.downloader.download(
+                            candidate_url, proxy=proxy, timeout=timeout_sec
+                        )
                         file_size = os.path.getsize(path)
                         actual_quality = candidate_quality
-                        logger.info(f"{LOG_PREFIX} {log_context} 降级到 {candidate_quality} ({file_size / 1024:.1f} KB)")
+                        logger.info(
+                            f"{LOG_PREFIX} {log_context} 降级到 {candidate_quality} ({file_size / 1024:.1f} KB)"
+                        )
                         break
                     except Exception as e:
-                        logger.warning(f"{LOG_PREFIX} {log_context} 降级到 {candidate_quality} 失败: {e}")
+                        logger.warning(
+                            f"{LOG_PREFIX} {log_context} 降级到 {candidate_quality} 失败: {e}"
+                        )
                         continue
                 else:
                     yield event.plain_result("😢 原图过大且降级图片不可用")
                     return
 
-            logger.info(f"{LOG_PREFIX} 下载完成 {log_context} -> {path} ({file_size / 1024:.1f} KB)")
+            logger.info(
+                f"{LOG_PREFIX} 下载完成 {log_context} -> {path} ({file_size / 1024:.1f} KB)"
+            )
 
             # 构建发送内容
             content = [
@@ -676,15 +878,30 @@ class GetPxPlugin(Star):
             ai_enabled = self._cfg_bool("ai_enabled", False)
             ai_prob = self._cfg_int("ai_probability", 30, 0, 100)
             if ai_enabled and ai_prob > 0 and random.randint(1, 100) <= ai_prob:
-                ai_pre_msg = self._cfg_str("ai_pre_message", "让我先品鉴一番，你稍等喵~")
+                ai_pre_msg = self._cfg_str(
+                    "ai_pre_message", "让我先品鉴一番，你稍等喵~"
+                )
                 if ai_pre_msg:
                     await event.send(event.plain_result(ai_pre_msg))
                 try:
                     ai_vision_pid = self._cfg_str("ai_vision_provider_id", "")
                     ai_comment_pid = self._cfg_str("ai_comment_provider_id", "")
-                    ai_vision_prompt = self._cfg_str("ai_vision_prompt", "请详细描述这张插画的内容，包括画风、构图、配色、角色特征、表情、姿势、背景等。用简洁的中文描述。")
-                    ai_comment_prompt = self._cfg_str("ai_comment_prompt", "你是一个 Pixiv 插画鉴赏专家。根据以下图片描述，用轻松有趣的语气写一句简短评论（50字以内）。\n\n图片描述：{description}")
-                    comment = await self.ai.comment(event, path, ai_vision_pid, ai_comment_pid, ai_vision_prompt, ai_comment_prompt)
+                    ai_vision_prompt = self._cfg_str(
+                        "ai_vision_prompt",
+                        "请详细描述这张插画的内容，包括画风、构图、配色、角色特征、表情、姿势、背景等。用简洁的中文描述。",
+                    )
+                    ai_comment_prompt = self._cfg_str(
+                        "ai_comment_prompt",
+                        "你是一个 Pixiv 插画鉴赏专家。根据以下图片描述，用轻松有趣的语气写一句简短评论（50字以内）。\n\n图片描述：{description}",
+                    )
+                    comment = await self.ai.comment(
+                        event,
+                        path,
+                        ai_vision_pid,
+                        ai_comment_pid,
+                        ai_vision_prompt,
+                        ai_comment_prompt,
+                    )
                     if comment:
                         content.append(Plain(f"🐱： {comment}"))
                 except Exception as e:
@@ -696,18 +913,27 @@ class GetPxPlugin(Star):
             for attempt in range(1, max_retries + 1):
                 try:
                     await event.send(event.chain_result(content))
-                    logger.info(f"{LOG_PREFIX} 已发送 {log_context}" + (f" (第{attempt}次尝试)" if attempt > 1 else ""))
+                    logger.info(
+                        f"{LOG_PREFIX} 已发送 {log_context}"
+                        + (f" (第{attempt}次尝试)" if attempt > 1 else "")
+                    )
                     send_success = True
                     break
                 except (asyncio.TimeoutError, Exception) as e:
                     if attempt < max_retries:
                         wait_sec = attempt * 2  # 递增等待：2秒、4秒
-                        logger.warning(f"{LOG_PREFIX} {log_context} 发送失败 (第{attempt}次): {e}，{wait_sec}秒后重试...")
+                        logger.warning(
+                            f"{LOG_PREFIX} {log_context} 发送失败 (第{attempt}次): {e}，{wait_sec}秒后重试..."
+                        )
                         await asyncio.sleep(wait_sec)
                     else:
                         friendly_err = self._friendly_send_error(e)
-                        logger.error(f"{LOG_PREFIX} {log_context} 发送失败 (已重试{max_retries}次): {friendly_err} | 原始错误: {e}")
-                        yield event.plain_result(f"😢 发送失败（已重试{max_retries}次），请稍后再试")
+                        logger.error(
+                            f"{LOG_PREFIX} {log_context} 发送失败 (已重试{max_retries}次): {friendly_err} | 原始错误: {e}"
+                        )
+                        yield event.plain_result(
+                            f"😢 发送失败（已重试{max_retries}次），请稍后再试"
+                        )
 
         except asyncio.TimeoutError:
             logger.warning(f"{LOG_PREFIX} {log_context} 下载超时 ({timeout_sec}s)")
@@ -717,7 +943,7 @@ class GetPxPlugin(Star):
             yield event.plain_result(f"😢 下载失败: {e}")
         finally:
             # 清理临时文件
-            if 'path' in locals() and path:
+            if "path" in locals() and path:
                 cleanup(path)
 
     # ──────────────────────────────────────────────────────────────
@@ -747,6 +973,9 @@ class GetPxPlugin(Star):
             "　　示例: /pd 12345678",
             "　　示例: /pd 12345678 2",
             "",
+            "今日运势 / jrys",
+            "　　查看今日运势，也可直接发送 今日运势 或 jrys",
+            "",
             "🤖 自然语言触发（需配置开启 auto_trigger_enabled）",
             "　　来一份图 → 发送 1 张排行榜图片",
             "　　来三张初音ミク图 → 搜标签发送 3 张",
@@ -767,6 +996,7 @@ class GetPxPlugin(Star):
     @staticmethod
     def _filter_r18(illusts: list[dict], mode: int) -> list[dict]:
         """根据 R18 模式过滤作品。mode: 0=仅非R18, 1=仅R18, 2=混合。"""
+
         def keep(illust: dict) -> bool:
             xr = int(illust.get("x_restrict", 0) or 0)
             if mode == 0:
@@ -774,6 +1004,7 @@ class GetPxPlugin(Star):
             if mode == 1:
                 return xr > 0
             return True
+
         return [i for i in illusts if keep(i)]
 
     @staticmethod
@@ -794,6 +1025,52 @@ class GetPxPlugin(Star):
         if "network" in error_str or "connect" in error_str:
             return "网络连接异常，请检查网络后重试"
         return "发送失败，请稍后再试"
+
+    def _pick_illusts(
+        self,
+        event: AstrMessageEvent,
+        illusts: list[dict],
+        pick_count: int,
+        *,
+        tag: str,
+        ranking_mode: str,
+        ttl_hours: float,
+    ) -> list[dict]:
+        if ttl_hours <= 0:
+            return random.sample(illusts, pick_count)
+
+        key = self._dedupe_key(event, tag=tag, ranking_mode=ranking_mode)
+        now = time.monotonic()
+        recent = self._recent_illusts.setdefault(key, {})
+        expires_before = now - ttl_hours * 3600
+        for illust_id, sent_at in list(recent.items()):
+            if sent_at < expires_before:
+                recent.pop(illust_id, None)
+
+        fresh = [i for i in illusts if str(i.get("id", "")) not in recent]
+        if len(fresh) >= pick_count:
+            chosen = random.sample(fresh, pick_count)
+        else:
+            chosen = fresh[:]
+            used_ids = {str(i.get("id", "")) for i in chosen}
+            fallback = [i for i in illusts if str(i.get("id", "")) not in used_ids]
+            chosen.extend(random.sample(fallback, pick_count - len(chosen)))
+
+        for illust in chosen:
+            illust_id = str(illust.get("id", ""))
+            if illust_id:
+                recent[illust_id] = now
+        return chosen
+
+    @staticmethod
+    def _dedupe_key(event: AstrMessageEvent, *, tag: str, ranking_mode: str) -> str:
+        group_id = event.get_group_id()
+        if group_id:
+            scope = f"group:{group_id}"
+        else:
+            scope = f"private:{event.get_sender_id()}"
+        source = f"search:{tag.strip().casefold()}" if tag else f"rank:{ranking_mode}"
+        return f"{scope}:{source}"
 
     def _check_rate_limit(self, user_id: str) -> int:
         """检查用户请求频率，返回需等待秒数（0 表示可立即请求）。"""

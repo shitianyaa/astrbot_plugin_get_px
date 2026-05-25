@@ -1,8 +1,8 @@
 name: astrbot_plugin_get_px
 display_name: 画境拾珍
-short_desc: 按标签搜索 Pixiv 作品并发送图片，支持排行榜、详情查询、自然语言自动触发
-desc: 通过标签搜索 Pixiv 插画并发送图片。支持多种排行榜（日/周/月/男性向/女性向等）、R18 过滤、作品详情查看、通过作品ID下载图片、请求频率限制、代理配置、发送重试机制。
-version: 2.3.0
+short_desc: 按标签搜索 Pixiv 作品并发送图片，支持排行榜、详情查询、自然语言自动触发和今日运势
+desc: 通过标签搜索 Pixiv 插画并发送图片。支持多种排行榜（日/周/月/男性向/女性向等）、R18 过滤、作品详情查看、通过作品ID下载图片、今日运势、请求频率限制、代理配置、发送重试机制。
+version: 2.4.0
 author: Sham1k0
 repo: https://github.com/shitianyaa/astrbot_plugin_get_px
 dependencies: []
