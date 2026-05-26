@@ -111,8 +111,8 @@
   "fortune_ai_prompt": {
     "description": "今日运势文案提示词",
     "type": "text",
-    "default": "请根据下面的今日运势结果，写一段适合聊天机器人发送的中文运势文案。\n\n要求：\n- 必须准确保留运势等级、星级、说明、宜、忌、提示\n- 不要新增与结果冲突的信息\n- 语气轻松自然，可以稍微可爱，但不要过度卖萌\n- 输出纯文本，不要 Markdown，不要代码块\n- 严格按示例格式输出\n\n输出格式：\n{username}\n今天 {date_str} {title}\n星级{stars}\n{description}\n宜：{good}\n忌：{bad}\n{extra_message}\n\n用户：{username}\n日期：{date_str}\n运势：{title}\n星级：{stars}\n说明：{description}\n宜：{good}\n忌：{bad}\n提示：{extra_message}",
-    "hint": "支持占位符：{username}、{date_str}、{title}、{stars}、{star_count}、{max_stars}、{description}、{good}、{bad}、{extra_message}。"
+    "default": "你会收到一份已经抽好的今日运势数据，请只根据这份数据改写成适合聊天机器人发送的中文文案。\n\n【今日运势数据】\n{fortune_text}\n\n要求：\n- 必须准确保留运势等级、星级、说明、宜、忌、提示\n- 不要说“用户未提供数据”，上面的【今日运势数据】就是输入数据\n- 不要新增与结果冲突的信息\n- 语气轻松自然，可以稍微可爱，但不要过度卖萌\n- 输出纯文本，不要 Markdown，不要代码块\n- 严格按示例格式输出\n\n输出格式：\n{username}\n今天 {date_str} {title}\n星级{stars}\n{description}\n宜：{good}\n忌：{bad}\n{extra_message}\n",
+    "hint": "支持占位符：{username}、{date_str}、{title}、{stars}、{star_count}、{max_stars}、{description}、{good}、{bad}、{extra_message}、{fortune_text}、{fortune}、{data}。"
   },
   "rate_limit_seconds": {
     "description": "请求频率限制（秒）",
