@@ -83,6 +83,7 @@ AstrBot 插件 — 通过标签搜索 Pixiv 插画、发送图片并查看今日
 | `fortune_image_tag` | 今日运势配图标签；多个标签用英文逗号分隔，留空使用默认排行榜 | 空 |
 | `fortune_ai_text_enabled` | 今日运势模型文案；失败时回退预置文案 | 关闭 |
 | `fortune_ai_provider_id` | 今日运势文案模型（下拉选择，留空自动） | 空 |
+| `fortune_ai_timeout_seconds` | 今日运势文案模型超时；超时回退预置文案，设为 0 禁用插件侧超时 | 15 |
 | `fortune_ai_prompt` | 今日运势文案提示词 | 固定格式生成运势文案 |
 | `rate_limit_seconds` | 同一用户请求频率限制（秒） | 3 |
 | `ai_enabled` | AI 识图开关 | 关闭 |

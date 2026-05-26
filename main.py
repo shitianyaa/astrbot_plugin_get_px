@@ -399,11 +399,16 @@ class GetPxPlugin(Star):
         if cached:
             return cached
 
+        timeout_sec = self._cfg_float("fortune_ai_timeout_seconds", 15.0, 0.0, 120.0)
         try:
-            resp = await self.context.llm_generate(
+            generate_task = self.context.llm_generate(
                 chat_provider_id=provider_id,
                 prompt=prompt,
             )
+            if timeout_sec > 0:
+                resp = await asyncio.wait_for(generate_task, timeout=timeout_sec)
+            else:
+                resp = await generate_task
             if isinstance(resp, str):
                 text = resp.strip()
             else:
@@ -417,6 +422,11 @@ class GetPxPlugin(Star):
             self._fortune_text_cache[cache_key] = text
             logger.info(f"{LOG_PREFIX} 今日运势文案已由模型生成 provider={provider_id}")
             return text
+        except asyncio.TimeoutError:
+            logger.warning(
+                f"{LOG_PREFIX} 今日运势文案生成超时 ({timeout_sec:g}s)，回退预置文案"
+            )
+            return fallback_text
         except Exception as e:
             logger.warning(f"{LOG_PREFIX} 今日运势文案生成失败: {e}，回退预置文案")
             return fallback_text

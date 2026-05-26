@@ -15,6 +15,7 @@
 - 新增 `fortune_image_enabled` 配置项（今日运势 Pixiv 配图开关）
 - 新增 `fortune_image_tag` 配置项（今日运势配图标签，支持英文逗号分隔多个标签，留空使用默认排行榜）
 - 新增 `fortune_ai_text_enabled`、`fortune_ai_provider_id`、`fortune_ai_prompt` 配置项（今日运势模型文案）
+- 新增 `fortune_ai_timeout_seconds` 配置项（今日运势模型文案超时，超时回退预置文案）
 - 优化 `fortune_ai_prompt` 默认提示词，改为固定格式输出运势文案
 - 新增 `dedupe_ttl_hours` 配置项（近期去重保留时间）
 

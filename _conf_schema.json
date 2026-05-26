@@ -108,6 +108,13 @@
     "_special": "select_provider",
     "hint": "用于生成今日运势文案的文本模型。留空时使用当前会话模型。"
   },
+  "fortune_ai_timeout_seconds": {
+    "description": "今日运势模型超时（秒）",
+    "type": "float",
+    "default": 15.0,
+    "slider": {"min": 0, "max": 120, "step": 1},
+    "hint": "今日运势调用文本模型生成文案的最大等待时间；超时会回退预置文案。设为 0 可禁用插件侧超时。"
+  },
   "fortune_ai_prompt": {
     "description": "今日运势文案提示词",
     "type": "text",
