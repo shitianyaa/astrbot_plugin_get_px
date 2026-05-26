@@ -1,0 +1,112 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>图片历史</title>
+    <link rel="stylesheet" href="./style.css" />
+  </head>
+  <body>
+    <div id="app" class="page">
+      <header class="hero">
+        <div class="hero-copy">
+          <p class="eyebrow">Pixiv Dispatch Log</p>
+          <h1>图片历史</h1>
+          <p id="summary" class="summary">正在加载图库记录</p>
+        </div>
+        <div class="toolbar-actions" aria-label="页面操作">
+          <button id="refreshBtn" class="button button-primary" type="button">
+            刷新
+          </button>
+          <button id="clearBtn" class="button button-danger" type="button">
+            清空
+          </button>
+        </div>
+      </header>
+
+      <section class="insights" aria-label="统计">
+        <div class="metric">
+          <span>当前显示</span>
+          <strong id="visibleMetric">-</strong>
+        </div>
+        <div class="metric">
+          <span>历史总数</span>
+          <strong id="totalMetric">-</strong>
+        </div>
+        <div class="metric">
+          <span>R18</span>
+          <strong id="r18Metric">-</strong>
+        </div>
+        <div class="metric">
+          <span>群聊记录</span>
+          <strong id="groupMetric">-</strong>
+        </div>
+      </section>
+
+      <section class="filters" aria-label="筛选">
+        <label class="field field-search">
+          <span>关键词</span>
+          <input id="queryInput" type="search" placeholder="标题、作者、ID、标签" />
+        </label>
+        <label class="field">
+          <span>来源</span>
+          <select id="sourceSelect">
+            <option value="all">全部</option>
+          </select>
+        </label>
+        <label class="field">
+          <span>R18</span>
+          <select id="r18Select">
+            <option value="all">全部</option>
+            <option value="safe">否</option>
+            <option value="r18">是</option>
+          </select>
+        </label>
+        <label class="field">
+          <span>会话</span>
+          <select id="sessionSelect">
+            <option value="all">全部</option>
+            <option value="group">群聊</option>
+            <option value="private">私聊</option>
+          </select>
+        </label>
+        <div class="view-toggle" role="group" aria-label="视图">
+          <button id="gridBtn" class="active" type="button">网格</button>
+          <button id="listBtn" type="button">列表</button>
+        </div>
+      </section>
+
+      <main id="content" class="content" aria-live="polite"></main>
+
+      <div id="toast" class="toast" role="status" hidden></div>
+      <div
+        id="clearDialog"
+        class="confirm-dialog"
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby="clearDialogTitle"
+        aria-describedby="clearDialogDesc"
+        hidden
+      >
+        <div class="confirm-panel">
+          <p class="confirm-kicker">危险操作</p>
+          <h2 id="clearDialogTitle">清空图片历史？</h2>
+          <p id="clearDialogDesc">
+            这会删除全部图片历史记录和本地缩略图缓存。操作完成后无法从此页面撤销。
+          </p>
+          <div class="confirm-actions">
+            <button id="clearCancelBtn" type="button">取消</button>
+            <button id="clearConfirmBtn" class="button button-danger-solid" type="button">
+              确认清空
+            </button>
+          </div>
+        </div>
+      </div>
+      <div id="lightbox" class="lightbox" hidden>
+        <button id="lightboxClose" class="lightbox-close" type="button">关闭</button>
+        <img id="lightboxImage" alt="" />
+      </div>
+    </div>
+    <script type="module" src="./app.js"></script>
+  </body>
+</html>

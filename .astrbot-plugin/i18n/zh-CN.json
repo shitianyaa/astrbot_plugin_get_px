@@ -1,0 +1,11 @@
+{
+  "metadata": {
+    "display_name": "画境拾珍"
+  },
+  "pages": {
+    "imageHistory": {
+      "title": "图片历史",
+      "desc": "查看已成功发送的 Pixiv 图片记录"
+    }
+  }
+}

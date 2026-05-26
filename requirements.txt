@@ -1,2 +1,3 @@
 pixivpy-async
 aiohttp
+Pillow

@@ -20,6 +20,7 @@
 from __future__ import annotations
 
 import asyncio
+import base64
 import hashlib
 import os
 import random
@@ -30,10 +31,14 @@ from astrbot.api.all import AstrBotConfig, Image, Plain, logger
 from astrbot.api.event import AstrMessageEvent, filter
 from astrbot.api.message_components import Node, Nodes
 from astrbot.api.star import Context, Star
+from astrbot.core.star.star_tools import StarTools
+from quart import jsonify, request, send_file
 
 from .ai_commenter import AiCommenter
 from .downloader import ImageDownloader, cleanup, pick_image_url, pick_image_url_exact
 from .fortune import build_fortune, format_fortune
+from .image_index import ImageIndexStore, ordered_by_unused
+from .image_history import DEFAULT_HISTORY_LIMIT, ImageAssetManager
 from .pixiv_client import PixivClient
 
 # ──────────────────────────────────────────────────────────────────────
@@ -41,6 +46,7 @@ from .pixiv_client import PixivClient
 # ──────────────────────────────────────────────────────────────────────
 
 LOG_PREFIX = "[GetPx]"
+PLUGIN_NAME = "astrbot_plugin_get_px"
 
 AUTO_TRIGGER_PATTERN = r"^/?(来\s*(.*?)(份|个|张|点))(.*?)(福利|色|瑟|涩|塞)?图$"
 FORTUNE_REGEX_PATTERN = r"^(?!/)(今日运势|jrys)$"
@@ -71,7 +77,7 @@ RANKING_MODES = {
 }
 
 DEFAULT_AUTO_DOWNGRADE_ORIGINAL_LIMIT_MB = 3.0
-DEFAULT_FORTUNE_AI_PROMPT = """你会收到一份已经抽好的今日运势数据，请只根据这份数据改写成适合聊天机器人发送的中文文案。
+FORTUNE_AI_PROMPT = """你会收到一份已经抽好的今日运势数据，请只根据这份数据改写成适合聊天机器人发送的中文文案。
 
 【今日运势数据】
 {fortune_text}
@@ -109,9 +115,8 @@ class GetPxPlugin(Star):
         self.downloader = ImageDownloader()
         self.ai = AiCommenter(context)
         self._last_request: dict[str, float] = {}
-        self._recent_illusts: dict[str, dict[str, float]] = {}
-        self._fortune_image_assignments: dict[str, str] = {}
-        self._fortune_text_cache: dict[str, str] = {}
+        self.image_index: ImageIndexStore | None = None
+        self.image_history: ImageAssetManager | None = None
 
     # ──────────────────────────────────────────────────────────────
     # 生命周期
@@ -120,6 +125,11 @@ class GetPxPlugin(Star):
     async def initialize(self):
         """插件加载时初始化 Pixiv 客户端。"""
         self._init_client()
+        data_dir = StarTools.get_data_dir(PLUGIN_NAME)
+        self.image_index = ImageIndexStore(data_dir)
+        await self.image_index.cleanup_old_days()
+        self.image_history = ImageAssetManager(data_dir)
+        self._register_image_history_web_apis()
         logger.info(f"{LOG_PREFIX} 插件已加载")
 
     def _init_client(self):
@@ -133,6 +143,84 @@ class GetPxPlugin(Star):
         self.client = PixivClient(refresh_token=token, proxy=proxy)
         logger.info(f"{LOG_PREFIX} 客户端已初始化")
 
+    def _register_image_history_web_apis(self) -> None:
+        self.context.register_web_api(
+            f"/{PLUGIN_NAME}/image-history",
+            self._web_image_history,
+            ["GET"],
+            "List sent Pixiv image history",
+        )
+        self.context.register_web_api(
+            f"/{PLUGIN_NAME}/image-history/thumb",
+            self._web_image_history_thumb,
+            ["GET"],
+            "Get image history thumbnail",
+        )
+        self.context.register_web_api(
+            f"/{PLUGIN_NAME}/image-history/thumb-data",
+            self._web_image_history_thumb_data,
+            ["GET"],
+            "Get image history thumbnail as data URL",
+        )
+        self.context.register_web_api(
+            f"/{PLUGIN_NAME}/image-history/clear",
+            self._web_image_history_clear,
+            ["POST"],
+            "Clear sent Pixiv image history",
+        )
+
+    async def _web_image_history(self):
+        if self.image_history is None:
+            return jsonify({"success": False, "error": "图片历史尚未初始化"}), 503
+        try:
+            records = await self.image_history.list_records()
+            return jsonify(
+                {
+                    "success": True,
+                    "records": records,
+                    "limit": DEFAULT_HISTORY_LIMIT,
+                }
+            )
+        except Exception as e:
+            return jsonify({"success": False, "error": str(e)}), 500
+
+    async def _web_image_history_thumb(self):
+        if self.image_history is None:
+            return jsonify({"success": False, "error": "图片历史尚未初始化"}), 503
+        record_id = request.args.get("id", "").strip()
+        path = await self.image_history.get_thumbnail_path(record_id)
+        if path is None:
+            return jsonify({"success": False, "error": "缩略图不存在"}), 404
+        return await send_file(str(path), mimetype="image/jpeg")
+
+    async def _web_image_history_thumb_data(self):
+        if self.image_history is None:
+            return jsonify({"success": False, "error": "图片历史尚未初始化"}), 503
+        record_id = request.args.get("id", "").strip()
+        path = await self.image_history.get_thumbnail_path(record_id)
+        if path is None:
+            return jsonify({"success": False, "error": "缩略图不存在"}), 404
+        try:
+            encoded = base64.b64encode(path.read_bytes()).decode("ascii")
+        except OSError as e:
+            return jsonify({"success": False, "error": str(e)}), 500
+        return jsonify(
+            {
+                "success": True,
+                "record_id": record_id,
+                "data_url": f"data:image/jpeg;base64,{encoded}",
+            }
+        )
+
+    async def _web_image_history_clear(self):
+        if self.image_history is None:
+            return jsonify({"success": False, "error": "图片历史尚未初始化"}), 503
+        try:
+            deleted = await self.image_history.clear()
+            return jsonify({"success": True, "deleted": deleted})
+        except Exception as e:
+            return jsonify({"success": False, "error": str(e)}), 500
+
     async def terminate(self):
         """插件卸载/停用时清理资源。"""
         if self.client is not None:
@@ -140,9 +228,8 @@ class GetPxPlugin(Star):
             self.client = None
         await self.downloader.close()
         self._last_request.clear()
-        self._recent_illusts.clear()
-        self._fortune_image_assignments.clear()
-        self._fortune_text_cache.clear()
+        self.image_index = None
+        self.image_history = None
         logger.info(f"{LOG_PREFIX} 插件已停止")
 
     # ──────────────────────────────────────────────────────────────
@@ -318,6 +405,163 @@ class GetPxPlugin(Star):
         self._init_client()
         return self.client is not None
 
+    async def _record_sent_image(
+        self,
+        event: AstrMessageEvent,
+        illust: dict,
+        image_path: str,
+        *,
+        source: str,
+        page: int = 1,
+        quality: str = "",
+        file_size: int = 0,
+    ) -> None:
+        if self.image_history is None:
+            return
+        try:
+            await self.image_history.record_sent(
+                illust=illust,
+                image_path=image_path,
+                event=event,
+                source=source,
+                page=page,
+                quality=quality,
+                file_size=file_size,
+            )
+        except Exception as e:
+            logger.warning(f"{LOG_PREFIX} 写入图片历史失败: {e}")
+
+    @staticmethod
+    def _event_scope(event: AstrMessageEvent) -> str:
+        group_id = event.get_group_id()
+        if group_id:
+            return f"group:{group_id}"
+        return f"private:{event.get_sender_id() or ''}"
+
+    @staticmethod
+    def _source_key(tag: str, ranking_mode: str) -> str:
+        return f"search:{tag.strip().casefold()}" if tag else f"rank:{ranking_mode}"
+
+    async def _record_image_usage(
+        self,
+        event: AstrMessageEvent,
+        source_key: str,
+        illust: dict,
+        *,
+        feature: str,
+        user_id: str = "",
+    ) -> None:
+        if self.image_index is None or not source_key:
+            return
+        illust_id = str(illust.get("id") or "")
+        if not illust_id:
+            return
+        try:
+            await self.image_index.record_usage(
+                scope=self._event_scope(event),
+                source_key=source_key,
+                illust_id=illust_id,
+                feature=feature,
+                user_id=user_id,
+            )
+        except Exception as e:
+            logger.warning(f"{LOG_PREFIX} 写入当天发图索引失败: {e}")
+
+    async def _release_fortune_pending_usage(
+        self, *, scope: str, source_key: str, illust_id: str
+    ) -> None:
+        if self.image_index is None or not source_key or not illust_id:
+            return
+        try:
+            await self.image_index.release_usage(
+                scope=scope,
+                source_key=source_key,
+                illust_id=illust_id,
+                feature="fortune_pending",
+            )
+        except Exception as e:
+            logger.warning(f"{LOG_PREFIX} 释放今日运势配图占用失败: {e}")
+
+    async def _claim_fortune_image_assignment(
+        self,
+        event: AstrMessageEvent,
+        result,
+        fortune_image,
+        *,
+        scope: str,
+        user_key: str,
+        fortune_record_key: str,
+    ):
+        if self.image_index is None:
+            return fortune_image
+
+        (
+            illust,
+            image_path,
+            actual_q,
+            file_size,
+            image_source_key,
+            claimed_pending,
+        ) = fortune_image
+        illust_id = str(illust.get("id") or "")
+        if not illust_id:
+            return fortune_image
+
+        try:
+            claimed = await self.image_index.claim_fortune_illust_id(
+                scope=scope,
+                user_id=user_key,
+                source_key=fortune_record_key,
+                illust_id=illust_id,
+                image_source_key=image_source_key,
+            )
+        except Exception as e:
+            logger.warning(f"{LOG_PREFIX} 写入今日运势配图索引失败: {e}")
+            return fortune_image
+
+        assigned_illust_id = claimed.illust_id if claimed is not None else ""
+        assigned_image_source_key = (
+            claimed.image_source_key if claimed is not None else image_source_key
+        )
+        if not assigned_illust_id or assigned_illust_id == illust_id:
+            return fortune_image
+
+        if claimed_pending:
+            await self._release_fortune_pending_usage(
+                scope=scope,
+                source_key=image_source_key,
+                illust_id=illust_id,
+            )
+        cleanup(image_path)
+        replacement = await self._download_fortune_image(
+            event,
+            result,
+            assigned_illust_id=assigned_illust_id,
+            assigned_image_source_key=assigned_image_source_key,
+        )
+        if replacement is None:
+            logger.warning(
+                f"{LOG_PREFIX} 今日运势固定配图 {assigned_illust_id} 重新下载失败，回退纯文字"
+            )
+            return None
+
+        (
+            fixed_illust,
+            fixed_path,
+            fixed_q,
+            fixed_size,
+            fixed_source_key,
+            fixed_pending,
+        ) = replacement
+        return (
+            fixed_illust,
+            fixed_path,
+            fixed_q,
+            fixed_size,
+            fixed_source_key or assigned_image_source_key or image_source_key,
+            fixed_pending,
+        )
+
     async def _handle_fortune(
         self, event: AstrMessageEvent, *, silent_when_disabled: bool = False
     ):
@@ -330,25 +574,124 @@ class GetPxPlugin(Star):
         user_id = str(event.get_sender_id() or "")
         group_id = event.get_group_id()
         username = self._event_username(event, user_id or "用户")
+        date_key = ImageIndexStore.today_key()
         result = build_fortune(
-            user_id or username, username, str(group_id) if group_id else None
+            user_id or username,
+            username,
+            str(group_id) if group_id else None,
+            date_str=date_key,
         )
         fallback_text = format_fortune(result)
-        fortune_text = await self._build_fortune_text(event, result, fallback_text)
+        fortune_record_key = "fortune"
+        scope = self._event_scope(event)
+        user_key = user_id or username
+        existing_fortune = None
+        if self.image_index is not None:
+            try:
+                existing_fortune = await self.image_index.get_fortune_record(
+                    scope=scope,
+                    user_id=user_key,
+                    source_key=fortune_record_key,
+                )
+            except Exception as e:
+                logger.warning(f"{LOG_PREFIX} 读取今日运势索引失败: {e}")
+        if existing_fortune is not None:
+            fortune_text = existing_fortune.fortune_text
+        else:
+            fortune_text = await self._build_fortune_text(event, result, fallback_text)
+            if self.image_index is not None:
+                try:
+                    await self.image_index.save_fortune_record(
+                        scope=scope,
+                        user_id=user_key,
+                        source_key=fortune_record_key,
+                        fortune_text=fortune_text,
+                    )
+                    saved_fortune = await self.image_index.get_fortune_record(
+                        scope=scope,
+                        user_id=user_key,
+                        source_key=fortune_record_key,
+                    )
+                    if saved_fortune is not None:
+                        existing_fortune = saved_fortune
+                        fortune_text = saved_fortune.fortune_text
+                except Exception as e:
+                    logger.warning(f"{LOG_PREFIX} 写入今日运势索引失败: {e}")
 
         if self._cfg_bool("fortune_image_enabled", True):
-            fortune_image = await self._download_fortune_image(event, result)
+            assigned_illust_id = (
+                existing_fortune.illust_id if existing_fortune is not None else ""
+            )
+            assigned_image_source_key = (
+                existing_fortune.image_source_key
+                if existing_fortune is not None
+                else ""
+            )
+            fortune_image = await self._download_fortune_image(
+                event,
+                result,
+                assigned_illust_id=assigned_illust_id,
+                assigned_image_source_key=assigned_image_source_key,
+            )
             if fortune_image:
-                illust, image_path, dedupe_key, assignment_key = fortune_image
+                (
+                    illust,
+                    image_path,
+                    actual_q,
+                    file_size,
+                    image_source_key,
+                    claimed_pending,
+                ) = fortune_image
+                sent_success = False
                 try:
+                    if not assigned_illust_id:
+                        claimed_image = await self._claim_fortune_image_assignment(
+                            event,
+                            result,
+                            fortune_image,
+                            scope=scope,
+                            user_key=user_key,
+                            fortune_record_key=fortune_record_key,
+                        )
+                        if claimed_image is None:
+                            claimed_pending = False
+                            yield event.plain_result(fortune_text)
+                            return
+                        (
+                            illust,
+                            image_path,
+                            actual_q,
+                            file_size,
+                            image_source_key,
+                            claimed_pending,
+                        ) = claimed_image
                     if await self._send_fortune_with_image(
                         event, fortune_text, illust, image_path
                     ):
-                        self._mark_fortune_image_sent(
-                            dedupe_key, assignment_key, illust
+                        sent_success = True
+                        await self._record_image_usage(
+                            event,
+                            image_source_key,
+                            illust,
+                            feature="fortune",
+                            user_id=user_id,
+                        )
+                        await self._record_sent_image(
+                            event,
+                            illust,
+                            image_path,
+                            source="fortune",
+                            quality=actual_q,
+                            file_size=file_size,
                         )
                         return
                 finally:
+                    if not sent_success and claimed_pending:
+                        await self._release_fortune_pending_usage(
+                            scope=scope,
+                            source_key=image_source_key,
+                            illust_id=str(illust.get("id") or ""),
+                        )
                     cleanup(image_path)
 
         yield event.plain_result(fortune_text)
@@ -369,7 +712,6 @@ class GetPxPlugin(Star):
             return fallback_text
 
         stars = "★" * result.star_count + "☆" * (result.max_stars - result.star_count)
-        prompt_template = self._cfg_str("fortune_ai_prompt", "") or DEFAULT_FORTUNE_AI_PROMPT
         prompt_data = {
             "username": result.username,
             "date_str": result.date_str,
@@ -386,19 +728,10 @@ class GetPxPlugin(Star):
             "data": fallback_text,
         }
         try:
-            prompt = self._format_prompt_template(prompt_template, prompt_data)
+            prompt = self._format_prompt_template(FORTUNE_AI_PROMPT, prompt_data)
         except ValueError as e:
-            logger.warning(f"{LOG_PREFIX} 今日运势文案提示词格式错误: {e}，回退预置文案")
+            logger.warning(f"{LOG_PREFIX} 今日运势内置提示词格式错误: {e}，回退预置文案")
             return fallback_text
-        prompt_hash = hashlib.sha256(prompt.encode("utf-8")).hexdigest()[:16]
-        cache_key = (
-            f"{result.date_str}|{event.get_sender_id() or ''}|"
-            f"{event.get_group_id() or 'private'}|{provider_id}|{prompt_hash}"
-        )
-        cached = self._fortune_text_cache.get(cache_key)
-        if cached:
-            return cached
-
         timeout_sec = self._cfg_float("fortune_ai_timeout_seconds", 15.0, 0.0, 120.0)
         try:
             generate_task = self.context.llm_generate(
@@ -419,7 +752,6 @@ class GetPxPlugin(Star):
             text = self._strip_code_fence(text)
             if len(text) > 600:
                 text = text[:600].rstrip()
-            self._fortune_text_cache[cache_key] = text
             logger.info(f"{LOG_PREFIX} 今日运势文案已由模型生成 provider={provider_id}")
             return text
         except asyncio.TimeoutError:
@@ -452,7 +784,14 @@ class GetPxPlugin(Star):
     def _split_config_tags(value: str) -> list[str]:
         return [tag.strip() for tag in value.split(",") if tag.strip()]
 
-    async def _download_fortune_image(self, event: AstrMessageEvent, result):
+    async def _download_fortune_image(
+        self,
+        event: AstrMessageEvent,
+        result,
+        *,
+        assigned_illust_id: str = "",
+        assigned_image_source_key: str = "",
+    ):
         """Fetch one Pixiv image for today's fortune, falling back silently on failure."""
         token = self._cfg_str("pixiv_refresh_token")
         if not token:
@@ -463,7 +802,52 @@ class GetPxPlugin(Star):
         if self.client is None:
             return None
 
-        self._prune_fortune_image_assignments(result.date_str)
+        quality = self._cfg_str("image_quality", "original")
+        timeout_sec = self._cfg_float("request_timeout", 30.0, 5.0, 120.0)
+        downgrade_limit_mb = self._cfg_float(
+            "auto_downgrade_original_mb",
+            DEFAULT_AUTO_DOWNGRADE_ORIGINAL_LIMIT_MB,
+            0.0,
+            100.0,
+        )
+        downgrade_limit_bytes = int(downgrade_limit_mb * 1024 * 1024)
+
+        if assigned_illust_id:
+            try:
+                illust = await self.client.illust_detail(int(assigned_illust_id))
+            except (TypeError, ValueError):
+                illust = None
+            if not illust:
+                logger.warning(
+                    f"{LOG_PREFIX} 今日运势固定配图 {assigned_illust_id} 获取失败，回退纯文字"
+                )
+                return None
+            title = illust.get("title", "无标题")
+            try:
+                path, actual_q, file_size = await self.downloader.download_for_send(
+                    illust,
+                    quality,
+                    proxy=self._cfg_str("pixiv_proxy_url"),
+                    timeout=timeout_sec,
+                    downgrade_limit_bytes=downgrade_limit_bytes,
+                    log_context=f"[今日运势固定配图] 作品 {assigned_illust_id} 「{title}」",
+                )
+                return (
+                    illust,
+                    path,
+                    actual_q,
+                    file_size,
+                    assigned_image_source_key,
+                    False,
+                )
+            except asyncio.TimeoutError:
+                logger.warning(
+                    f"{LOG_PREFIX} 今日运势固定配图 {assigned_illust_id} 下载超时 ({timeout_sec}s)"
+                )
+            except Exception as e:
+                logger.warning(f"{LOG_PREFIX} 今日运势固定配图 {assigned_illust_id} 下载失败: {e}")
+            return None
+
         tag_config = self._cfg_str("fortune_image_tag", "")
         tags = self._split_config_tags(tag_config)
         selected_tag = ""
@@ -500,16 +884,6 @@ class GetPxPlugin(Star):
             logger.info(f"{LOG_PREFIX} 今日运势配图无可用作品 ({source_desc})")
             return None
 
-        quality = self._cfg_str("image_quality", "original")
-        timeout_sec = self._cfg_float("request_timeout", 30.0, 5.0, 120.0)
-        downgrade_limit_mb = self._cfg_float(
-            "auto_downgrade_original_mb",
-            DEFAULT_AUTO_DOWNGRADE_ORIGINAL_LIMIT_MB,
-            0.0,
-            100.0,
-        )
-        downgrade_limit_bytes = int(downgrade_limit_mb * 1024 * 1024)
-
         seed_text = (
             f"fortune-image|{result.date_str}|{event.get_sender_id() or ''}|"
             f"{event.get_group_id() or 'private'}|{tag_config}|{selected_tag}|{ranking_mode}"
@@ -519,21 +893,35 @@ class GetPxPlugin(Star):
         )
         start = seed % len(illusts)
         ordered = illusts[start:] + illusts[:start]
-        dedupe_ttl_hours = self._cfg_float("dedupe_ttl_hours", 24.0, 0.0, 720.0)
-        dedupe_key = self._fortune_image_dedupe_key(event, result.date_str)
-        source_key = self._fortune_image_source_key(selected_tag, ranking_mode)
-        assignment_key = self._fortune_image_assignment_key(
-            event, result.date_str, source_key
-        )
-        ordered = self._prioritize_fortune_image_candidates(
-            ordered,
-            dedupe_key=dedupe_key,
-            assignment_key=assignment_key,
-            ttl_hours=dedupe_ttl_hours,
-        )
+        source_key = self._source_key(selected_tag, ranking_mode)
+        if self.image_index is not None:
+            try:
+                used_ids = await self.image_index.get_used_illust_ids(
+                    self._event_scope(event), source_key
+                )
+                ordered = ordered_by_unused(ordered, used_ids)
+            except Exception as e:
+                logger.warning(f"{LOG_PREFIX} 读取当天发图索引失败: {e}")
 
         for idx, illust in enumerate(ordered[:5], 1):
-            illust_id = illust.get("id", "?")
+            illust_id = str(illust.get("id") or "")
+            if not illust_id:
+                continue
+            claimed_pending = False
+            if self.image_index is not None:
+                try:
+                    claimed_pending = await self.image_index.claim_usage(
+                        scope=self._event_scope(event),
+                        source_key=source_key,
+                        illust_id=illust_id,
+                        feature="fortune_pending",
+                        user_id=str(event.get_sender_id() or ""),
+                    )
+                except Exception as e:
+                    logger.warning(f"{LOG_PREFIX} 占用今日运势配图索引失败: {e}")
+                    claimed_pending = False
+                if not claimed_pending:
+                    continue
             title = illust.get("title", "无标题")
             try:
                 path, actual_q, file_size = await self.downloader.download_for_send(
@@ -548,13 +936,19 @@ class GetPxPlugin(Star):
                     f"{LOG_PREFIX} 今日运势配图下载完成 {illust_id} -> {path} "
                     f"({file_size / 1024:.1f} KB, quality={actual_q})"
                 )
-                return illust, path, dedupe_key, assignment_key
+                return illust, path, actual_q, file_size, source_key, claimed_pending
             except asyncio.TimeoutError:
                 logger.warning(
                     f"{LOG_PREFIX} 今日运势配图 {illust_id} 下载超时 ({timeout_sec}s)"
                 )
             except Exception as e:
                 logger.warning(f"{LOG_PREFIX} 今日运势配图 {illust_id} 下载失败: {e}")
+            if claimed_pending:
+                await self._release_fortune_pending_usage(
+                    scope=self._event_scope(event),
+                    source_key=source_key,
+                    illust_id=illust_id,
+                )
 
         return None
 
@@ -711,20 +1105,32 @@ class GetPxPlugin(Star):
 
         pick_count = min(count, len(illusts))
         dedupe_ttl_hours = self._cfg_float("dedupe_ttl_hours", 24.0, 0.0, 720.0)
-        chosen = self._pick_illusts(
+        source_key = self._source_key(tag, ranking_mode)
+        chosen = await self._pick_illusts(
             event,
             illusts,
             pick_count,
             tag=tag,
             ranking_mode=ranking_mode,
-            ttl_hours=dedupe_ttl_hours,
+            dedupe_enabled=dedupe_ttl_hours > 0,
         )
+        if not chosen:
+            yield event.plain_result("今天这个范围内没有未发送过的图片了，换个标签或明天再试")
+            return
+        pick_count = len(chosen)
+        pending_illust_ids: set[str] = set()
+        sent_illust_ids: set[str] = set()
+        if dedupe_ttl_hours > 0 and self.image_index is not None:
+            pending_illust_ids = {
+                str(illust.get("id") or "") for illust in chosen if illust.get("id")
+            }
 
         # 判断发送模式
         send_as_forward = self._cfg_bool("send_as_forward", True)
+        history_source = f"search:{tag.strip()}" if tag else f"rank:{ranking_mode}"
 
         # 下载所有图片
-        downloaded: list[tuple[dict, str]] = []  # (illust, file_path)
+        downloaded: list[tuple[dict, str, str, int]] = []
         temp_paths: list[str] = []
         try:
             for idx, illust in enumerate(chosen, 1):
@@ -744,7 +1150,7 @@ class GetPxPlugin(Star):
                         f"{LOG_PREFIX} [{idx}/{pick_count}] 下载完成 {illust_id} -> {path} ({file_size / 1024:.1f} KB, quality={actual_q})"
                     )
                     temp_paths.append(path)
-                    downloaded.append((illust, path))
+                    downloaded.append((illust, path, actual_q, file_size))
                 except asyncio.TimeoutError:
                     logger.warning(
                         f"{LOG_PREFIX} [{idx}/{pick_count}] 作品 {illust_id} 下载超时 ({timeout_sec}s)"
@@ -791,7 +1197,12 @@ class GetPxPlugin(Star):
                             ai_comments[illust_id] = "羞死啦 羞死啦 ~"
 
                     await asyncio.gather(
-                        *[_analyze(i, il, p) for i, (il, p) in enumerate(to_analyze)]
+                        *[
+                            _analyze(i, il, p)
+                            for i, (il, p, _actual_q, _file_size) in enumerate(
+                                to_analyze
+                            )
+                        ]
                     )
 
             # 统一发送（避免 yield 和 send 混用导致消息拆分）
@@ -810,7 +1221,7 @@ class GetPxPlugin(Star):
                 except (TypeError, ValueError):
                     self_id = 0
                 nodes = Nodes([])
-                for illust, path in downloaded:
+                for illust, path, _actual_q, _file_size in downloaded:
                     title = illust.get("title", "无标题")
                     illust_id = illust.get("id", "?")
                     content = [
@@ -877,7 +1288,7 @@ class GetPxPlugin(Star):
                     await event.send(
                         event.plain_result("⚠️ 合并转发失败，正在逐条发送...")
                     )
-                    for illust, path in downloaded:
+                    for illust, path, actual_q, file_size in downloaded:
                         title = illust.get("title", "无标题")
                         illust_id = illust.get("id", "?")
                         content = [
@@ -894,6 +1305,22 @@ class GetPxPlugin(Star):
                                 logger.info(
                                     f"{LOG_PREFIX} [降级] 作品 {illust_id} 已发送"
                                 )
+                                await self._record_sent_image(
+                                    event,
+                                    illust,
+                                    path,
+                                    source=history_source,
+                                    quality=actual_q,
+                                    file_size=file_size,
+                                )
+                                await self._record_image_usage(
+                                    event,
+                                    source_key,
+                                    illust,
+                                    feature="normal",
+                                    user_id=str(event.get_sender_id() or ""),
+                                )
+                                sent_illust_ids.add(str(illust.get("id") or ""))
                                 break
                             except (asyncio.TimeoutError, Exception) as e:
                                 if attempt < max_retries:
@@ -911,9 +1338,27 @@ class GetPxPlugin(Star):
                                         )
                                     except Exception:
                                         pass
+                else:
+                    for illust, path, actual_q, file_size in downloaded:
+                        await self._record_sent_image(
+                            event,
+                            illust,
+                            path,
+                            source=history_source,
+                            quality=actual_q,
+                            file_size=file_size,
+                        )
+                        await self._record_image_usage(
+                            event,
+                            source_key,
+                            illust,
+                            feature="normal",
+                            user_id=str(event.get_sender_id() or ""),
+                        )
+                        sent_illust_ids.add(str(illust.get("id") or ""))
             else:
                 # 逐条发送模式
-                for illust, path in downloaded:
+                for illust, path, actual_q, file_size in downloaded:
                     title = illust.get("title", "无标题")
                     illust_id = illust.get("id", "?")
                     content = [
@@ -932,6 +1377,22 @@ class GetPxPlugin(Star):
                                 f"{LOG_PREFIX} 作品 {illust_id} 已发送"
                                 + (f" (第{attempt}次尝试)" if attempt > 1 else "")
                             )
+                            await self._record_sent_image(
+                                event,
+                                illust,
+                                path,
+                                source=history_source,
+                                quality=actual_q,
+                                file_size=file_size,
+                            )
+                            await self._record_image_usage(
+                                event,
+                                source_key,
+                                illust,
+                                feature="normal",
+                                user_id=str(event.get_sender_id() or ""),
+                            )
+                            sent_illust_ids.add(str(illust.get("id") or ""))
                             break
                         except (asyncio.TimeoutError, Exception) as e:
                             if attempt < max_retries:
@@ -956,6 +1417,17 @@ class GetPxPlugin(Star):
         finally:
             for p in temp_paths:
                 cleanup(p)
+            if pending_illust_ids and self.image_index is not None:
+                for illust_id in pending_illust_ids - sent_illust_ids:
+                    try:
+                        await self.image_index.release_usage(
+                            scope=self._event_scope(event),
+                            source_key=source_key,
+                            illust_id=illust_id,
+                            feature="normal_pending",
+                        )
+                    except Exception as e:
+                        logger.warning(f"{LOG_PREFIX} 释放当天发图占用失败: {e}")
 
     async def _handle_rank(
         self, event: AstrMessageEvent, mode: str, count_str: str = ""
@@ -1229,6 +1701,17 @@ class GetPxPlugin(Star):
                             f"😢 发送失败（已重试{max_retries}次），请稍后再试"
                         )
 
+            if send_success:
+                await self._record_sent_image(
+                    event,
+                    illust,
+                    path,
+                    source="download",
+                    page=page,
+                    quality=actual_quality,
+                    file_size=file_size,
+                )
+
         except asyncio.TimeoutError:
             logger.warning(f"{LOG_PREFIX} {log_context} 下载超时 ({timeout_sec}s)")
             yield event.plain_result("😢 下载超时，请稍后再试")
@@ -1320,7 +1803,7 @@ class GetPxPlugin(Star):
             return "网络连接异常，请检查网络后重试"
         return "发送失败，请稍后再试"
 
-    def _pick_illusts(
+    async def _pick_illusts(
         self,
         event: AstrMessageEvent,
         illusts: list[dict],
@@ -1328,119 +1811,49 @@ class GetPxPlugin(Star):
         *,
         tag: str,
         ranking_mode: str,
-        ttl_hours: float,
+        dedupe_enabled: bool = True,
     ) -> list[dict]:
-        if ttl_hours <= 0:
+        if not dedupe_enabled or self.image_index is None:
             return random.sample(illusts, pick_count)
 
-        key = self._dedupe_key(event, tag=tag, ranking_mode=ranking_mode)
-        now = time.monotonic()
-        recent = self._recent_illusts.setdefault(key, {})
-        expires_before = now - ttl_hours * 3600
-        for illust_id, sent_at in list(recent.items()):
-            if sent_at < expires_before:
-                recent.pop(illust_id, None)
+        source_key = self._source_key(tag, ranking_mode)
+        try:
+            used_ids = await self.image_index.get_used_illust_ids(
+                self._event_scope(event), source_key
+            )
+        except Exception as e:
+            logger.warning(f"{LOG_PREFIX} 读取当天发图索引失败: {e}")
+            return []
 
-        fresh = [i for i in illusts if str(i.get("id", "")) not in recent]
-        if len(fresh) >= pick_count:
-            chosen = random.sample(fresh, pick_count)
-        else:
-            chosen = fresh[:]
-            used_ids = {str(i.get("id", "")) for i in chosen}
-            fallback = [i for i in illusts if str(i.get("id", "")) not in used_ids]
-            chosen.extend(random.sample(fallback, pick_count - len(chosen)))
-
-        for illust in chosen:
-            illust_id = str(illust.get("id", ""))
-            if illust_id:
-                recent[illust_id] = now
-        return chosen
-
-    def _prioritize_fortune_image_candidates(
-        self,
-        illusts: list[dict],
-        *,
-        dedupe_key: str,
-        assignment_key: str,
-        ttl_hours: float,
-    ) -> list[dict]:
-        if not illusts:
-            return illusts
-
-        assigned_id = self._fortune_image_assignments.get(assignment_key)
-        assigned = [i for i in illusts if str(i.get("id", "")) == assigned_id]
-        assigned_ids = {str(i.get("id", "")) for i in assigned}
-        remaining = [i for i in illusts if str(i.get("id", "")) not in assigned_ids]
-
-        if ttl_hours <= 0:
-            return assigned + remaining
-
-        recent = self._recent_illusts.setdefault(dedupe_key, {})
-        self._prune_recent_illusts(recent, ttl_hours)
-        fresh = [i for i in remaining if str(i.get("id", "")) not in recent]
-        repeated = [i for i in remaining if str(i.get("id", "")) in recent]
-        return assigned + fresh + repeated
-
-    def _mark_fortune_image_sent(
-        self, dedupe_key: str, assignment_key: str, illust: dict
-    ) -> None:
-        illust_id = str(illust.get("id", ""))
-        if not illust_id:
-            return
-
-        self._fortune_image_assignments[assignment_key] = illust_id
-        recent = self._recent_illusts.setdefault(dedupe_key, {})
-        recent[illust_id] = time.monotonic()
-
-    def _prune_fortune_image_assignments(self, date_str: str) -> None:
-        current_prefix = f"fortune:{date_str}:"
-        for key in list(self._fortune_image_assignments):
-            if not key.startswith(current_prefix):
-                self._fortune_image_assignments.pop(key, None)
-
-    @staticmethod
-    def _prune_recent_illusts(recent: dict[str, float], ttl_hours: float) -> None:
-        expires_before = time.monotonic() - ttl_hours * 3600
-        for illust_id, sent_at in list(recent.items()):
-            if sent_at < expires_before:
-                recent.pop(illust_id, None)
-
-    @staticmethod
-    def _fortune_image_source_key(tag: str, ranking_mode: str) -> str:
-        return f"search:{tag.strip().casefold()}" if tag else f"rank:{ranking_mode}"
-
-    @staticmethod
-    def _fortune_image_dedupe_key(event: AstrMessageEvent, date_str: str) -> str:
-        group_id = event.get_group_id()
-        if group_id:
-            scope = f"group:{group_id}"
-        else:
-            scope = f"private:{event.get_sender_id()}"
-        return f"fortune:{date_str}:{scope}"
-
-    @staticmethod
-    def _fortune_image_assignment_key(
-        event: AstrMessageEvent, date_str: str, source_key: str
-    ) -> str:
-        group_id = event.get_group_id()
-        if group_id:
-            scope = f"group:{group_id}"
-        else:
-            scope = f"private:{event.get_sender_id()}"
-        return (
-            f"fortune:{date_str}:{scope}:user:{event.get_sender_id() or ''}:"
-            f"{source_key}"
+        ordered = ordered_by_unused(illusts, used_ids)
+        fresh = [i for i in ordered if str(i.get("id") or "") not in used_ids]
+        repeated = [i for i in ordered if str(i.get("id") or "") in used_ids]
+        candidates = random.sample(fresh, len(fresh)) + random.sample(
+            repeated, len(repeated)
         )
-
-    @staticmethod
-    def _dedupe_key(event: AstrMessageEvent, *, tag: str, ranking_mode: str) -> str:
-        group_id = event.get_group_id()
-        if group_id:
-            scope = f"group:{group_id}"
-        else:
-            scope = f"private:{event.get_sender_id()}"
-        source = f"search:{tag.strip().casefold()}" if tag else f"rank:{ranking_mode}"
-        return f"{scope}:{source}"
+        chosen: list[dict] = []
+        scope = self._event_scope(event)
+        user_id = str(event.get_sender_id() or "")
+        for illust in candidates:
+            if len(chosen) >= pick_count:
+                break
+            illust_id = str(illust.get("id") or "")
+            if not illust_id:
+                continue
+            try:
+                claimed = await self.image_index.claim_usage(
+                    scope=scope,
+                    source_key=source_key,
+                    illust_id=illust_id,
+                    feature="normal_pending",
+                    user_id=user_id,
+                )
+            except Exception as e:
+                logger.warning(f"{LOG_PREFIX} 占用当天发图索引失败: {e}")
+                return chosen
+            if claimed:
+                chosen.append(illust)
+        return chosen
 
     def _check_rate_limit(self, user_id: str) -> int:
         """检查用户请求频率，返回需等待秒数（0 表示可立即请求）。"""

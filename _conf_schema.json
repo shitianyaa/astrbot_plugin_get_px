@@ -38,11 +38,11 @@
     "hint": "用户单次指令最多发送几张图。"
   },
   "dedupe_ttl_hours": {
-    "description": "近期去重保留时间（小时）",
+    "description": "当天去重开关",
     "type": "float",
     "default": 24.0,
     "slider": {"min": 0, "max": 720, "step": 1},
-    "hint": "同一群聊同一标签/排行榜在指定小时内尽量不重复发送同一作品；今日运势配图也会在同一天同群内尽量不重复。设为 0 可关闭去重；重启插件后内存记录会清空。"
+    "hint": "大于 0 时，同一群聊/私聊同一标签或排行榜会按北京时间当天记录已发作品，重启后仍有效，次日自动清理；设为 0 仅关闭普通发图去重。今日运势仍会按用户当天固定文本和配图。"
   },
   "request_timeout": {
     "description": "下载超时（秒）",
@@ -87,7 +87,7 @@
     "description": "今日运势 Pixiv 配图",
     "type": "bool",
     "default": true,
-    "hint": "开启后今日运势会尝试附带一张 Pixiv 图片；获取或发送失败时自动回退为纯文字。"
+    "hint": "开启后今日运势会尝试附带一张 Pixiv 图片；同一用户在同一群聊/私聊的当天配图固定，获取或发送失败时自动回退为纯文字。"
   },
   "fortune_image_tag": {
     "description": "今日运势配图标签",
@@ -99,7 +99,7 @@
     "description": "今日运势模型文案",
     "type": "bool",
     "default": false,
-    "hint": "开启后会根据已抽出的运势结果调用文本模型生成回复文案；模型失败时自动回退预置文案。"
+    "hint": "开启后会根据已抽出的运势结果调用文本模型生成回复文案；当天第一次成功确定的文案会写入索引，后续请求和重启后都保持不变，模型失败时自动回退预置文案。"
   },
   "fortune_ai_provider_id": {
     "description": "今日运势文案模型",
@@ -114,12 +114,6 @@
     "default": 15.0,
     "slider": {"min": 0, "max": 120, "step": 1},
     "hint": "今日运势调用文本模型生成文案的最大等待时间；超时会回退预置文案。设为 0 可禁用插件侧超时。"
-  },
-  "fortune_ai_prompt": {
-    "description": "今日运势文案提示词",
-    "type": "text",
-    "default": "你会收到一份已经抽好的今日运势数据，请只根据这份数据改写成适合聊天机器人发送的中文文案。\n\n【今日运势数据】\n{fortune_text}\n\n要求：\n- 必须准确保留运势等级、星级、说明、宜、忌、提示\n- 不要说“用户未提供数据”，上面的【今日运势数据】就是输入数据\n- 不要新增与结果冲突的信息\n- 语气轻松自然，可以稍微可爱，但不要过度卖萌\n- 输出纯文本，不要 Markdown，不要代码块\n- 严格按示例格式输出\n\n输出格式：\n{username}\n今天 {date_str} {title}\n星级{stars}\n{description}\n宜：{good}\n忌：{bad}\n{extra_message}\n",
-    "hint": "支持占位符：{username}、{date_str}、{title}、{stars}、{star_count}、{max_stars}、{description}、{good}、{bad}、{extra_message}、{fortune_text}、{fortune}、{data}。"
   },
   "rate_limit_seconds": {
     "description": "请求频率限制（秒）",

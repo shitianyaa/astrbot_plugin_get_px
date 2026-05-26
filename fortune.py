@@ -107,9 +107,13 @@ _EXTRA_MESSAGES = [
 
 
 def build_fortune(
-    user_id: str, username: str, group_id: str | None = None
+    user_id: str,
+    username: str,
+    group_id: str | None = None,
+    *,
+    date_str: str | None = None,
 ) -> FortuneResult:
-    date_str = date.today().isoformat()
+    date_str = date_str or date.today().isoformat()
     seed_text = f"{date_str}|{user_id}|{group_id or 'private'}"
     seed = int.from_bytes(hashlib.sha256(seed_text.encode("utf-8")).digest()[:8], "big")
     rng = random.Random(seed)
