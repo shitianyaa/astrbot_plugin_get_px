@@ -159,3 +159,4 @@ AstrBot 插件 — 通过标签搜索 Pixiv 插画、发送图片并使用每日
 
 - Pixiv 图片获取基于 [pixivpy-async](https://github.com/Mikubill/pixivpy-async)
 - 历史缩略图生成基于 [Pillow](https://python-pillow.org/)
+- 每日签到设计源于 [zhenxun_bot](https://github.com/zhenxun-org/zhenxun_bot)
