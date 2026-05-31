@@ -21,7 +21,13 @@
     "description": "过滤漫画",
     "type": "bool",
     "default": true,
-    "hint": "开启后，搜索结果全是漫画时自动过滤掉；混合结果（插画+漫画）保留全部。"
+    "hint": "开启后，普通搜索、普通排行榜和签到背景中只要作品类型为 manga 就过滤；主动请求漫画日榜 day_manga 时保留后门。"
+  },
+  "blacklist_tags": {
+    "description": "拉黑标签",
+    "type": "string",
+    "default": "furry,裸体,全裸,触手,露出,nsfw",
+    "hint": "多个标签用英文逗号 , 分隔；精确匹配 Pixiv 标签原文或翻译名。命中的作品不会被搜索、排行、签到背景、详情和下载使用。"
   },
   "pixiv_ranking_mode": {
     "description": "默认排行榜类型",
@@ -42,7 +48,7 @@
     "type": "float",
     "default": 24.0,
     "slider": {"min": 0, "max": 720, "step": 1},
-    "hint": "大于 0 时，同一群聊/私聊同一标签或排行榜会按北京时间当天记录已发作品，重启后仍有效，次日自动清理；设为 0 仅关闭普通发图去重。今日运势仍会按用户当天固定文本和配图。"
+    "hint": "大于 0 时，同一群聊/私聊同一标签或排行榜会按北京时间当天记录已发作品，重启后仍有效，次日自动清理；设为 0 仅关闭普通发图去重。"
   },
   "request_timeout": {
     "description": "下载超时（秒）",
@@ -77,43 +83,55 @@
     "default": false,
     "hint": "开启后，群内发送包含「来份/张图」等自然语言时自动触发 Pixiv 发图。无需命令前缀。"
   },
-  "fortune_enabled": {
-    "description": "今日运势开关",
+  "checkin_enabled": {
+    "description": "签到开关",
     "type": "bool",
     "default": true,
-    "hint": "开启后可使用 /今日运势、/jrys，或直接发送「今日运势」「jrys」查看每日稳定运势。"
+    "hint": "开启后可使用 /签到 或直接发送「签到」进行每日签到。"
   },
-  "fortune_image_enabled": {
-    "description": "今日运势 Pixiv 配图",
-    "type": "bool",
-    "default": true,
-    "hint": "开启后今日运势会尝试附带一张 Pixiv 图片；同一用户在同一群聊/私聊的当天配图固定，获取或发送失败时自动回退为纯文字。"
+  "checkin_bot_name": {
+    "description": "签到角色名",
+    "type": "string",
+    "default": "neko",
+    "hint": "签到卡片中显示的 bot 角色名。"
   },
-  "fortune_image_tag": {
-    "description": "今日运势配图标签",
+  "checkin_background_mode": {
+    "description": "签到背景模式",
+    "type": "string",
+    "default": "pixiv_daily",
+    "options": ["pixiv_daily", "custom"],
+    "hint": "pixiv_daily = 每日从 Pixiv 自动选择背景；custom = 使用管理员配置的固定背景文件。"
+  },
+  "checkin_background_tag": {
+    "description": "签到 Pixiv 背景标签",
     "type": "string",
     "default": "",
-    "hint": "今日运势配图使用的 Pixiv 搜索标签；多个标签用英文逗号 , 分隔，会按用户和日期稳定选择一个。留空时使用默认排行榜类型。"
+    "hint": "签到背景使用的 Pixiv 搜索标签；多个标签用英文逗号 , 分隔，会按日期稳定选择一个。留空时使用默认排行榜类型。"
   },
-  "fortune_ai_text_enabled": {
-    "description": "今日运势模型文案",
-    "type": "bool",
-    "default": false,
-    "hint": "开启后会根据已抽出的运势结果调用文本模型生成回复文案；当天第一次成功确定的文案会写入索引，后续请求和重启后都保持不变，模型失败时自动回退预置文案。"
-  },
-  "fortune_ai_provider_id": {
-    "description": "今日运势文案模型",
+  "checkin_background_aspect_ratio": {
+    "description": "签到背景图片比例",
     "type": "string",
-    "default": "",
-    "_special": "select_provider",
-    "hint": "用于生成今日运势文案的文本模型。留空时使用当前会话模型。"
+    "default": "16:9",
+    "hint": "仅 pixiv_daily 生效。默认优先选择 Pixiv 常见横图比例 16:9；可填 2.2:1、16:9、1:1、3:4 或 1.777 等比例，留空则不限制。没有匹配候选时会自动回退到未限制比例。"
   },
-  "fortune_ai_timeout_seconds": {
-    "description": "今日运势模型超时（秒）",
+  "checkin_background_aspect_tolerance": {
+    "description": "签到背景比例容差",
     "type": "float",
-    "default": 15.0,
-    "slider": {"min": 0, "max": 120, "step": 1},
-    "hint": "今日运势调用文本模型生成文案的最大等待时间；超时会回退预置文案。设为 0 可禁用插件侧超时。"
+    "default": 0.25,
+    "slider": {"min": 0, "max": 1, "step": 0.01},
+    "hint": "比例匹配允许的偏差。0.25 表示允许目标比例上下 25%；设为 0 时只接受完全匹配。"
+  },
+  "checkin_custom_background": {
+    "description": "签到自定义背景",
+    "type": "string",
+    "default": "",
+    "hint": "管理员配置的本地背景图片路径。推荐比例 16:9，建议 1920x1080 或 960x540；支持 jpg/png/webp。"
+  },
+  "checkin_avatar_enabled": {
+    "description": "签到头像显示",
+    "type": "bool",
+    "default": true,
+    "hint": "开启后 QQ 平台会尝试在签到卡片中显示用户头像；获取失败时自动使用默认头像。"
   },
   "rate_limit_seconds": {
     "description": "请求频率限制（秒）",
@@ -173,5 +191,12 @@
     "type": "text",
     "default": "你是一个 Pixiv 插画鉴赏专家。根据以下图片描述，用轻松有趣的语气写一句简短评论（50字以内）。\n\n图片描述：{description}",
     "hint": "发送给评论模型的提示词。用 {description} 代表识图结果的占位符。"
+  },
+  "webui_font_source": {
+    "description": "WebUI 字体来源",
+    "type": "string",
+    "default": "mirror",
+    "options": ["mirror", "official", "none"],
+    "hint": "图片历史页面加载 Google Fonts 的方式。mirror = 国内镜像（默认，速度快），official = 官方源（可能被墙），none = 不加载外部字体（使用系统字体）。"
   }
 }

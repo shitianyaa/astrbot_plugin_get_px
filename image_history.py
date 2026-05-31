@@ -7,7 +7,7 @@ import json
 import os
 from pathlib import Path
 import shutil
-from typing import Any
+from typing import Any, Iterable
 from uuid import uuid4
 
 from astrbot.api import logger
@@ -93,9 +93,7 @@ class ImageAssetManager:
                 file_size=file_size,
             )
             dedupe_key = self._record_dedupe_key(record.to_dict())
-            records = [
-                r for r in records if self._record_dedupe_key(r) != dedupe_key
-            ]
+            records = [r for r in records if self._record_dedupe_key(r) != dedupe_key]
             records.insert(0, record.to_dict())
             records = self._trim_records(records)
             self._save_records(records)
@@ -119,6 +117,33 @@ class ImageAssetManager:
             self._thumb_dir.mkdir(parents=True, exist_ok=True)
             return count
 
+    async def get_record(self, record_id: str) -> dict[str, Any] | None:
+        if not record_id:
+            return None
+        async with self._lock:
+            for record in self._load_records():
+                if str(record.get("record_id") or "") == record_id:
+                    return dict(record)
+        return None
+
+    async def delete_record(self, record_id: str) -> dict[str, Any] | None:
+        if not record_id:
+            return None
+        async with self._lock:
+            deleted = self._delete_matching_records(
+                lambda record: str(record.get("record_id") or "") == record_id
+            )
+        return deleted[0] if deleted else None
+
+    async def delete_records_by_illust_id(self, illust_id: str) -> list[dict[str, Any]]:
+        illust_id = str(illust_id or "")
+        if not illust_id:
+            return []
+        async with self._lock:
+            return self._delete_matching_records(
+                lambda record: str(record.get("illust_id") or "") == illust_id
+            )
+
     async def get_thumbnail_path(self, record_id: str) -> Path | None:
         if not record_id:
             return None
@@ -134,6 +159,28 @@ class ImageAssetManager:
                     return path if path.exists() else None
         return None
 
+    async def get_thumbnail_paths(self, record_ids: Iterable[str]) -> dict[str, Path]:
+        ids = self._normalize_ids(record_ids)
+        if not ids:
+            return {}
+        wanted = set(ids)
+        async with self._lock:
+            thumb_dir = self._thumb_dir.resolve()
+            paths: dict[str, Path] = {}
+            for record in self._load_records():
+                record_id = str(record.get("record_id") or "")
+                if record_id not in wanted or record_id in paths:
+                    continue
+                thumb_id = str(record.get("thumb_id") or "")
+                if not thumb_id:
+                    continue
+                path = (self._thumb_dir / thumb_id).resolve()
+                if thumb_dir not in path.parents:
+                    continue
+                if path.exists():
+                    paths[record_id] = path
+        return paths
+
     def _load_records(self) -> list[dict[str, Any]]:
         if not self._history_path.exists():
             return []
@@ -145,6 +192,25 @@ class ImageAssetManager:
         if not isinstance(data, list):
             return []
         return [item for item in data if isinstance(item, dict)]
+
+    def _delete_matching_records(self, predicate) -> list[dict[str, Any]]:
+        records = self._load_records()
+        kept: list[dict[str, Any]] = []
+        deleted: list[dict[str, Any]] = []
+        for record in records:
+            if predicate(record):
+                deleted.append(record)
+            else:
+                kept.append(record)
+        if not deleted:
+            return []
+        for record in deleted:
+            thumb_id = str(record.get("thumb_id") or "")
+            if thumb_id:
+                self._safe_unlink(self._thumb_dir / thumb_id)
+        self._save_records(kept)
+        self._cleanup_orphan_thumbnails(kept)
+        return deleted
 
     def _save_records(self, records: list[dict[str, Any]]) -> None:
         tmp_path = self._history_path.with_suffix(".json.tmp")
@@ -210,6 +276,18 @@ class ImageAssetManager:
             pass
 
     @staticmethod
+    def _normalize_ids(values: Iterable[str]) -> list[str]:
+        ids: list[str] = []
+        seen: set[str] = set()
+        for value in values:
+            item = str(value or "").strip()
+            if not item or item in seen:
+                continue
+            seen.add(item)
+            ids.append(item)
+        return ids
+
+    @staticmethod
     def _make_record_id(illust: dict, page: int) -> str:
         illust_id = str(illust.get("id") or "unknown")
         return f"{illust_id}_p{max(1, page)}_{uuid4().hex[:12]}"
@@ -249,7 +327,9 @@ class ImageAssetManager:
             height=int(illust.get("height", 0) or 0),
             page_count=int(illust.get("page_count", 1) or 1),
             tags=tags,
-            pixiv_url=f"https://www.pixiv.net/artworks/{illust_id}" if illust_id else "",
+            pixiv_url=f"https://www.pixiv.net/artworks/{illust_id}"
+            if illust_id
+            else "",
             thumb_id=thumb_id,
             session_id=str(getattr(event, "unified_msg_origin", "") or ""),
             group_id=str(group_id or ""),

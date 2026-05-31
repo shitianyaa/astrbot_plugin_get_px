@@ -1,6 +1,6 @@
 """AstrBot 插件 — Pixiv 发图
 
-通过标签搜索 Pixiv 插画并发送图片，支持排行榜、R18 过滤、多页作品、代理配置、自然语言自动触发和今日运势。
+通过标签搜索 Pixiv 插画并发送图片，支持排行榜、R18 过滤、多页作品、代理配置、自然语言自动触发和签到。
 
 搜索指令：
     /p [标签] [数量]           搜索并发送图片
@@ -13,7 +13,8 @@
     /pr [排行类型] [数量]      获取排行榜
     /prl                       查看所有排行榜类型
     /pi <作品ID>               查看作品详情
-    /今日运势, /jrys            查看今日运势
+    /签到                      每日签到
+    /签到测试                  管理员预览签到卡片
     /ph                        查看帮助
 """
 
@@ -23,6 +24,7 @@ import asyncio
 import base64
 import hashlib
 import os
+from pathlib import Path
 import random
 import re
 import time
@@ -35,8 +37,24 @@ from astrbot.core.star.star_tools import StarTools
 from quart import jsonify, request, send_file
 
 from .ai_commenter import AiCommenter
+from .checkin import (
+    BOOST_PRODUCTS,
+    CheckinProfile,
+    CheckinRecord,
+    CheckinResult,
+    CheckinStore,
+    affection_level,
+    boost_status_text,
+)
+from .checkin_background import filter_illusts_by_aspect_ratio, parse_aspect_ratio
+from .checkin_card import (
+    CHECKIN_CARD_HEIGHT,
+    CHECKIN_CARD_TEMPLATE,
+    CHECKIN_CARD_WIDTH,
+    CardBackground,
+    build_checkin_card_data,
+)
 from .downloader import ImageDownloader, cleanup, pick_image_url, pick_image_url_exact
-from .fortune import build_fortune, format_fortune
 from .image_index import ImageIndexStore, ordered_by_unused
 from .image_history import DEFAULT_HISTORY_LIMIT, ImageAssetManager
 from .pixiv_client import PixivClient
@@ -49,7 +67,7 @@ LOG_PREFIX = "[GetPx]"
 PLUGIN_NAME = "astrbot_plugin_get_px"
 
 AUTO_TRIGGER_PATTERN = r"^/?(来\s*(.*?)(份|个|张|点))(.*?)(福利|色|瑟|涩|塞)?图$"
-FORTUNE_REGEX_PATTERN = r"^(?!/)(今日运势|jrys)$"
+CHECKIN_REGEX_PATTERN = r"^(?!/)签到$"
 
 CHINESE_NUMBER_MAP = {
     "一": "1",
@@ -77,29 +95,8 @@ RANKING_MODES = {
 }
 
 DEFAULT_AUTO_DOWNGRADE_ORIGINAL_LIMIT_MB = 3.0
-FORTUNE_AI_PROMPT = """你会收到一份已经抽好的今日运势数据，请只根据这份数据改写成适合聊天机器人发送的中文文案。
-
-【今日运势数据】
-{fortune_text}
-
-要求：
-- 必须准确保留运势等级、星级、说明、宜、忌、提示
-- 不要说“用户未提供数据”，上面的【今日运势数据】就是输入数据
-- 不要新增与结果冲突的信息
-- 语气轻松自然，可以稍微可爱，但不要过度卖萌
-- 输出纯文本，不要 Markdown，不要代码块
-- 严格按示例格式输出
-
-输出格式：
-{username}
-今天 {date_str} {title}
-星级{stars}
-{description}
-宜：{good}
-忌：{bad}
-{extra_message}
-
-"""
+DEFAULT_BLACKLIST_TAGS = "furry,裸体,全裸,触手,露出,nsfw"
+THUMB_DATA_BATCH_LIMIT = 32
 
 
 # ──────────────────────────────────────────────────────────────────────
@@ -117,6 +114,7 @@ class GetPxPlugin(Star):
         self._last_request: dict[str, float] = {}
         self.image_index: ImageIndexStore | None = None
         self.image_history: ImageAssetManager | None = None
+        self.checkin_store: CheckinStore | None = None
 
     # ──────────────────────────────────────────────────────────────
     # 生命周期
@@ -129,6 +127,7 @@ class GetPxPlugin(Star):
         self.image_index = ImageIndexStore(data_dir)
         await self.image_index.cleanup_old_days()
         self.image_history = ImageAssetManager(data_dir)
+        self.checkin_store = CheckinStore(data_dir)
         self._register_image_history_web_apis()
         logger.info(f"{LOG_PREFIX} 插件已加载")
 
@@ -163,10 +162,58 @@ class GetPxPlugin(Star):
             "Get image history thumbnail as data URL",
         )
         self.context.register_web_api(
+            f"/{PLUGIN_NAME}/image-history/thumb-data-batch",
+            self._web_image_history_thumb_data_batch,
+            ["POST"],
+            "Get image history thumbnails as data URLs",
+        )
+        self.context.register_web_api(
             f"/{PLUGIN_NAME}/image-history/clear",
             self._web_image_history_clear,
             ["POST"],
             "Clear sent Pixiv image history",
+        )
+        self.context.register_web_api(
+            f"/{PLUGIN_NAME}/image-history/delete",
+            self._web_image_history_delete,
+            ["POST"],
+            "Delete one sent Pixiv image history record",
+        )
+        self.context.register_web_api(
+            f"/{PLUGIN_NAME}/image-history/blacklist",
+            self._web_image_history_blacklist,
+            ["POST"],
+            "Blacklist one Pixiv illustration from image history",
+        )
+        self.context.register_web_api(
+            f"/{PLUGIN_NAME}/image-blacklist",
+            self._web_image_blacklist,
+            ["GET"],
+            "List blacklisted Pixiv illustrations",
+        )
+        self.context.register_web_api(
+            f"/{PLUGIN_NAME}/image-blacklist/thumb-data",
+            self._web_image_blacklist_thumb_data,
+            ["GET"],
+            "Get blacklisted Pixiv illustration thumbnail as data URL",
+        )
+        self.context.register_web_api(
+            f"/{PLUGIN_NAME}/image-blacklist/thumb-data-batch",
+            self._web_image_blacklist_thumb_data_batch,
+            ["POST"],
+            "Get blacklisted Pixiv illustration thumbnails as data URLs",
+        )
+        self.context.register_web_api(
+            f"/{PLUGIN_NAME}/image-blacklist/remove",
+            self._web_image_blacklist_remove,
+            ["POST"],
+            "Remove one Pixiv illustration from blacklist",
+        )
+        self.context.register_web_api(
+            f"/{PLUGIN_NAME}/config",
+            self._web_config,
+            ["GET"],
+            "Get plugin web UI configuration",
         )
 
     async def _web_image_history(self):
@@ -212,6 +259,26 @@ class GetPxPlugin(Star):
             }
         )
 
+    async def _web_image_history_thumb_data_batch(self):
+        if self.image_history is None:
+            return jsonify({"success": False, "error": "image history is not initialized"}), 503
+        payload = await request.get_json(silent=True) or {}
+        ids = self._normalize_request_ids(payload.get("ids"))
+        if not ids:
+            return jsonify({"success": True, "thumbs": {}, "missing": []})
+        paths = await self.image_history.get_thumbnail_paths(ids)
+        try:
+            thumbs = await asyncio.to_thread(self._encode_thumb_data_urls, paths)
+        except OSError as e:
+            return jsonify({"success": False, "error": str(e)}), 500
+        return jsonify(
+            {
+                "success": True,
+                "thumbs": thumbs,
+                "missing": [record_id for record_id in ids if record_id not in thumbs],
+            }
+        )
+
     async def _web_image_history_clear(self):
         if self.image_history is None:
             return jsonify({"success": False, "error": "图片历史尚未初始化"}), 503
@@ -220,6 +287,145 @@ class GetPxPlugin(Star):
             return jsonify({"success": True, "deleted": deleted})
         except Exception as e:
             return jsonify({"success": False, "error": str(e)}), 500
+
+    async def _web_image_history_delete(self):
+        if self.image_history is None:
+            return jsonify({"success": False, "error": "图片历史尚未初始化"}), 503
+        payload = await request.get_json(silent=True) or {}
+        record_id = str(payload.get("record_id") or "").strip()
+        if not record_id:
+            return jsonify({"success": False, "error": "record_id is required"}), 400
+        try:
+            deleted = await self.image_history.delete_record(record_id)
+            if deleted is None:
+                return jsonify({"success": False, "error": "记录不存在"}), 404
+            return jsonify({"success": True, "record": deleted})
+        except Exception as e:
+            return jsonify({"success": False, "error": str(e)}), 500
+
+    async def _web_image_history_blacklist(self):
+        if self.image_history is None or self.image_index is None:
+            return jsonify({"success": False, "error": "图片索引尚未初始化"}), 503
+        payload = await request.get_json(silent=True) or {}
+        record_id = str(payload.get("record_id") or "").strip()
+        illust_id = str(payload.get("illust_id") or "").strip()
+        record = await self.image_history.get_record(record_id) if record_id else None
+        if record is not None:
+            illust_id = str(record.get("illust_id") or illust_id).strip()
+        if not illust_id:
+            return jsonify({"success": False, "error": "illust_id is required"}), 400
+        try:
+            thumb_path = (
+                await self.image_history.get_thumbnail_path(record_id)
+                if record_id
+                else None
+            )
+            thumb_id = await self.image_index.save_blacklist_thumbnail(
+                illust_id=illust_id,
+                source_path=thumb_path,
+            )
+            await self.image_index.add_blacklist_illust(
+                illust_id=illust_id,
+                title=str((record or {}).get("title") or payload.get("title") or ""),
+                author=str((record or {}).get("author") or payload.get("author") or ""),
+                source=str((record or {}).get("source") or payload.get("source") or ""),
+                record_id=record_id,
+                thumb_id=thumb_id,
+            )
+            deleted = await self.image_history.delete_records_by_illust_id(illust_id)
+            blacklist_record = None
+            for item in await self.image_index.list_blacklist_illusts():
+                if str(item.get("illust_id") or "") == illust_id:
+                    blacklist_record = item
+                    break
+            return jsonify(
+                {
+                    "success": True,
+                    "illust_id": illust_id,
+                    "deleted": len(deleted),
+                    "record": blacklist_record,
+                }
+            )
+        except Exception as e:
+            return jsonify({"success": False, "error": str(e)}), 500
+
+    async def _web_image_blacklist(self):
+        if self.image_index is None:
+            return jsonify({"success": False, "error": "图片索引尚未初始化"}), 503
+        try:
+            records = await self.image_index.list_blacklist_illusts()
+            return jsonify({"success": True, "records": records})
+        except Exception as e:
+            return jsonify({"success": False, "error": str(e)}), 500
+
+    async def _web_image_blacklist_thumb_data(self):
+        if self.image_index is None:
+            return jsonify({"success": False, "error": "图片索引尚未初始化"}), 503
+        illust_id = request.args.get("id", "").strip()
+        path = await self.image_index.get_blacklist_thumbnail_path(illust_id)
+        if path is None:
+            return jsonify({"success": False, "error": "缩略图不存在"}), 404
+        try:
+            encoded = base64.b64encode(path.read_bytes()).decode("ascii")
+        except OSError as e:
+            return jsonify({"success": False, "error": str(e)}), 500
+        return jsonify(
+            {
+                "success": True,
+                "illust_id": illust_id,
+                "data_url": f"data:image/jpeg;base64,{encoded}",
+            }
+        )
+
+    async def _web_image_blacklist_thumb_data_batch(self):
+        if self.image_index is None:
+            return jsonify({"success": False, "error": "image index is not initialized"}), 503
+        payload = await request.get_json(silent=True) or {}
+        ids = self._normalize_request_ids(payload.get("ids"))
+        if not ids:
+            return jsonify({"success": True, "thumbs": {}, "missing": []})
+        paths = await self.image_index.get_blacklist_thumbnail_paths(ids)
+        try:
+            thumbs = await asyncio.to_thread(self._encode_thumb_data_urls, paths)
+        except OSError as e:
+            return jsonify({"success": False, "error": str(e)}), 500
+        return jsonify(
+            {
+                "success": True,
+                "thumbs": thumbs,
+                "missing": [illust_id for illust_id in ids if illust_id not in thumbs],
+            }
+        )
+
+    async def _web_image_blacklist_remove(self):
+        if self.image_index is None:
+            return jsonify({"success": False, "error": "图片索引尚未初始化"}), 503
+        payload = await request.get_json(silent=True) or {}
+        illust_id = str(payload.get("illust_id") or "").strip()
+        if not illust_id:
+            return jsonify({"success": False, "error": "illust_id is required"}), 400
+        try:
+            removed = await self.image_index.remove_blacklist_illust(illust_id)
+            if removed is None:
+                return jsonify({"success": False, "error": "黑名单记录不存在"}), 404
+            return jsonify({"success": True, "record": removed})
+        except Exception as e:
+            return jsonify({"success": False, "error": str(e)}), 500
+
+    async def _web_config(self):
+        """Return plugin configuration for the web UI."""
+        font_source = self._cfg_str("webui_font_source", "mirror")
+        font_urls = {
+            "mirror": "https://fonts.googleapis.cn/css2?family=Noto+Sans+SC:wght@400;500;700&family=Noto+Serif+SC:wght@400;500;700&display=swap",
+            "official": "https://fonts.googleapis.com/css2?family=Noto+Sans+SC:wght@400;500;700&family=Noto+Serif+SC:wght@400;500;700&display=swap",
+        }
+        return jsonify(
+            {
+                "success": True,
+                "font_source": font_source,
+                "font_url": font_urls.get(font_source, ""),
+            }
+        )
 
     async def terminate(self):
         """插件卸载/停用时清理资源。"""
@@ -230,6 +436,7 @@ class GetPxPlugin(Star):
         self._last_request.clear()
         self.image_index = None
         self.image_history = None
+        self.checkin_store = None
         logger.info(f"{LOG_PREFIX} 插件已停止")
 
     # ──────────────────────────────────────────────────────────────
@@ -340,20 +547,51 @@ class GetPxPlugin(Star):
         event.stop_event()
         yield event.plain_result(self._build_help())
 
-    @filter.command("今日运势", alias=["jrys"])
-    async def cmd_fortune(self, event: AstrMessageEvent):
-        """查看今日运势。"""
+    @filter.command("签到")
+    async def cmd_checkin(self, event: AstrMessageEvent):
+        """每日签到。"""
         event.stop_event()
-        async for result in self._handle_fortune(event):
+        async for result in self._handle_checkin(event):
             yield result
 
-    @filter.regex(FORTUNE_REGEX_PATTERN)
-    async def fortune_auto_trigger(self, event: AstrMessageEvent):
-        """纯文本触发今日运势。"""
-        if not self._cfg_bool("fortune_enabled", True):
+    @filter.permission_type(filter.PermissionType.ADMIN)
+    @filter.command("签到测试")
+    async def cmd_checkin_preview(self, event: AstrMessageEvent):
+        """管理员预览签到卡片，不写入签到数据。"""
+        event.stop_event()
+        async for result in self._handle_checkin_preview(event):
+            yield result
+
+    @filter.regex(CHECKIN_REGEX_PATTERN)
+    async def checkin_auto_trigger(self, event: AstrMessageEvent):
+        """纯文本触发签到。"""
+        if not self._cfg_bool("checkin_enabled", True):
             return
         event.stop_event()
-        async for result in self._handle_fortune(event, silent_when_disabled=True):
+        async for result in self._handle_checkin(event, silent_when_disabled=True):
+            yield result
+
+    @filter.command("签到状态")
+    async def cmd_checkin_status(self, event: AstrMessageEvent):
+        """查看签到状态。"""
+        event.stop_event()
+        async for result in self._handle_checkin_status(event):
+            yield result
+
+    @filter.command("签到商店")
+    async def cmd_checkin_shop(self, event: AstrMessageEvent):
+        """查看签到商店。"""
+        event.stop_event()
+        if not self._cfg_bool("checkin_enabled", True):
+            yield event.plain_result("签到功能已关闭")
+            return
+        yield event.plain_result(self._build_checkin_shop())
+
+    @filter.command("购买加持")
+    async def cmd_buy_checkin_boost(self, event: AstrMessageEvent, days: str = ""):
+        """购买好感度双倍加持。"""
+        event.stop_event()
+        async for result in self._handle_buy_checkin_boost(event, days):
             yield result
 
     @filter.regex(AUTO_TRIGGER_PATTERN)
@@ -405,6 +643,29 @@ class GetPxPlugin(Star):
         self._init_client()
         return self.client is not None
 
+    @staticmethod
+    def _normalize_request_ids(value) -> list[str]:
+        raw_ids = value if isinstance(value, list) else []
+        ids: list[str] = []
+        seen: set[str] = set()
+        for raw_id in raw_ids:
+            item = str(raw_id or "").strip()
+            if not item or item in seen:
+                continue
+            seen.add(item)
+            ids.append(item)
+            if len(ids) >= THUMB_DATA_BATCH_LIMIT:
+                break
+        return ids
+
+    @staticmethod
+    def _encode_thumb_data_urls(paths: dict[str, object]) -> dict[str, str]:
+        thumbs: dict[str, str] = {}
+        for item_id, path in paths.items():
+            encoded = base64.b64encode(path.read_bytes()).decode("ascii")
+            thumbs[item_id] = f"data:image/jpeg;base64,{encoded}"
+        return thumbs
+
     async def _record_sent_image(
         self,
         event: AstrMessageEvent,
@@ -430,6 +691,32 @@ class GetPxPlugin(Star):
             )
         except Exception as e:
             logger.warning(f"{LOG_PREFIX} 写入图片历史失败: {e}")
+
+    async def _record_checkin_background(
+        self, event: AstrMessageEvent, background: CardBackground | None
+    ) -> None:
+        if (
+            background is None
+            or background.mode != "pixiv_daily"
+            or not background.image_path
+            or not background.illust
+        ):
+            return
+        await self._record_sent_image(
+            event,
+            background.illust,
+            background.image_path,
+            source="checkin",
+            quality=background.quality,
+            file_size=background.file_size,
+        )
+        await self._record_image_usage(
+            event,
+            background.source,
+            background.illust,
+            feature="checkin",
+            user_id=str(event.get_sender_id() or ""),
+        )
 
     @staticmethod
     def _event_scope(event: AstrMessageEvent) -> str:
@@ -467,341 +754,424 @@ class GetPxPlugin(Star):
         except Exception as e:
             logger.warning(f"{LOG_PREFIX} 写入当天发图索引失败: {e}")
 
-    async def _release_fortune_pending_usage(
-        self, *, scope: str, source_key: str, illust_id: str
-    ) -> None:
-        if self.image_index is None or not source_key or not illust_id:
-            return
-        try:
-            await self.image_index.release_usage(
-                scope=scope,
-                source_key=source_key,
-                illust_id=illust_id,
-                feature="fortune_pending",
-            )
-        except Exception as e:
-            logger.warning(f"{LOG_PREFIX} 释放今日运势配图占用失败: {e}")
-
-    async def _claim_fortune_image_assignment(
-        self,
-        event: AstrMessageEvent,
-        result,
-        fortune_image,
-        *,
-        scope: str,
-        user_key: str,
-        fortune_record_key: str,
-    ):
-        if self.image_index is None:
-            return fortune_image
-
-        (
-            illust,
-            image_path,
-            actual_q,
-            file_size,
-            image_source_key,
-            claimed_pending,
-        ) = fortune_image
-        illust_id = str(illust.get("id") or "")
-        if not illust_id:
-            return fortune_image
-
-        try:
-            claimed = await self.image_index.claim_fortune_illust_id(
-                scope=scope,
-                user_id=user_key,
-                source_key=fortune_record_key,
-                illust_id=illust_id,
-                image_source_key=image_source_key,
-            )
-        except Exception as e:
-            logger.warning(f"{LOG_PREFIX} 写入今日运势配图索引失败: {e}")
-            return fortune_image
-
-        assigned_illust_id = claimed.illust_id if claimed is not None else ""
-        assigned_image_source_key = (
-            claimed.image_source_key if claimed is not None else image_source_key
-        )
-        if not assigned_illust_id or assigned_illust_id == illust_id:
-            return fortune_image
-
-        if claimed_pending:
-            await self._release_fortune_pending_usage(
-                scope=scope,
-                source_key=image_source_key,
-                illust_id=illust_id,
-            )
-        cleanup(image_path)
-        replacement = await self._download_fortune_image(
-            event,
-            result,
-            assigned_illust_id=assigned_illust_id,
-            assigned_image_source_key=assigned_image_source_key,
-        )
-        if replacement is None:
-            logger.warning(
-                f"{LOG_PREFIX} 今日运势固定配图 {assigned_illust_id} 重新下载失败，回退纯文字"
-            )
-            return None
-
-        (
-            fixed_illust,
-            fixed_path,
-            fixed_q,
-            fixed_size,
-            fixed_source_key,
-            fixed_pending,
-        ) = replacement
-        return (
-            fixed_illust,
-            fixed_path,
-            fixed_q,
-            fixed_size,
-            fixed_source_key or assigned_image_source_key or image_source_key,
-            fixed_pending,
-        )
-
-    async def _handle_fortune(
+    async def _handle_checkin(
         self, event: AstrMessageEvent, *, silent_when_disabled: bool = False
     ):
-        """生成并发送今日运势。"""
-        if not self._cfg_bool("fortune_enabled", True):
+        """Handle first check-in, duplicate penalty, and card rendering fallback."""
+        if not self._cfg_bool("checkin_enabled", True):
             if not silent_when_disabled:
-                yield event.plain_result("今日运势功能已关闭")
+                yield event.plain_result("签到功能已关闭")
+            return
+        if self.checkin_store is None:
+            yield event.plain_result("签到数据尚未初始化，请稍后再试")
             return
 
         user_id = str(event.get_sender_id() or "")
-        group_id = event.get_group_id()
-        username = self._event_username(event, user_id or "用户")
-        date_key = ImageIndexStore.today_key()
-        result = build_fortune(
-            user_id or username,
-            username,
-            str(group_id) if group_id else None,
-            date_str=date_key,
-        )
-        fallback_text = format_fortune(result)
-        fortune_record_key = "fortune"
-        scope = self._event_scope(event)
-        user_key = user_id or username
-        existing_fortune = None
-        if self.image_index is not None:
-            try:
-                existing_fortune = await self.image_index.get_fortune_record(
-                    scope=scope,
-                    user_id=user_key,
-                    source_key=fortune_record_key,
-                )
-            except Exception as e:
-                logger.warning(f"{LOG_PREFIX} 读取今日运势索引失败: {e}")
-        if existing_fortune is not None:
-            fortune_text = existing_fortune.fortune_text
-        else:
-            fortune_text = await self._build_fortune_text(event, result, fallback_text)
-            if self.image_index is not None:
-                try:
-                    await self.image_index.save_fortune_record(
-                        scope=scope,
-                        user_id=user_key,
-                        source_key=fortune_record_key,
-                        fortune_text=fortune_text,
-                    )
-                    saved_fortune = await self.image_index.get_fortune_record(
-                        scope=scope,
-                        user_id=user_key,
-                        source_key=fortune_record_key,
-                    )
-                    if saved_fortune is not None:
-                        existing_fortune = saved_fortune
-                        fortune_text = saved_fortune.fortune_text
-                except Exception as e:
-                    logger.warning(f"{LOG_PREFIX} 写入今日运势索引失败: {e}")
+        if not user_id:
+            yield event.plain_result("无法识别用户 ID，暂时不能签到")
+            return
+        username = self._event_username(event, user_id)
+        bot_name = self._cfg_str("checkin_bot_name", "neko") or "neko"
 
-        if self._cfg_bool("fortune_image_enabled", True):
-            assigned_illust_id = (
-                existing_fortune.illust_id if existing_fortune is not None else ""
-            )
-            assigned_image_source_key = (
-                existing_fortune.image_source_key
-                if existing_fortune is not None
-                else ""
-            )
-            fortune_image = await self._download_fortune_image(
-                event,
-                result,
-                assigned_illust_id=assigned_illust_id,
-                assigned_image_source_key=assigned_image_source_key,
-            )
-            if fortune_image:
-                (
-                    illust,
-                    image_path,
-                    actual_q,
-                    file_size,
-                    image_source_key,
-                    claimed_pending,
-                ) = fortune_image
-                sent_success = False
-                try:
-                    if not assigned_illust_id:
-                        claimed_image = await self._claim_fortune_image_assignment(
-                            event,
-                            result,
-                            fortune_image,
-                            scope=scope,
-                            user_key=user_key,
-                            fortune_record_key=fortune_record_key,
-                        )
-                        if claimed_image is None:
-                            claimed_pending = False
-                            yield event.plain_result(fortune_text)
-                            return
-                        (
-                            illust,
-                            image_path,
-                            actual_q,
-                            file_size,
-                            image_source_key,
-                            claimed_pending,
-                        ) = claimed_image
-                    if await self._send_fortune_with_image(
-                        event, fortune_text, illust, image_path
-                    ):
-                        sent_success = True
-                        await self._record_image_usage(
-                            event,
-                            image_source_key,
-                            illust,
-                            feature="fortune",
-                            user_id=user_id,
-                        )
-                        await self._record_sent_image(
-                            event,
-                            illust,
-                            image_path,
-                            source="fortune",
-                            quality=actual_q,
-                            file_size=file_size,
-                        )
-                        return
-                finally:
-                    if not sent_success and claimed_pending:
-                        await self._release_fortune_pending_usage(
-                            scope=scope,
-                            source_key=image_source_key,
-                            illust_id=str(illust.get("id") or ""),
-                        )
-                    cleanup(image_path)
-
-        yield event.plain_result(fortune_text)
-
-    async def _build_fortune_text(
-        self, event: AstrMessageEvent, result, fallback_text: str
-    ) -> str:
-        """Build fortune text, optionally rewritten by a text model."""
-        if not self._cfg_bool("fortune_ai_text_enabled", False):
-            return fallback_text
-
-        provider_id = await self.ai._resolve_provider(
-            self._cfg_str("fortune_ai_provider_id", ""),
-            event.unified_msg_origin,
-        )
-        if not provider_id:
-            logger.warning(f"{LOG_PREFIX} 今日运势文案生成跳过：未配置文本模型")
-            return fallback_text
-
-        stars = "★" * result.star_count + "☆" * (result.max_stars - result.star_count)
-        prompt_data = {
-            "username": result.username,
-            "date_str": result.date_str,
-            "title": result.title,
-            "star_count": result.star_count,
-            "max_stars": result.max_stars,
-            "stars": stars,
-            "description": result.description,
-            "good": result.good,
-            "bad": result.bad,
-            "extra_message": result.extra_message,
-            "fortune_text": fallback_text,
-            "fortune": fallback_text,
-            "data": fallback_text,
-        }
         try:
-            prompt = self._format_prompt_template(FORTUNE_AI_PROMPT, prompt_data)
-        except ValueError as e:
-            logger.warning(f"{LOG_PREFIX} 今日运势内置提示词格式错误: {e}，回退预置文案")
-            return fallback_text
-        timeout_sec = self._cfg_float("fortune_ai_timeout_seconds", 15.0, 0.0, 120.0)
-        try:
-            generate_task = self.context.llm_generate(
-                chat_provider_id=provider_id,
-                prompt=prompt,
+            result = await self.checkin_store.checkin(
+                user_id=user_id,
+                username=username,
+                bot_name=bot_name,
             )
-            if timeout_sec > 0:
-                resp = await asyncio.wait_for(generate_task, timeout=timeout_sec)
-            else:
-                resp = await generate_task
-            if isinstance(resp, str):
-                text = resp.strip()
-            else:
-                text = (getattr(resp, "completion_text", "") or "").strip()
-            if not text:
-                logger.warning(f"{LOG_PREFIX} 今日运势文案模型返回空结果，回退预置文案")
-                return fallback_text
-            text = self._strip_code_fence(text)
-            if len(text) > 600:
-                text = text[:600].rstrip()
-            logger.info(f"{LOG_PREFIX} 今日运势文案已由模型生成 provider={provider_id}")
-            return text
-        except asyncio.TimeoutError:
-            logger.warning(
-                f"{LOG_PREFIX} 今日运势文案生成超时 ({timeout_sec:g}s)，回退预置文案"
-            )
-            return fallback_text
         except Exception as e:
-            logger.warning(f"{LOG_PREFIX} 今日运势文案生成失败: {e}，回退预置文案")
-            return fallback_text
+            logger.error(f"{LOG_PREFIX} 签到写入失败: {e}")
+            yield event.plain_result(f"签到失败: {e}")
+            return
+
+        if result.duplicate:
+            yield event.plain_result(self._format_duplicate_checkin_text(result))
+            return
+
+        record = result.record
+        if record is None:
+            yield event.plain_result(self._format_checkin_plain_text(result))
+            return
+
+        background: CardBackground | None = None
+        card_path = ""
+        try:
+            background = await self._prepare_checkin_background(event, record)
+            if background is not None:
+                await self.checkin_store.update_record_background(
+                    user_id=user_id,
+                    date_key=record.date_key,
+                    mode=background.mode,
+                    source=background.source,
+                    illust_id=background.illust_id,
+                    title=background.title,
+                    author=background.author,
+                )
+            card_path = await self._render_checkin_card(
+                event,
+                profile=result.profile,
+                record=record,
+                background=background,
+                bot_name=bot_name,
+            )
+        except Exception as e:
+            logger.warning(f"{LOG_PREFIX} 签到卡片渲染失败，回退纯文字: {e}")
+
+        if card_path:
+            try:
+                content = [Image.fromFileSystem(card_path)]
+                if background and background.pixiv_caption:
+                    content.append(Plain(background.pixiv_caption))
+                await event.send(event.chain_result(content))
+                await self._record_checkin_background(event, background)
+                return
+            except Exception as e:
+                logger.warning(f"{LOG_PREFIX} 签到卡片发送失败，回退纯文字: {e}")
+            finally:
+                cleanup(card_path)
+                if background and background.image_path and background.mode == "pixiv_daily":
+                    cleanup(background.image_path)
+
+        if background and background.image_path and background.mode == "pixiv_daily":
+            cleanup(background.image_path)
+        yield event.plain_result(self._format_checkin_plain_text(result))
+
+    async def _handle_checkin_preview(self, event: AstrMessageEvent):
+        user_id = str(event.get_sender_id() or "debug")
+        username = self._event_username(event, user_id)
+        bot_name = self._cfg_str("checkin_bot_name", "neko") or "neko"
+        date_key = CheckinStore.today_key()
+        now = CheckinStore.now_iso()
+        profile = CheckinProfile(
+            user_id=user_id,
+            coins=888,
+            affection=66.6,
+            total_days=12,
+            streak_days=5,
+            last_checkin_date=date_key,
+            boost_start_date="",
+            boost_until_date="",
+            repeat_penalty_date="",
+            repeat_penalty_total=0.0,
+            created_at=now,
+            updated_at=now,
+        )
+        record = CheckinRecord(
+            date_key=date_key,
+            user_id=user_id,
+            username=username,
+            bot_name=bot_name,
+            base_coins=88,
+            bonus_coins=12,
+            coins_reward=100,
+            base_affection=0.88,
+            bonus_affection=0.12,
+            affection_reward=1.0,
+            boost_active=False,
+            boost_multiplier=1.0,
+            total_coins_after=profile.coins,
+            total_affection_after=profile.affection,
+            total_days_after=profile.total_days,
+            streak_days_after=profile.streak_days,
+            note="签到测试预览，不会写入签到数据。",
+            background_mode="",
+            background_source="",
+            background_illust_id="",
+            background_title="",
+            background_author="",
+            created_at=now,
+            updated_at=now,
+        )
+        result = CheckinResult(profile=profile, record=record, duplicate=False)
+
+        background: CardBackground | None = None
+        card_path = ""
+        try:
+            background = await self._prepare_checkin_background(event, record)
+            card_path = await self._render_checkin_card(
+                event,
+                profile=profile,
+                record=record,
+                background=background,
+                bot_name=bot_name,
+            )
+        except Exception as e:
+            logger.warning(f"{LOG_PREFIX} 签到测试卡片渲染失败，回退纯文字: {e}")
+
+        if card_path:
+            try:
+                content = [
+                    Plain("签到测试预览（仅管理员，不写入签到数据）"),
+                    Image.fromFileSystem(card_path),
+                ]
+                if background and background.pixiv_caption:
+                    content.append(Plain(background.pixiv_caption))
+                await event.send(event.chain_result(content))
+                return
+            except Exception as e:
+                logger.warning(f"{LOG_PREFIX} 签到测试卡片发送失败，回退纯文字: {e}")
+            finally:
+                cleanup(card_path)
+                if background and background.image_path and background.mode == "pixiv_daily":
+                    cleanup(background.image_path)
+
+        if background and background.image_path and background.mode == "pixiv_daily":
+            cleanup(background.image_path)
+        yield event.plain_result(
+            "签到测试预览（未写入数据）\n" + self._format_checkin_plain_text(result)
+        )
+
+    async def _handle_checkin_status(self, event: AstrMessageEvent):
+        if not self._cfg_bool("checkin_enabled", True):
+            yield event.plain_result("签到功能已关闭")
+            return
+        if self.checkin_store is None:
+            yield event.plain_result("签到数据尚未初始化，请稍后再试")
+            return
+        user_id = str(event.get_sender_id() or "")
+        if not user_id:
+            yield event.plain_result("无法识别用户 ID，暂时不能查看签到状态")
+            return
+        try:
+            profile = await self.checkin_store.get_profile(user_id)
+        except Exception as e:
+            logger.warning(f"{LOG_PREFIX} 读取签到状态失败: {e}")
+            yield event.plain_result(f"读取签到状态失败: {e}")
+            return
+        level = affection_level(profile.affection)
+        today = CheckinStore.today_key()
+        signed_today = profile.last_checkin_date == today
+        lines = [
+            "签到状态",
+            f"UID: {profile.user_id}",
+            f"今日: {'已签到' if signed_today else '未签到'}",
+            f"累计签到: {profile.total_days} 天",
+            f"连续签到: {profile.streak_days} 天",
+            f"金币: {profile.coins}",
+            f"好感度: {profile.affection:.2f}（{level['name']}）",
+            f"好感度加持: {boost_status_text(profile, today)}",
+        ]
+        yield event.plain_result("\n".join(lines))
+
+    async def _handle_buy_checkin_boost(self, event: AstrMessageEvent, days: str):
+        if not self._cfg_bool("checkin_enabled", True):
+            yield event.plain_result("签到功能已关闭")
+            return
+        if self.checkin_store is None:
+            yield event.plain_result("签到数据尚未初始化，请稍后再试")
+            return
+        if not days or not days.isdigit():
+            yield event.plain_result("用法: /购买加持 <1|3|7>\n示例: /购买加持 3")
+            return
+        user_id = str(event.get_sender_id() or "")
+        if not user_id:
+            yield event.plain_result("无法识别用户 ID，暂时不能购买加持")
+            return
+        try:
+            purchase = await self.checkin_store.purchase_boost(
+                user_id=user_id,
+                days=int(days),
+            )
+        except Exception as e:
+            logger.warning(f"{LOG_PREFIX} 购买签到加持失败: {e}")
+            yield event.plain_result(f"购买失败: {e}")
+            return
+        lines = [purchase.message, f"当前金币: {purchase.profile.coins}"]
+        if purchase.success:
+            lines.append(
+                f"好感度加持: {boost_status_text(purchase.profile, CheckinStore.today_key())}"
+            )
+        yield event.plain_result("\n".join(lines))
 
     @staticmethod
-    def _format_prompt_template(template: str, data: dict) -> str:
-        class SafeDict(dict):
-            def __missing__(self, key):
-                return "{" + key + "}"
+    def _build_checkin_shop() -> str:
+        lines = [
+            "签到商店",
+            "金币可购买好感度双倍加持，加持只影响之后签到获得的好感度。",
+        ]
+        for days, cost in BOOST_PRODUCTS.items():
+            lines.append(f"/购买加持 {days} - {days} 天，{cost} 金币")
+        return "\n".join(lines)
 
-        return template.format_map(SafeDict(data))
+    def _format_duplicate_checkin_text(self, result) -> str:
+        level = affection_level(result.profile.affection)
+        if result.penalty_amount > 0:
+            penalty = f"本次好感度 -{result.penalty_amount:.2f}"
+        else:
+            penalty = "今天重复签到惩罚已到上限"
+        return "\n".join(
+            [
+                "今天已经签到过了喵，再戳会掉好感度哦。",
+                f"{penalty}，当前好感度 {result.profile.affection:.2f}（{level['name']}）。",
+                f"今日重复签到累计扣除 {result.penalty_total_today:.2f}/1.00。",
+            ]
+        )
 
     @staticmethod
-    def _strip_code_fence(text: str) -> str:
-        stripped = text.strip()
-        if stripped.startswith("```") and stripped.endswith("```"):
-            lines = stripped.splitlines()
-            if len(lines) >= 3:
-                return "\n".join(lines[1:-1]).strip()
-        return stripped
+    def _format_checkin_plain_text(result) -> str:
+        record = result.record
+        profile = result.profile
+        if record is None:
+            return "签到成功"
+        level = affection_level(profile.affection)
+        return "\n".join(
+            [
+                f"{record.username} 签到成功",
+                f"日期: {record.date_key}",
+                f"今日奖励: 金币 +{record.coins_reward}，好感度 +{record.affection_reward:.2f}",
+                f"累计签到: {profile.total_days} 天，连续签到: {profile.streak_days} 天",
+                f"金币: {profile.coins}，好感度: {profile.affection:.2f}（{level['name']}）",
+                record.note,
+            ]
+        )
 
-    @staticmethod
-    def _split_config_tags(value: str) -> list[str]:
-        return [tag.strip() for tag in value.split(",") if tag.strip()]
-
-    async def _download_fortune_image(
+    async def _render_checkin_card(
         self,
         event: AstrMessageEvent,
-        result,
         *,
-        assigned_illust_id: str = "",
-        assigned_image_source_key: str = "",
-    ):
-        """Fetch one Pixiv image for today's fortune, falling back silently on failure."""
+        profile,
+        record,
+        background: CardBackground | None,
+        bot_name: str,
+    ) -> str:
+        avatar_url = self._checkin_avatar_url(event) if self._cfg_bool("checkin_avatar_enabled", True) else ""
+        width = CHECKIN_CARD_WIDTH
+        height = CHECKIN_CARD_HEIGHT
+        data = build_checkin_card_data(
+            profile=profile,
+            record=record,
+            bot_name=bot_name,
+            avatar_url=avatar_url,
+            background=background,
+            width=width,
+            height=height,
+        )
+        return await self.html_render(
+            CHECKIN_CARD_TEMPLATE,
+            data,
+            return_url=False,
+            options={
+                "full_page": False,
+                "type": "jpeg",
+                "quality": 88,
+                "clip": {"x": 0, "y": 0, "width": width, "height": height},
+                "viewport": {"width": width, "height": height},
+                "animations": "disabled",
+            },
+        )
+
+    async def _prepare_checkin_background(
+        self, event: AstrMessageEvent, record
+    ) -> CardBackground | None:
+        mode = self._cfg_str("checkin_background_mode", "pixiv_daily") or "pixiv_daily"
+        if mode == "custom":
+            custom_path = self._resolve_custom_background_path(
+                self._cfg_str("checkin_custom_background", "")
+            )
+            if custom_path:
+                return CardBackground(
+                    image_path=str(custom_path),
+                    mode="custom",
+                    source="custom",
+                )
+            logger.warning(f"{LOG_PREFIX} 签到自定义背景不可用，回退默认背景")
+            return CardBackground(mode="fallback", source="fallback")
+        if mode != "pixiv_daily":
+            mode = "pixiv_daily"
+        pixiv_bg = await self._download_checkin_pixiv_background(event, record)
+        if pixiv_bg is not None:
+            return pixiv_bg
+        return CardBackground(mode="fallback", source="fallback")
+
+    def _resolve_custom_background_path(self, value: str) -> Path | None:
+        raw = str(value or "").strip().strip('"')
+        if not raw:
+            return None
+        path = Path(raw)
+        if not path.is_absolute():
+            path = Path(StarTools.get_data_dir(PLUGIN_NAME)) / raw
+        try:
+            resolved = path.resolve()
+        except OSError:
+            return None
+        if not resolved.is_file():
+            return None
+        if resolved.suffix.lower() not in {".jpg", ".jpeg", ".png", ".webp"}:
+            return None
+        return resolved
+
+    async def _download_checkin_pixiv_background(
+        self, event: AstrMessageEvent, record
+    ) -> CardBackground | None:
         token = self._cfg_str("pixiv_refresh_token")
         if not token:
-            logger.info(f"{LOG_PREFIX} 今日运势配图跳过：未配置 Pixiv refresh_token")
+            logger.info(f"{LOG_PREFIX} 签到背景跳过 Pixiv：未配置 refresh_token")
             return None
         if self.client is None:
             self._init_client()
         if self.client is None:
             return None
 
+        tag_config = self._cfg_str("checkin_background_tag", "")
+        tags = self._split_config_tags(tag_config)
+        selected_tag = ""
+        if tags:
+            seed = int.from_bytes(
+                hashlib.sha256(
+                    f"checkin-bg-tag|{record.date_key}|{tag_config}".encode("utf-8")
+                ).digest()[:8],
+                "big",
+            )
+            selected_tag = tags[seed % len(tags)]
+        ranking_mode = self._cfg_str("pixiv_ranking_mode", "week")
+        if ranking_mode not in RANKING_MODES:
+            ranking_mode = "week"
+
+        try:
+            if selected_tag:
+                illusts = await self.client.search(selected_tag)
+                source_key = self._source_key(selected_tag, ranking_mode)
+            else:
+                illusts = await self.client.ranking(ranking_mode)
+                source_key = self._source_key("", ranking_mode)
+        except Exception as e:
+            logger.warning(f"{LOG_PREFIX} 签到背景 Pixiv 获取失败: {e}")
+            return None
+
+        r18_mode = self._cfg_int("pixiv_r18", 0, 0, 2)
+        illusts = self._filter_r18(illusts, r18_mode)
+        is_manga_ranking = not selected_tag and ranking_mode == "day_manga"
+        if self._cfg_bool("filter_manga", True) and not is_manga_ranking:
+            illusts = self._filter_manga(illusts)
+        illusts = await self._filter_blacklisted_illusts(illusts)
+        aspect_config = self._cfg_str("checkin_background_aspect_ratio", "16:9")
+        aspect_ratio = parse_aspect_ratio(aspect_config)
+        if aspect_ratio > 0:
+            tolerance = self._cfg_float(
+                "checkin_background_aspect_tolerance", 0.25, 0.0, 1.0
+            )
+            aspect_matched = filter_illusts_by_aspect_ratio(
+                illusts, aspect_ratio, tolerance
+            )
+            if aspect_matched:
+                illusts = aspect_matched
+            else:
+                logger.info(
+                    f"{LOG_PREFIX} 签到背景无符合比例 {aspect_config} 的候选作品，回退未限制比例候选"
+                )
+        if not illusts:
+            return None
+
+        seed = int.from_bytes(
+            hashlib.sha256(
+                f"checkin-bg|{record.date_key}|{record.user_id}|{source_key}".encode(
+                    "utf-8"
+                )
+            ).digest()[:8],
+            "big",
+        )
+        start = seed % len(illusts)
+        ordered = illusts[start:] + illusts[:start]
         quality = self._cfg_str("image_quality", "original")
         timeout_sec = self._cfg_float("request_timeout", 30.0, 5.0, 120.0)
         downgrade_limit_mb = self._cfg_float(
@@ -811,117 +1181,14 @@ class GetPxPlugin(Star):
             100.0,
         )
         downgrade_limit_bytes = int(downgrade_limit_mb * 1024 * 1024)
-
-        if assigned_illust_id:
-            try:
-                illust = await self.client.illust_detail(int(assigned_illust_id))
-            except (TypeError, ValueError):
-                illust = None
-            if not illust:
-                logger.warning(
-                    f"{LOG_PREFIX} 今日运势固定配图 {assigned_illust_id} 获取失败，回退纯文字"
-                )
-                return None
-            title = illust.get("title", "无标题")
-            try:
-                path, actual_q, file_size = await self.downloader.download_for_send(
-                    illust,
-                    quality,
-                    proxy=self._cfg_str("pixiv_proxy_url"),
-                    timeout=timeout_sec,
-                    downgrade_limit_bytes=downgrade_limit_bytes,
-                    log_context=f"[今日运势固定配图] 作品 {assigned_illust_id} 「{title}」",
-                )
-                return (
-                    illust,
-                    path,
-                    actual_q,
-                    file_size,
-                    assigned_image_source_key,
-                    False,
-                )
-            except asyncio.TimeoutError:
-                logger.warning(
-                    f"{LOG_PREFIX} 今日运势固定配图 {assigned_illust_id} 下载超时 ({timeout_sec}s)"
-                )
-            except Exception as e:
-                logger.warning(f"{LOG_PREFIX} 今日运势固定配图 {assigned_illust_id} 下载失败: {e}")
-            return None
-
-        tag_config = self._cfg_str("fortune_image_tag", "")
-        tags = self._split_config_tags(tag_config)
-        selected_tag = ""
-        if tags:
-            tag_seed_text = (
-                f"fortune-image-tag|{result.date_str}|{event.get_sender_id() or ''}|"
-                f"{event.get_group_id() or 'private'}|{tag_config}"
-            )
-            tag_seed = int.from_bytes(
-                hashlib.sha256(tag_seed_text.encode("utf-8")).digest()[:8], "big"
-            )
-            selected_tag = tags[tag_seed % len(tags)]
-        ranking_mode = self._cfg_str("pixiv_ranking_mode", "week")
-        if ranking_mode not in RANKING_MODES:
-            ranking_mode = "week"
-
-        try:
-            if selected_tag:
-                illusts = await self.client.search(selected_tag)
-                source_desc = f"tag={selected_tag!r}"
-            else:
-                illusts = await self.client.ranking(ranking_mode)
-                source_desc = f"rank={ranking_mode}"
-        except Exception as e:
-            logger.warning(f"{LOG_PREFIX} 今日运势配图获取失败: {e}")
-            return None
-
-        r18_mode = self._cfg_int("pixiv_r18", 0, 0, 2)
-        illusts = self._filter_r18(illusts, r18_mode)
-        is_manga_ranking = not selected_tag and ranking_mode == "day_manga"
-        if self._cfg_bool("filter_manga", True) and not is_manga_ranking:
-            illusts = self._filter_manga(illusts)
-        if not illusts:
-            logger.info(f"{LOG_PREFIX} 今日运势配图无可用作品 ({source_desc})")
-            return None
-
-        seed_text = (
-            f"fortune-image|{result.date_str}|{event.get_sender_id() or ''}|"
-            f"{event.get_group_id() or 'private'}|{tag_config}|{selected_tag}|{ranking_mode}"
-        )
-        seed = int.from_bytes(
-            hashlib.sha256(seed_text.encode("utf-8")).digest()[:8], "big"
-        )
-        start = seed % len(illusts)
-        ordered = illusts[start:] + illusts[:start]
-        source_key = self._source_key(selected_tag, ranking_mode)
-        if self.image_index is not None:
-            try:
-                used_ids = await self.image_index.get_used_illust_ids(
-                    self._event_scope(event), source_key
-                )
-                ordered = ordered_by_unused(ordered, used_ids)
-            except Exception as e:
-                logger.warning(f"{LOG_PREFIX} 读取当天发图索引失败: {e}")
-
-        for idx, illust in enumerate(ordered[:5], 1):
+        for idx, illust in enumerate(ordered[:8], 1):
             illust_id = str(illust.get("id") or "")
             if not illust_id:
                 continue
-            claimed_pending = False
-            if self.image_index is not None:
-                try:
-                    claimed_pending = await self.image_index.claim_usage(
-                        scope=self._event_scope(event),
-                        source_key=source_key,
-                        illust_id=illust_id,
-                        feature="fortune_pending",
-                        user_id=str(event.get_sender_id() or ""),
-                    )
-                except Exception as e:
-                    logger.warning(f"{LOG_PREFIX} 占用今日运势配图索引失败: {e}")
-                    claimed_pending = False
-                if not claimed_pending:
-                    continue
+            reason = await self._blacklist_reason_for_illust(illust, illust_id)
+            if reason:
+                logger.info(f"{LOG_PREFIX} 签到背景跳过：{reason}")
+                continue
             title = illust.get("title", "无标题")
             try:
                 path, actual_q, file_size = await self.downloader.download_for_send(
@@ -930,63 +1197,78 @@ class GetPxPlugin(Star):
                     proxy=self._cfg_str("pixiv_proxy_url"),
                     timeout=timeout_sec,
                     downgrade_limit_bytes=downgrade_limit_bytes,
-                    log_context=f"[今日运势配图 {idx}] 作品 {illust_id} 「{title}」",
+                    log_context=f"[签到背景 {idx}] 作品 {illust_id} 「{title}」",
                 )
-                logger.info(
-                    f"{LOG_PREFIX} 今日运势配图下载完成 {illust_id} -> {path} "
-                    f"({file_size / 1024:.1f} KB, quality={actual_q})"
+                author = str((illust.get("user") or {}).get("name") or "")
+                return CardBackground(
+                    image_path=path,
+                    mode="pixiv_daily",
+                    source=source_key,
+                    illust_id=illust_id,
+                    title=str(title or ""),
+                    author=author,
+                    illust=illust,
+                    quality=actual_q,
+                    file_size=file_size,
                 )
-                return illust, path, actual_q, file_size, source_key, claimed_pending
             except asyncio.TimeoutError:
                 logger.warning(
-                    f"{LOG_PREFIX} 今日运势配图 {illust_id} 下载超时 ({timeout_sec}s)"
+                    f"{LOG_PREFIX} 签到背景 {illust_id} 下载超时 ({timeout_sec}s)"
                 )
             except Exception as e:
-                logger.warning(f"{LOG_PREFIX} 今日运势配图 {illust_id} 下载失败: {e}")
-            if claimed_pending:
-                await self._release_fortune_pending_usage(
-                    scope=self._event_scope(event),
-                    source_key=source_key,
-                    illust_id=illust_id,
-                )
-
+                logger.warning(f"{LOG_PREFIX} 签到背景 {illust_id} 下载失败: {e}")
         return None
 
-    async def _send_fortune_with_image(
-        self, event: AstrMessageEvent, fortune_text: str, illust: dict, image_path: str
-    ) -> bool:
-        """Send fortune text with one Pixiv image."""
-        title = illust.get("title", "无标题")
-        illust_id = illust.get("id", "?")
-        content = [
-            Plain(fortune_text),
-            Image.fromFileSystem(image_path),
-            Plain(f"配图：{title} (ID: {illust_id})"),
-        ]
+    def _checkin_avatar_url(self, event: AstrMessageEvent) -> str:
+        user_id = str(event.get_sender_id() or "")
+        if not user_id:
+            return ""
+        platform = event.get_platform_name()
+        if platform == "aiocqhttp" and user_id.isdigit():
+            return f"https://q1.qlogo.cn/g?b=qq&nk={user_id}&s=640"
+        return ""
 
-        max_retries = 3
-        for attempt in range(1, max_retries + 1):
-            try:
-                await event.send(event.chain_result(content))
-                logger.info(
-                    f"{LOG_PREFIX} 今日运势配图已发送 {illust_id}"
-                    + (f" (第{attempt}次尝试)" if attempt > 1 else "")
-                )
-                return True
-            except (asyncio.TimeoutError, Exception) as e:
-                if attempt < max_retries:
-                    wait_sec = attempt * 2
-                    logger.warning(
-                        f"{LOG_PREFIX} 今日运势配图发送失败 (第{attempt}次): {e}，{wait_sec}秒后重试..."
-                    )
-                    await asyncio.sleep(wait_sec)
-                    continue
-                friendly_err = self._friendly_send_error(e)
-                logger.warning(
-                    f"{LOG_PREFIX} 今日运势配图发送失败 (已重试{max_retries}次): "
-                    f"{friendly_err} | 原始错误: {e}，回退纯文字"
-                )
-        return False
+    @staticmethod
+    def _split_config_tags(value: str) -> list[str]:
+        return [tag.strip() for tag in value.split(",") if tag.strip()]
+
+    def _blacklist_tags(self) -> set[str]:
+        return {
+            tag.casefold()
+            for tag in self._split_config_tags(self._cfg_str("blacklist_tags", ""))
+        } or {
+            tag.casefold() for tag in self._split_config_tags(DEFAULT_BLACKLIST_TAGS)
+        }
+
+    @staticmethod
+    def _illust_tag_names(illust: dict) -> set[str]:
+        names: set[str] = set()
+        for tag in illust.get("tags") or []:
+            if not isinstance(tag, dict):
+                continue
+            for key in ("name", "translated_name"):
+                value = str(tag.get(key) or "").strip()
+                if value:
+                    names.add(value.casefold())
+        return names
+
+    def _matched_blacklist_tag(self, illust: dict) -> str:
+        blacklist_tags = self._blacklist_tags()
+        if not blacklist_tags:
+            return ""
+        matched = self._illust_tag_names(illust) & blacklist_tags
+        return sorted(matched)[0] if matched else ""
+
+    async def _blacklist_reason_for_illust(
+        self, illust: dict, illust_id: str = ""
+    ) -> str:
+        illust_id = str(illust_id or illust.get("id") or "")
+        matched_tag = self._matched_blacklist_tag(illust)
+        if matched_tag:
+            return f"作品 {illust_id or '-'} 命中拉黑标签 {matched_tag}"
+        if await self._is_blacklisted_illust(illust_id):
+            return f"作品 {illust_id} 已在黑名单中"
+        return ""
 
     @staticmethod
     def _event_username(event: AstrMessageEvent, default: str) -> str:
@@ -1094,14 +1376,22 @@ class GetPxPlugin(Star):
                 yield event.plain_result("🔒 过滤后没有可用作品")
             return
 
-        # 漫画过滤（全是漫画时过滤掉，混合结果保留；漫画排行榜不过滤）
-        if filter_manga and ranking_mode != "day_manga":
+        # 漫画过滤：普通搜索/排行中只要作品类型命中 manga 就过滤；漫画日榜保留后门。
+        is_manga_ranking = not tag and ranking_mode == "day_manga"
+        if filter_manga and not is_manga_ranking:
             illusts = self._filter_manga(illusts)
             if not illusts:
                 yield event.plain_result(
                     "😶 过滤漫画后没有可用作品，可关闭漫画过滤后重试"
                 )
                 return
+
+        illusts = await self._filter_blacklisted_illusts(illusts)
+        if not illusts:
+            yield event.plain_result(
+                "😶 可用作品都被黑名单过滤了，换个标签或调整黑名单后再试"
+            )
+            return
 
         pick_count = min(count, len(illusts))
         dedupe_ttl_hours = self._cfg_float("dedupe_ttl_hours", 24.0, 0.0, 720.0)
@@ -1115,7 +1405,9 @@ class GetPxPlugin(Star):
             dedupe_enabled=dedupe_ttl_hours > 0,
         )
         if not chosen:
-            yield event.plain_result("今天这个范围内没有未发送过的图片了，换个标签或明天再试")
+            yield event.plain_result(
+                "今天这个范围内没有未发送过的图片了，换个标签或明天再试"
+            )
             return
         pick_count = len(chosen)
         pending_illust_ids: set[str] = set()
@@ -1460,6 +1752,11 @@ class GetPxPlugin(Star):
             yield event.plain_result(f"😶 未找到作品 {illust_id}")
             return
 
+        reason = await self._blacklist_reason_for_illust(illust, str(illust_id))
+        if reason:
+            yield event.plain_result(f"🚫 {reason}")
+            return
+
         title = illust.get("title", "无标题")
         author = (illust.get("user") or {}).get("name", "未知")
         tags = "、".join(t.get("name", "") for t in (illust.get("tags") or [])[:5])
@@ -1510,6 +1807,11 @@ class GetPxPlugin(Star):
 
         if not illust:
             yield event.plain_result(f"😶 未找到作品 {illust_id}")
+            return
+
+        reason = await self._blacklist_reason_for_illust(illust, str(illust_id))
+        if reason:
+            yield event.plain_result(f"🚫 {reason}")
             return
 
         # R18 检查
@@ -1750,8 +2052,17 @@ class GetPxPlugin(Star):
             "　　示例: /pd 12345678",
             "　　示例: /pd 12345678 2",
             "",
-            "今日运势 / jrys",
-            "　　查看今日运势，也可直接发送 今日运势 或 jrys",
+            "签到",
+            "　　每日签到，也可直接发送 签到",
+            "",
+            "签到测试",
+            "　　管理员预览签到卡片，不写入签到数据",
+            "",
+            "签到状态",
+            "　　查看累计签到、金币、好感度和加持状态",
+            "",
+            "签到商店 / 购买加持",
+            "　　查看并购买好感度双倍加持",
             "",
             "🤖 自然语言触发（需配置开启 auto_trigger_enabled）",
             "　　来一份图 → 发送 1 张排行榜图片",
@@ -1759,8 +2070,8 @@ class GetPxPlugin(Star):
             "　　来两张萝莉 → 搜标签发送 2 张",
             "",
             "⚙️ 漫画过滤（filter_manga）:",
-            "　　开启后，搜索结果全是漫画时自动过滤",
-            "　　混合结果（插画+漫画）保留全部",
+            "　　开启后，只要作品类型为漫画就自动过滤",
+            "　　漫画日榜 day_manga 作为主动请求保留后门",
             "",
             "❓ /ph 显示本帮助",
         ]
@@ -1786,10 +2097,38 @@ class GetPxPlugin(Star):
 
     @staticmethod
     def _filter_manga(illusts: list[dict]) -> list[dict]:
-        """当结果全是漫画时过滤掉；混合结果保留全部。"""
-        if any(il.get("type") == "illust" for il in illusts):
-            return illusts
+        """Filter out every Pixiv manga item."""
         return [il for il in illusts if il.get("type") != "manga"]
+
+    async def _filter_blacklisted_illusts(self, illusts: list[dict]) -> list[dict]:
+        if not illusts:
+            return illusts
+        blacklist_tags = self._blacklist_tags()
+        blacklisted: set[str] = set()
+        if self.image_index is None and not blacklist_tags:
+            return illusts
+        try:
+            if self.image_index is not None:
+                blacklisted = await self.image_index.get_blacklisted_illust_ids()
+        except Exception as e:
+            logger.warning(f"{LOG_PREFIX} 读取图片黑名单失败: {e}")
+        if not blacklisted and not blacklist_tags:
+            return illusts
+        return [
+            illust
+            for illust in illusts
+            if str(illust.get("id") or "") not in blacklisted
+            and not self._matched_blacklist_tag(illust)
+        ]
+
+    async def _is_blacklisted_illust(self, illust_id: str) -> bool:
+        if self.image_index is None or not illust_id:
+            return False
+        try:
+            return await self.image_index.is_blacklisted(illust_id)
+        except Exception as e:
+            logger.warning(f"{LOG_PREFIX} 读取图片黑名单失败: {e}")
+            return False
 
     @staticmethod
     def _friendly_send_error(error: Exception) -> str:

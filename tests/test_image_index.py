@@ -29,7 +29,7 @@ class ImageIndexStoreTest(unittest.IsolatedAsyncioTestCase):
                         scope="group:1",
                         source_key="rank:week",
                         illust_id="100",
-                        feature="fortune_pending",
+                        feature="normal_pending",
                         user_id=f"user:{idx}",
                     )
                     for idx in range(20)
@@ -46,7 +46,7 @@ class ImageIndexStoreTest(unittest.IsolatedAsyncioTestCase):
                 scope="group:1",
                 source_key="rank:week",
                 illust_id="100",
-                feature="fortune_pending",
+                feature="normal_pending",
             )
 
             self.assertEqual(
@@ -57,7 +57,7 @@ class ImageIndexStoreTest(unittest.IsolatedAsyncioTestCase):
                     scope="group:1",
                     source_key="rank:week",
                     illust_id="100",
-                    feature="fortune_pending",
+                    feature="normal_pending",
                     user_id="user:next",
                 )
             )
@@ -70,65 +70,21 @@ class ImageIndexStoreTest(unittest.IsolatedAsyncioTestCase):
                 scope="group:1",
                 source_key="rank:week",
                 illust_id="101",
-                feature="fortune",
+                feature="normal",
                 user_id="user:1",
             )
             await store.release_usage(
                 scope="group:1",
                 source_key="rank:week",
                 illust_id="101",
-                feature="fortune_pending",
+                feature="normal_pending",
             )
 
             self.assertEqual(
                 await store.get_used_illust_ids("group:1", "rank:week"), {"101"}
             )
 
-    async def test_fortune_record_keeps_same_day_text_image_and_source(self):
-        with tempfile.TemporaryDirectory() as tmp:
-            store = FrozenImageIndexStore(tmp)
-
-            await store.save_fortune_record(
-                scope="group:1",
-                user_id="user:1",
-                source_key="fortune",
-                fortune_text="first",
-            )
-            await store.save_fortune_record(
-                scope="group:1",
-                user_id="user:1",
-                source_key="fortune",
-                fortune_text="second",
-                illust_id="999",
-                image_source_key="rank:day",
-            )
-            record = await store.claim_fortune_illust_id(
-                scope="group:1",
-                user_id="user:1",
-                source_key="fortune",
-                illust_id="123",
-                image_source_key="rank:week",
-            )
-
-            self.assertIsNotNone(record)
-            self.assertEqual(record.fortune_text, "first")
-            self.assertEqual(record.illust_id, "123")
-            self.assertEqual(record.image_source_key, "rank:week")
-
-            second_claim = await store.claim_fortune_illust_id(
-                scope="group:1",
-                user_id="user:1",
-                source_key="fortune",
-                illust_id="456",
-                image_source_key="rank:month",
-            )
-
-            self.assertIsNotNone(second_claim)
-            self.assertEqual(second_claim.fortune_text, "first")
-            self.assertEqual(second_claim.illust_id, "123")
-            self.assertEqual(second_claim.image_source_key, "rank:week")
-
-    async def test_cleanup_old_days_clears_usage_and_fortune_records(self):
+    async def test_cleanup_old_days_clears_usage_records(self):
         with tempfile.TemporaryDirectory() as tmp:
             store = FrozenImageIndexStore(tmp, date_key="2026-05-26")
 
@@ -136,14 +92,8 @@ class ImageIndexStoreTest(unittest.IsolatedAsyncioTestCase):
                 scope="group:1",
                 source_key="rank:week",
                 illust_id="200",
-                feature="fortune",
+                feature="normal",
                 user_id="user:1",
-            )
-            await store.save_fortune_record(
-                scope="group:1",
-                user_id="user:1",
-                source_key="fortune",
-                fortune_text="today",
             )
             store.date_key = "2026-05-27"
             await store.cleanup_old_days()
@@ -151,13 +101,86 @@ class ImageIndexStoreTest(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(
                 await store.get_used_illust_ids("group:1", "rank:week"), set()
             )
-            self.assertIsNone(
-                await store.get_fortune_record(
-                    scope="group:1",
-                    user_id="user:1",
-                    source_key="fortune",
-                )
+
+    async def test_blacklist_persists_across_day_cleanup(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            store = FrozenImageIndexStore(tmp, date_key="2026-05-26")
+
+            added = await store.add_blacklist_illust(
+                illust_id="300",
+                title="blocked",
+                author="artist",
+                source="rank:week",
+                record_id="record-1",
             )
+            store.date_key = "2026-05-27"
+            await store.cleanup_old_days()
+
+            self.assertTrue(added)
+            self.assertTrue(await store.is_blacklisted("300"))
+            self.assertEqual(await store.get_blacklisted_illust_ids(), {"300"})
+
+    async def test_blacklist_list_order_and_remove(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            store = FrozenImageIndexStore(tmp, date_key="2026-05-26")
+
+            await store.add_blacklist_illust(
+                illust_id="301",
+                title="older",
+                author="artist-a",
+                source="rank:week",
+                record_id="record-301",
+            )
+            store.date_key = "2026-05-27"
+            await store.add_blacklist_illust(
+                illust_id="302",
+                title="newer",
+                author="artist-b",
+                source="search:test",
+                record_id="record-302",
+            )
+
+            records = await store.list_blacklist_illusts()
+
+            self.assertEqual(
+                [record["illust_id"] for record in records], ["302", "301"]
+            )
+            self.assertEqual(records[0]["title"], "newer")
+
+            removed = await store.remove_blacklist_illust("301")
+
+            self.assertIsNotNone(removed)
+            self.assertEqual(removed["illust_id"], "301")
+            self.assertFalse(await store.is_blacklisted("301"))
+            self.assertEqual(await store.get_blacklisted_illust_ids(), {"302"})
+
+    async def test_blacklist_thumbnail_is_copied_and_removed(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            source_path = Path(tmp) / "source.jpg"
+            source_path.write_bytes(b"fake-jpeg-thumbnail")
+            store = FrozenImageIndexStore(tmp)
+
+            thumb_id = await store.save_blacklist_thumbnail(
+                illust_id="400",
+                source_path=source_path,
+            )
+            await store.add_blacklist_illust(
+                illust_id="400",
+                title="blocked with thumb",
+                thumb_id=thumb_id,
+            )
+
+            thumb_path = await store.get_blacklist_thumbnail_path("400")
+
+            self.assertEqual(thumb_id, "400.jpg")
+            self.assertIsNotNone(thumb_path)
+            self.assertEqual(thumb_path.read_bytes(), b"fake-jpeg-thumbnail")
+
+            removed = await store.remove_blacklist_illust("400")
+
+            self.assertIsNotNone(removed)
+            self.assertEqual(removed["thumb_id"], "400.jpg")
+            self.assertIsNone(await store.get_blacklist_thumbnail_path("400"))
 
 
 if __name__ == "__main__":

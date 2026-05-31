@@ -14,95 +14,131 @@
           <h1>图片历史</h1>
           <p id="summary" class="summary">正在加载图库记录</p>
         </div>
-        <div class="toolbar-actions" aria-label="页面操作">
-          <button id="refreshBtn" class="button button-primary" type="button">
-            刷新
-          </button>
-          <button id="clearBtn" class="button button-danger" type="button">
-            清空
-          </button>
-        </div>
       </header>
 
-      <section class="insights" aria-label="统计">
-        <div class="metric">
-          <span>当前显示</span>
-          <strong id="visibleMetric">-</strong>
+      <section class="control-panel" aria-label="控制面板">
+        <div class="control-bar">
+          <nav class="mode-tabs" aria-label="管理模式">
+            <button id="historyModeBtn" class="active" type="button" aria-pressed="true">历史</button>
+            <button id="blacklistModeBtn" type="button" aria-pressed="false">黑名单</button>
+          </nav>
+          <button
+            id="inlineRefreshBtn"
+            class="icon-button inline-refresh"
+            type="button"
+            aria-label="刷新"
+            title="刷新"
+          >
+            <svg viewBox="0 0 24 24" aria-hidden="true">
+              <path d="M21 12a9 9 0 0 1-15.7 6" />
+              <path d="M3 12a9 9 0 0 1 15.7-6" />
+              <path d="M18 3v4h-4" />
+              <path d="M6 21v-4h4" />
+            </svg>
+          </button>
         </div>
-        <div class="metric">
-          <span>历史总数</span>
-          <strong id="totalMetric">-</strong>
-        </div>
-        <div class="metric">
-          <span>R18</span>
-          <strong id="r18Metric">-</strong>
-        </div>
-        <div class="metric">
-          <span>群聊记录</span>
-          <strong id="groupMetric">-</strong>
+        <div class="insights" aria-label="统计">
+          <div class="metric">
+            <span id="visibleMetricLabel">当前显示</span>
+            <strong id="visibleMetric">-</strong>
+          </div>
+          <div class="metric">
+            <span id="totalMetricLabel">历史总数</span>
+            <strong id="totalMetric">-</strong>
+          </div>
+          <div class="metric">
+            <span id="r18MetricLabel">R18</span>
+            <strong id="r18Metric">-</strong>
+          </div>
+          <div class="metric">
+            <span id="groupMetricLabel">群聊记录</span>
+            <strong id="groupMetric">-</strong>
+          </div>
         </div>
       </section>
 
       <section class="filters" aria-label="筛选">
-        <label class="field field-search">
-          <span>关键词</span>
-          <input id="queryInput" type="search" placeholder="标题、作者、ID、标签" />
-        </label>
-        <label class="field">
-          <span>来源</span>
-          <select id="sourceSelect">
-            <option value="all">全部</option>
-          </select>
-        </label>
-        <label class="field">
-          <span>R18</span>
-          <select id="r18Select">
-            <option value="all">全部</option>
-            <option value="safe">否</option>
-            <option value="r18">是</option>
-          </select>
-        </label>
-        <label class="field">
-          <span>会话</span>
-          <select id="sessionSelect">
-            <option value="all">全部</option>
-            <option value="group">群聊</option>
-            <option value="private">私聊</option>
-          </select>
-        </label>
-        <div class="view-toggle" role="group" aria-label="视图">
-          <button id="gridBtn" class="active" type="button">网格</button>
-          <button id="listBtn" type="button">列表</button>
+        <div class="filters-row">
+          <label class="field field-search">
+            <span>关键词</span>
+            <input id="queryInput" type="search" placeholder="标题、作者、ID、标签、会话" />
+          </label>
+          <label class="field">
+            <span>来源</span>
+            <select id="sourceSelect">
+              <option value="all">全部</option>
+            </select>
+          </label>
+          <label class="field">
+            <span>R18</span>
+            <select id="r18Select">
+              <option value="all">全部</option>
+              <option value="safe">否</option>
+              <option value="r18">是</option>
+            </select>
+          </label>
+          <label class="field">
+            <span>会话</span>
+            <select id="sessionSelect">
+              <option value="all">全部</option>
+              <option value="group">群聊</option>
+              <option value="private">私聊</option>
+            </select>
+          </label>
+          <div class="view-toggle" role="group" aria-label="视图">
+            <button id="gridBtn" class="active" type="button">网格</button>
+            <button id="listBtn" type="button">列表</button>
+          </div>
         </div>
       </section>
 
       <main id="content" class="content" aria-live="polite"></main>
 
+      <button
+        id="refreshBtn"
+        class="floating-refresh"
+        type="button"
+        aria-label="刷新图片历史"
+        title="刷新图片历史"
+      >
+        <svg viewBox="0 0 24 24" aria-hidden="true">
+          <path d="M21 12a9 9 0 0 1-15.7 6" />
+          <path d="M3 12a9 9 0 0 1 15.7-6" />
+          <path d="M18 3v4h-4" />
+          <path d="M6 21v-4h4" />
+        </svg>
+      </button>
+
       <div id="toast" class="toast" role="status" hidden></div>
       <div
-        id="clearDialog"
+        id="actionDialog"
         class="confirm-dialog"
         role="dialog"
         aria-modal="true"
-        aria-labelledby="clearDialogTitle"
-        aria-describedby="clearDialogDesc"
+        aria-labelledby="actionDialogTitle"
+        aria-describedby="actionDialogDesc"
         hidden
       >
         <div class="confirm-panel">
           <p class="confirm-kicker">危险操作</p>
-          <h2 id="clearDialogTitle">清空图片历史？</h2>
-          <p id="clearDialogDesc">
-            这会删除全部图片历史记录和本地缩略图缓存。操作完成后无法从此页面撤销。
-          </p>
+          <h2 id="actionDialogTitle">确认操作？</h2>
+          <p id="actionDialogDesc">操作完成后无法从此页面撤销。</p>
           <div class="confirm-actions">
-            <button id="clearCancelBtn" type="button">取消</button>
-            <button id="clearConfirmBtn" class="button button-danger-solid" type="button">
-              确认清空
+            <button id="actionCancelBtn" type="button">取消</button>
+            <button id="actionConfirmBtn" class="button button-danger-solid" type="button">
+              确认
             </button>
           </div>
         </div>
       </div>
-      <div id="lightbox" class="lightbox" hidden>
+      <div
+        id="lightbox"
+        class="lightbox"
+        role="dialog"
+        aria-modal="true"
+        aria-label="图片预览"
+        hidden
+      >
         <button id="lightboxClose" class="lightbox-close" type="button">关闭</button>
         <img id="lightboxImage" alt="" />
       </div>
