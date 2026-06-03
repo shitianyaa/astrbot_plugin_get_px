@@ -8,12 +8,20 @@ import aiohttp
 from astrbot.api import logger
 
 LOG_PREFIX = "[GetPx]"
+MAX_DOWNLOAD_BYTES = 50 * 1024 * 1024
 
 PIXIV_HEADERS = {
     "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
     "(KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36",
     "Referer": "https://www.pixiv.net/",
 }
+
+
+def _too_large_error(size_bytes: float) -> RuntimeError:
+    return RuntimeError(
+        f"图片过大: {size_bytes / 1024 / 1024:.1f} MiB，"
+        f"超过上限 {MAX_DOWNLOAD_BYTES / 1024 / 1024:.0f} MiB"
+    )
 
 
 class ImageDownloader:
@@ -33,13 +41,6 @@ class ImageDownloader:
     async def download(self, url: str, proxy: str, timeout: float) -> str:
         session = self._ensure_session()
         client_timeout = aiohttp.ClientTimeout(total=timeout)
-        async with session.get(
-            url, headers=PIXIV_HEADERS, proxy=proxy or None, timeout=client_timeout
-        ) as resp:
-            if resp.status != 200:
-                raise RuntimeError(f"HTTP {resp.status}")
-            body = await resp.read()
-
         suffix = ".jpg"
         lower_path = url.split("?")[0].lower()
         for ext in (".png", ".gif", ".webp", ".jpeg"):
@@ -47,10 +48,35 @@ class ImageDownloader:
                 suffix = ext
                 break
 
-        fd, path = tempfile.mkstemp(prefix="get_px_", suffix=suffix)
-        with os.fdopen(fd, "wb") as f:
-            f.write(body)
-        return path
+        path = ""
+        try:
+            async with session.get(
+                url,
+                headers=PIXIV_HEADERS,
+                proxy=proxy or None,
+                timeout=client_timeout,
+            ) as resp:
+                if resp.status != 200:
+                    raise RuntimeError(f"HTTP {resp.status}")
+                # 快速路径：服务器已声明体积且超限，直接拒绝
+                content_length = resp.content_length
+                if content_length and content_length > MAX_DOWNLOAD_BYTES:
+                    raise _too_large_error(content_length)
+
+                fd, path = tempfile.mkstemp(prefix="get_px_", suffix=suffix)
+                size = 0
+                with os.fdopen(fd, "wb") as f:
+                    async for chunk in resp.content.iter_chunked(64 * 1024):
+                        if not chunk:
+                            continue
+                        size += len(chunk)
+                        if size > MAX_DOWNLOAD_BYTES:
+                            raise _too_large_error(size)
+                        f.write(chunk)
+            return path
+        except Exception:
+            cleanup(path)
+            raise
 
     async def download_for_send(
         self,

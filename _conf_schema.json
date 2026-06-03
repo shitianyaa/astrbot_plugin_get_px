@@ -27,14 +27,14 @@
     "description": "拉黑标签",
     "type": "string",
     "default": "furry,裸体,全裸,触手,露出,nsfw",
-    "hint": "多个标签用英文逗号 , 分隔；精确匹配 Pixiv 标签原文或翻译名。命中的作品不会被搜索、排行、签到背景、详情和下载使用。"
+    "hint": "多个标签用英文逗号 , 分隔；精确匹配 Pixiv 标签原文或翻译名。命中的作品不会被搜索、排行、签到背景、详情和下载使用。留空会回退默认拉黑标签。"
   },
   "pixiv_ranking_mode": {
     "description": "默认排行榜类型",
     "type": "string",
     "default": "week",
     "options": ["day", "week", "month", "day_male", "day_female", "week_original", "week_rookie", "day_manga"],
-    "hint": "无标签时拉取的排行榜类型。发送 /pv rank list 查看全部类型说明。"
+    "hint": "无标签时拉取的排行榜类型。发送 /prl 查看全部类型说明。"
   },
   "max_count": {
     "description": "单次最大发送数量",

@@ -162,10 +162,10 @@
 | `pixiv_proxy_url` | 代理地址，支持 `http://`、`socks5://` | 空 |
 | `pixiv_r18` | R18 模式：`0` 仅非 R18，`1` 仅 R18，`2` 混合 | `0` |
 | `filter_manga` | 过滤漫画作品；主动请求 `day_manga` 时保留后门 | `true` |
-| `blacklist_tags` | 拉黑标签，多个标签用英文逗号分隔 | `furry,裸体,全裸,触手,露出,nsfw` |
+| `blacklist_tags` | 拉黑标签，多个标签用英文逗号分隔；留空会回退默认拉黑标签 | `furry,裸体,全裸,触手,露出,nsfw` |
 | `pixiv_ranking_mode` | 无标签时使用的默认排行榜类型 | `week` |
 | `max_count` | 单次最大发送数量，范围 1-20 | `5` |
-| `dedupe_ttl_hours` | 普通发图当天去重；设为 `0` 关闭普通发图去重 | `24` |
+| `dedupe_ttl_hours` | 普通发图当天去重；设为 `0` 关闭普通发图去重；当前按自然日去重，不按小时滚动过期 | `24` |
 | `request_timeout` | 单张图片下载超时，单位秒 | `30` |
 | `image_quality` | 图片质量：`original`、`large`、`medium` | `original` |
 | `auto_downgrade_original_mb` | 原图超过该大小时自动降级，单位 MiB；`0` 为禁用 | `3.0` |

@@ -9,6 +9,15 @@ from astrbot.api import logger
 LOG_PREFIX = "[GetPx]"
 
 
+def _is_missing_illust_error(exc: Exception) -> bool:
+    for attr in ("status", "status_code", "code"):
+        value = getattr(exc, attr, None)
+        if value == 404 or str(value) == "404":
+            return True
+    message = str(exc).casefold()
+    return "404" in message or "not found" in message or "not_found" in message
+
+
 @dataclass
 class PixivClient:
     refresh_token: str
@@ -65,8 +74,10 @@ class PixivClient:
         try:
             resp = await self._api.illust_detail(illust_id)
             return resp.get("illust")
-        except Exception:
-            return None
+        except Exception as e:
+            if _is_missing_illust_error(e):
+                return None
+            raise
 
     async def close(self):
         if self._api is not None:

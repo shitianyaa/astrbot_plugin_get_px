@@ -188,10 +188,34 @@ class ImageAssetManager:
             data = json.loads(self._history_path.read_text(encoding="utf-8"))
         except (OSError, json.JSONDecodeError) as e:
             logger.warning(f"{LOG_PREFIX} 读取图片历史失败: {e}")
+            self._backup_corrupt_history(e)
             return []
         if not isinstance(data, list):
+            logger.warning(f"{LOG_PREFIX} 图片历史格式无效，已按损坏文件处理")
+            self._backup_corrupt_history(ValueError("history root is not a list"))
             return []
         return [item for item in data if isinstance(item, dict)]
+
+    def _backup_corrupt_history(self, reason: object) -> None:
+        if not self._history_path.exists():
+            return
+        timestamp = datetime.now(timezone.utc).strftime("%Y%m%d%H%M%S%f")
+        backup_path = self._history_path.with_name(
+            f"{self._history_path.name}.corrupt.{timestamp}"
+        )
+        index = 1
+        while backup_path.exists():
+            backup_path = self._history_path.with_name(
+                f"{self._history_path.name}.corrupt.{timestamp}.{index}"
+            )
+            index += 1
+        try:
+            self._history_path.replace(backup_path)
+            logger.warning(
+                f"{LOG_PREFIX} 已备份损坏的图片历史文件: {backup_path} ({reason})"
+            )
+        except OSError as e:
+            logger.warning(f"{LOG_PREFIX} 备份损坏图片历史失败: {e}")
 
     def _delete_matching_records(self, predicate) -> list[dict[str, Any]]:
         records = self._load_records()

@@ -6,6 +6,8 @@ from html import escape
 from pathlib import Path
 from typing import Any
 
+from astrbot.api import logger
+
 from .checkin import (
     CheckinProfile,
     CheckinRecord,
@@ -17,6 +19,9 @@ from .checkin import (
 
 CHECKIN_CARD_WIDTH = 960
 CHECKIN_CARD_HEIGHT = 540
+CHECKIN_CARD_JPEG_QUALITY = 85
+
+HEADSHOT_CROP_TOP_RATIO = 0.3  # 居中裁剪时的垂直取景偏移：0=贴顶(保留头部) … 1=贴底
 
 CHECKIN_CARD_TEMPLATE = r"""
 <!doctype html>
@@ -415,13 +420,36 @@ def _file_to_data_url(path: str) -> str:
     file_path = Path(path)
     if not file_path.is_file():
         return ""
-    suffix = file_path.suffix.lower()
-    mime = "image/jpeg"
-    if suffix == ".png":
-        mime = "image/png"
-    elif suffix == ".webp":
-        mime = "image/webp"
-    elif suffix == ".gif":
-        mime = "image/gif"
-    data = base64.b64encode(file_path.read_bytes()).decode("ascii")
-    return f"data:{mime};base64,{data}"
+    try:
+        from io import BytesIO
+
+        from PIL import Image as PILImage
+
+        target_width = CHECKIN_CARD_WIDTH
+        target_height = CHECKIN_CARD_HEIGHT  # 卡片本身即 16:9
+        with PILImage.open(file_path) as img:
+            img = img.convert("RGB")
+            # 等比缩放到「恰好覆盖」目标框，避免水平/垂直拉伸
+            scale = max(target_width / img.width, target_height / img.height)
+            scaled = img.resize(
+                (
+                    max(target_width, round(img.width * scale)),
+                    max(target_height, round(img.height * scale)),
+                ),
+                PILImage.Resampling.LANCZOS,
+            )
+            # 居中裁剪到目标尺寸；垂直方向偏上取景以保留头部
+            left = (scaled.width - target_width) // 2
+            top = int((scaled.height - target_height) * HEADSHOT_CROP_TOP_RATIO)
+            cropped = scaled.crop(
+                (left, top, left + target_width, top + target_height)
+            )
+            buf = BytesIO()
+            cropped.save(
+                buf, format="JPEG", quality=CHECKIN_CARD_JPEG_QUALITY, optimize=True
+            )
+            data = base64.b64encode(buf.getvalue()).decode("ascii")
+            return f"data:image/jpeg;base64,{data}"
+    except Exception as e:
+        logger.warning(f"签到背景图片处理失败: {file_path} - {e}")
+        return ""

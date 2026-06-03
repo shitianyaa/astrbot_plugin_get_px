@@ -65,6 +65,7 @@ from .pixiv_client import PixivClient
 
 LOG_PREFIX = "[GetPx]"
 PLUGIN_NAME = "astrbot_plugin_get_px"
+WEB_INTERNAL_ERROR_MESSAGE = "服务内部错误，请稍后重试"
 
 AUTO_TRIGGER_PATTERN = r"^/?(来\s*(.*?)(份|个|张|点))(.*?)(福利|色|瑟|涩|塞)?图$"
 CHECKIN_REGEX_PATTERN = r"^(?!/)签到$"
@@ -216,6 +217,10 @@ class GetPxPlugin(Star):
             "Get plugin web UI configuration",
         )
 
+    def _web_internal_error(self, action: str, exc: Exception):
+        logger.error(f"{LOG_PREFIX} Web API {action} 失败: {exc}")
+        return jsonify({"success": False, "error": WEB_INTERNAL_ERROR_MESSAGE}), 500
+
     async def _web_image_history(self):
         if self.image_history is None:
             return jsonify({"success": False, "error": "图片历史尚未初始化"}), 503
@@ -229,7 +234,7 @@ class GetPxPlugin(Star):
                 }
             )
         except Exception as e:
-            return jsonify({"success": False, "error": str(e)}), 500
+            return self._web_internal_error("读取图片历史", e)
 
     async def _web_image_history_thumb(self):
         if self.image_history is None:
@@ -238,7 +243,10 @@ class GetPxPlugin(Star):
         path = await self.image_history.get_thumbnail_path(record_id)
         if path is None:
             return jsonify({"success": False, "error": "缩略图不存在"}), 404
-        return await send_file(str(path), mimetype="image/jpeg")
+        try:
+            return await send_file(str(path), mimetype="image/jpeg")
+        except Exception as e:
+            return self._web_internal_error("读取图片历史缩略图", e)
 
     async def _web_image_history_thumb_data(self):
         if self.image_history is None:
@@ -250,7 +258,7 @@ class GetPxPlugin(Star):
         try:
             encoded = base64.b64encode(path.read_bytes()).decode("ascii")
         except OSError as e:
-            return jsonify({"success": False, "error": str(e)}), 500
+            return self._web_internal_error("读取图片历史缩略图数据", e)
         return jsonify(
             {
                 "success": True,
@@ -270,7 +278,7 @@ class GetPxPlugin(Star):
         try:
             thumbs = await asyncio.to_thread(self._encode_thumb_data_urls, paths)
         except OSError as e:
-            return jsonify({"success": False, "error": str(e)}), 500
+            return self._web_internal_error("批量读取图片历史缩略图数据", e)
         return jsonify(
             {
                 "success": True,
@@ -286,7 +294,7 @@ class GetPxPlugin(Star):
             deleted = await self.image_history.clear()
             return jsonify({"success": True, "deleted": deleted})
         except Exception as e:
-            return jsonify({"success": False, "error": str(e)}), 500
+            return self._web_internal_error("清空图片历史", e)
 
     async def _web_image_history_delete(self):
         if self.image_history is None:
@@ -301,7 +309,7 @@ class GetPxPlugin(Star):
                 return jsonify({"success": False, "error": "记录不存在"}), 404
             return jsonify({"success": True, "record": deleted})
         except Exception as e:
-            return jsonify({"success": False, "error": str(e)}), 500
+            return self._web_internal_error("删除图片历史记录", e)
 
     async def _web_image_history_blacklist(self):
         if self.image_history is None or self.image_index is None:
@@ -347,7 +355,7 @@ class GetPxPlugin(Star):
                 }
             )
         except Exception as e:
-            return jsonify({"success": False, "error": str(e)}), 500
+            return self._web_internal_error("加入作品黑名单", e)
 
     async def _web_image_blacklist(self):
         if self.image_index is None:
@@ -356,7 +364,7 @@ class GetPxPlugin(Star):
             records = await self.image_index.list_blacklist_illusts()
             return jsonify({"success": True, "records": records})
         except Exception as e:
-            return jsonify({"success": False, "error": str(e)}), 500
+            return self._web_internal_error("读取作品黑名单", e)
 
     async def _web_image_blacklist_thumb_data(self):
         if self.image_index is None:
@@ -368,7 +376,7 @@ class GetPxPlugin(Star):
         try:
             encoded = base64.b64encode(path.read_bytes()).decode("ascii")
         except OSError as e:
-            return jsonify({"success": False, "error": str(e)}), 500
+            return self._web_internal_error("读取黑名单缩略图数据", e)
         return jsonify(
             {
                 "success": True,
@@ -388,7 +396,7 @@ class GetPxPlugin(Star):
         try:
             thumbs = await asyncio.to_thread(self._encode_thumb_data_urls, paths)
         except OSError as e:
-            return jsonify({"success": False, "error": str(e)}), 500
+            return self._web_internal_error("批量读取黑名单缩略图数据", e)
         return jsonify(
             {
                 "success": True,
@@ -410,7 +418,7 @@ class GetPxPlugin(Star):
                 return jsonify({"success": False, "error": "黑名单记录不存在"}), 404
             return jsonify({"success": True, "record": removed})
         except Exception as e:
-            return jsonify({"success": False, "error": str(e)}), 500
+            return self._web_internal_error("移出作品黑名单", e)
 
     async def _web_config(self):
         """Return plugin configuration for the web UI."""
@@ -1098,6 +1106,19 @@ class GetPxPlugin(Star):
             return None
         if resolved.suffix.lower() not in {".jpg", ".jpeg", ".png", ".webp"}:
             return None
+        try:
+            from PIL import Image as PILImage
+        except ImportError:
+            logger.warning(f"{LOG_PREFIX} 未安装 Pillow，跳过背景完整性校验")
+            return resolved
+        try:
+            with PILImage.open(resolved) as img:
+                img.verify()
+        except Exception:
+            logger.warning(
+                f"{LOG_PREFIX} 签到自定义背景文件无效或损坏: {resolved}"
+            )
+            return None
         return resolved
 
     async def _download_checkin_pixiv_background(
@@ -1745,7 +1766,8 @@ class GetPxPlugin(Star):
         try:
             illust = await self.client.illust_detail(illust_id)
         except Exception as e:
-            yield event.plain_result(f"❌ 获取作品详情失败: {e}")
+            logger.warning(f"{LOG_PREFIX} 获取作品详情失败 illust_id={illust_id}: {e}")
+            yield event.plain_result("❌ 获取作品详情失败，请稍后再试")
             return
 
         if not illust:
@@ -1802,7 +1824,8 @@ class GetPxPlugin(Star):
         try:
             illust = await self.client.illust_detail(illust_id)
         except Exception as e:
-            yield event.plain_result(f"❌ 获取作品详情失败: {e}")
+            logger.warning(f"{LOG_PREFIX} 下载前获取作品详情失败 illust_id={illust_id}: {e}")
+            yield event.plain_result("❌ 获取作品详情失败，请稍后再试")
             return
 
         if not illust:
@@ -2067,7 +2090,7 @@ class GetPxPlugin(Star):
             "🤖 自然语言触发（需配置开启 auto_trigger_enabled）",
             "　　来一份图 → 发送 1 张排行榜图片",
             "　　来三张初音ミク图 → 搜标签发送 3 张",
-            "　　来两张萝莉 → 搜标签发送 2 张",
+            "　　来两张萝莉图 → 搜标签发送 2 张",
             "",
             "⚙️ 漫画过滤（filter_manga）:",
             "　　开启后，只要作品类型为漫画就自动过滤",
