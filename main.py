@@ -269,7 +269,7 @@ class GetPxPlugin(Star):
 
     async def _web_image_history_thumb_data_batch(self):
         if self.image_history is None:
-            return jsonify({"success": False, "error": "image history is not initialized"}), 503
+            return jsonify({"success": False, "error": "图片历史尚未初始化"}), 503
         payload = await request.get_json(silent=True) or {}
         ids = self._normalize_request_ids(payload.get("ids"))
         if not ids:
@@ -387,7 +387,7 @@ class GetPxPlugin(Star):
 
     async def _web_image_blacklist_thumb_data_batch(self):
         if self.image_index is None:
-            return jsonify({"success": False, "error": "image index is not initialized"}), 503
+            return jsonify({"success": False, "error": "图片索引尚未初始化"}), 503
         payload = await request.get_json(silent=True) or {}
         ids = self._normalize_request_ids(payload.get("ids"))
         if not ids:
@@ -736,6 +736,39 @@ class GetPxPlugin(Star):
     @staticmethod
     def _source_key(tag: str, ranking_mode: str) -> str:
         return f"search:{tag.strip().casefold()}" if tag else f"rank:{ranking_mode}"
+
+    async def _fetch_paginated(
+        self,
+        event: AstrMessageEvent,
+        tag: str | None,
+        ranking_mode: str,
+    ) -> tuple[list[dict], int, str]:
+        """带分页游标的 Pixiv 搜索/排行获取。
+
+        Returns:
+            (illusts, raw_count, source_key) — raw_count 为过滤前原始数量。
+        """
+        source_key = self._source_key(tag or "", ranking_mode)
+        page_offset = 0
+        if self.image_index is not None:
+            try:
+                page_offset = await self.image_index.get_page_offset(
+                    self._event_scope(event), source_key
+                )
+            except Exception as e:
+                logger.warning(f"{LOG_PREFIX} 读取分页游标失败: {e}")
+
+        try:
+            if tag:
+                illusts = await self.client.search(tag, offset=page_offset)
+            else:
+                illusts = await self.client.ranking(ranking_mode, offset=page_offset)
+        except Exception as e:
+            logger.warning(f"{LOG_PREFIX} Pixiv 请求失败(tag={tag!r}): {e}")
+            return [], 0, source_key
+
+        raw_count = len(illusts)
+        return illusts, raw_count, source_key
 
     async def _record_image_usage(
         self,
@@ -1148,15 +1181,11 @@ class GetPxPlugin(Star):
         if ranking_mode not in RANKING_MODES:
             ranking_mode = "week"
 
-        try:
-            if selected_tag:
-                illusts = await self.client.search(selected_tag)
-                source_key = self._source_key(selected_tag, ranking_mode)
-            else:
-                illusts = await self.client.ranking(ranking_mode)
-                source_key = self._source_key("", ranking_mode)
-        except Exception as e:
-            logger.warning(f"{LOG_PREFIX} 签到背景 Pixiv 获取失败: {e}")
+        # 获取作品列表（带分页游标）
+        illusts, raw_count, source_key = await self._fetch_paginated(
+            event, selected_tag, ranking_mode
+        )
+        if not illusts:
             return None
 
         r18_mode = self._cfg_int("pixiv_r18", 0, 0, 2)
@@ -1182,6 +1211,21 @@ class GetPxPlugin(Star):
                 )
         if not illusts:
             return None
+
+        # 去重：优先选择当天未使用过的作品（与普通发图共用索引）
+        if self.image_index is not None:
+            scope = self._event_scope(event)
+            try:
+                used_ids = await self.image_index.get_used_illust_ids(scope, source_key)
+                ordered = ordered_by_unused(illusts, used_ids)
+                # 若整页全被用过，推进分页游标供下次签到翻页
+                if ordered and str(ordered[0].get("id") or "") in used_ids:
+                    await self.image_index.advance_page_offset(
+                        scope, source_key, raw_count
+                    )
+                illusts = ordered
+            except Exception as e:
+                logger.warning(f"{LOG_PREFIX} 签到背景读取去重索引失败: {e}")
 
         seed = int.from_bytes(
             hashlib.sha256(
@@ -1364,22 +1408,17 @@ class GetPxPlugin(Star):
         if ranking_mode not in RANKING_MODES:
             ranking_mode = "week"
 
-        # 获取作品列表
-        logger.info(
-            f"{LOG_PREFIX} 搜索: tag={tag!r} rank={ranking_mode} count={count} quality={quality}"
+        # 获取作品列表（带分页游标）
+        illusts, raw_count, source_key = await self._fetch_paginated(
+            event, tag, ranking_mode
         )
-        try:
-            if tag:
-                illusts = await self.client.search(tag)
-            else:
-                illusts = await self.client.ranking(ranking_mode)
-        except Exception as e:
-            logger.error(f"{LOG_PREFIX} Pixiv 请求失败: {e}")
-            yield event.plain_result(f"❌ Pixiv 请求失败: {e}")
-            return
+        logger.info(
+            f"{LOG_PREFIX} 搜索: tag={tag!r} rank={ranking_mode} count={count} "
+            f"quality={quality} raw_count={raw_count}"
+        )
 
         if not illusts:
-            yield event.plain_result("😶 没有找到作品，换个标签试试")
+            yield event.plain_result(f"❌ Pixiv 请求失败或无结果，换个标签试试")
             return
 
         # R18 过滤
@@ -1416,7 +1455,7 @@ class GetPxPlugin(Star):
 
         pick_count = min(count, len(illusts))
         dedupe_ttl_hours = self._cfg_float("dedupe_ttl_hours", 24.0, 0.0, 720.0)
-        source_key = self._source_key(tag, ranking_mode)
+
         chosen = await self._pick_illusts(
             event,
             illusts,
@@ -1424,6 +1463,7 @@ class GetPxPlugin(Star):
             tag=tag,
             ranking_mode=ranking_mode,
             dedupe_enabled=dedupe_ttl_hours > 0,
+            raw_count=raw_count,
         )
         if not chosen:
             yield event.plain_result(
@@ -2174,14 +2214,16 @@ class GetPxPlugin(Star):
         tag: str,
         ranking_mode: str,
         dedupe_enabled: bool = True,
+        raw_count: int = 0,
     ) -> list[dict]:
         if not dedupe_enabled or self.image_index is None:
             return random.sample(illusts, pick_count)
 
         source_key = self._source_key(tag, ranking_mode)
+        scope = self._event_scope(event)
         try:
             used_ids = await self.image_index.get_used_illust_ids(
-                self._event_scope(event), source_key
+                scope, source_key
             )
         except Exception as e:
             logger.warning(f"{LOG_PREFIX} 读取当天发图索引失败: {e}")
@@ -2190,11 +2232,20 @@ class GetPxPlugin(Star):
         ordered = ordered_by_unused(illusts, used_ids)
         fresh = [i for i in ordered if str(i.get("id") or "") not in used_ids]
         repeated = [i for i in ordered if str(i.get("id") or "") in used_ids]
+
+        # 若整页全被用过，推进分页游标供下次翻页
+        if not fresh and raw_count > 0:
+            try:
+                await self.image_index.advance_page_offset(
+                    scope, source_key, raw_count
+                )
+            except Exception as e:
+                logger.warning(f"{LOG_PREFIX} 分页游标更新失败: {e}")
+
         candidates = random.sample(fresh, len(fresh)) + random.sample(
             repeated, len(repeated)
         )
         chosen: list[dict] = []
-        scope = self._event_scope(event)
         user_id = str(event.get_sender_id() or "")
         for illust in candidates:
             if len(chosen) >= pick_count:

@@ -57,16 +57,17 @@ class PixivClient:
     def api(self):
         return self._api
 
-    async def search(self, tag: str) -> list[dict]:
+    async def search(self, tag: str, offset: int = 0) -> list[dict]:
         await self.ensure_logged_in()
         resp = await self._api.search_illust(
-            tag, search_target="partial_match_for_tags", sort="date_desc"
+            tag, search_target="partial_match_for_tags", sort="date_desc",
+            offset=offset,
         )
         return list(resp.get("illusts") or [])
 
-    async def ranking(self, mode: str = "week") -> list[dict]:
+    async def ranking(self, mode: str = "week", offset: int = 0) -> list[dict]:
         await self.ensure_logged_in()
-        resp = await self._api.illust_ranking(mode=mode)
+        resp = await self._api.illust_ranking(mode=mode, offset=offset)
         return list(resp.get("illusts") or [])
 
     async def illust_detail(self, illust_id: int) -> dict | None:

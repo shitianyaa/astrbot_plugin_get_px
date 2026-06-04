@@ -214,8 +214,26 @@ class ImageAssetManager:
             logger.warning(
                 f"{LOG_PREFIX} 已备份损坏的图片历史文件: {backup_path} ({reason})"
             )
+            # 只保留最近 5 个损坏备份
+            self._cleanup_corrupt_backups()
         except OSError as e:
             logger.warning(f"{LOG_PREFIX} 备份损坏图片历史失败: {e}")
+
+    def _cleanup_corrupt_backups(self) -> None:
+        """保留最近 5 个 .corrupt.* 备份文件，删除更早的。"""
+        from pathlib import Path as _Path
+        parent = self._history_path.parent
+        base = self._history_path.name
+        corrupt_files = sorted(
+            parent.glob(f"{base}.corrupt.*"),
+            key=lambda p: p.stat().st_mtime,
+            reverse=True,
+        )
+        for f in corrupt_files[5:]:
+            try:
+                f.unlink(missing_ok=True)
+            except OSError:
+                pass
 
     def _delete_matching_records(self, predicate) -> list[dict[str, Any]]:
         records = self._load_records()

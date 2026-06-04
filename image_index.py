@@ -1,8 +1,8 @@
 from __future__ import annotations
 
 import asyncio
-from contextlib import closing
-from datetime import datetime
+import time
+from datetime import datetime, timedelta
 from pathlib import Path
 import shutil
 import sqlite3
@@ -11,6 +11,9 @@ from zoneinfo import ZoneInfo
 
 
 SHANGHAI_TZ = ZoneInfo("Asia/Shanghai")
+PAGE_CURSOR_TTL_DAYS = 3
+MIN_RESULTS_FOR_NEXT_PAGE = 20
+_CLEANUP_THROTTLE_SECONDS = 3600  # 每小时最多清理一次旧记录
 
 
 class ImageIndexStore:
@@ -20,6 +23,8 @@ class ImageIndexStore:
         self._db_path.parent.mkdir(parents=True, exist_ok=True)
         self._blacklist_thumb_dir.mkdir(parents=True, exist_ok=True)
         self._lock = asyncio.Lock()
+        self._last_cleanup_ts: float = 0.0
+        self._conn: sqlite3.Connection | None = None
         self._init_db()
 
     @staticmethod
@@ -29,6 +34,28 @@ class ImageIndexStore:
     @staticmethod
     def now_iso() -> str:
         return datetime.now(SHANGHAI_TZ).isoformat(timespec="seconds")
+
+    @staticmethod
+    def _now_dt() -> datetime:
+        """返回当前上海时间，可被子类覆写以冻结时间。"""
+        return datetime.now(SHANGHAI_TZ)
+
+    def _get_conn(self) -> sqlite3.Connection:
+        """获取持久数据库连接；如已关闭则自动重建。"""
+        if self._conn is None:
+            self._conn = sqlite3.connect(str(self._db_path), check_same_thread=False)
+            self._conn.row_factory = sqlite3.Row
+            self._conn.execute("PRAGMA journal_mode=WAL")
+        return self._conn
+
+    def close(self) -> None:
+        """关闭数据库连接，释放资源。"""
+        if self._conn is not None:
+            try:
+                self._conn.close()
+            except Exception:
+                pass
+            self._conn = None
 
     async def cleanup_old_days(self) -> None:
         date_key = self.today_key()
@@ -66,6 +93,22 @@ class ImageIndexStore:
                 feature,
                 user_id,
                 now,
+            )
+
+    async def get_page_offset(self, scope: str, source_key: str) -> int:
+        """获取指定 scope + source_key 的分页游标，未记录时返回 0。"""
+        async with self._lock:
+            return await asyncio.to_thread(
+                self._get_page_offset_sync, scope, source_key
+            )
+
+    async def advance_page_offset(
+        self, scope: str, source_key: str, results_count: int
+    ) -> int:
+        """当前页全被用过后推进游标；若结果数明显少于正常页则重置为 0（已到底，循环）。返回新的 offset。"""
+        async with self._lock:
+            return await asyncio.to_thread(
+                self._advance_page_offset_sync, scope, source_key, results_count
             )
 
     async def get_blacklisted_illust_ids(self) -> set[str]:
@@ -197,109 +240,182 @@ class ImageIndexStore:
                 feature,
             )
 
-    def _connect(self) -> sqlite3.Connection:
-        conn = sqlite3.connect(self._db_path)
-        conn.row_factory = sqlite3.Row
-        return conn
+    # ── 内部同步方法 ──────────────────────────────────────────
 
     def _init_db(self) -> None:
-        with closing(self._connect()) as conn:
-            conn.execute("PRAGMA journal_mode=WAL")
+        conn = self._get_conn()
+        conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS image_usage (
+                date_key TEXT NOT NULL,
+                scope TEXT NOT NULL,
+                source_key TEXT NOT NULL,
+                illust_id TEXT NOT NULL,
+                feature TEXT NOT NULL,
+                user_id TEXT NOT NULL DEFAULT '',
+                sent_at TEXT NOT NULL,
+                PRIMARY KEY (date_key, scope, source_key, illust_id)
+            )
+            """
+        )
+        conn.execute(
+            """
+            CREATE INDEX IF NOT EXISTS idx_image_usage_lookup
+            ON image_usage (date_key, scope, source_key)
+            """
+        )
+        conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS image_blacklist (
+                illust_id TEXT PRIMARY KEY,
+                title TEXT NOT NULL DEFAULT '',
+                author TEXT NOT NULL DEFAULT '',
+                source TEXT NOT NULL DEFAULT '',
+                record_id TEXT NOT NULL DEFAULT '',
+                thumb_id TEXT NOT NULL DEFAULT '',
+                added_at TEXT NOT NULL
+            )
+            """
+        )
+        blacklist_columns = {
+            str(row["name"])
+            for row in conn.execute("PRAGMA table_info(image_blacklist)").fetchall()
+        }
+        if "thumb_id" not in blacklist_columns:
             conn.execute(
                 """
-                CREATE TABLE IF NOT EXISTS image_usage (
-                    date_key TEXT NOT NULL,
-                    scope TEXT NOT NULL,
-                    source_key TEXT NOT NULL,
-                    illust_id TEXT NOT NULL,
-                    feature TEXT NOT NULL,
-                    user_id TEXT NOT NULL DEFAULT '',
-                    sent_at TEXT NOT NULL,
-                    PRIMARY KEY (date_key, scope, source_key, illust_id)
-                )
+                ALTER TABLE image_blacklist
+                ADD COLUMN thumb_id TEXT NOT NULL DEFAULT ''
                 """
             )
-            conn.execute(
-                """
-                CREATE INDEX IF NOT EXISTS idx_image_usage_lookup
-                ON image_usage (date_key, scope, source_key)
-                """
+        conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS source_page_cursor (
+                scope TEXT NOT NULL,
+                source_key TEXT NOT NULL,
+                page_offset INTEGER NOT NULL DEFAULT 0,
+                updated_at TEXT NOT NULL,
+                PRIMARY KEY (scope, source_key)
             )
-            conn.execute(
-                """
-                CREATE TABLE IF NOT EXISTS image_blacklist (
-                    illust_id TEXT PRIMARY KEY,
-                    title TEXT NOT NULL DEFAULT '',
-                    author TEXT NOT NULL DEFAULT '',
-                    source TEXT NOT NULL DEFAULT '',
-                    record_id TEXT NOT NULL DEFAULT '',
-                    thumb_id TEXT NOT NULL DEFAULT '',
-                    added_at TEXT NOT NULL
-                )
-                """
-            )
-            blacklist_columns = {
-                str(row["name"])
-                for row in conn.execute("PRAGMA table_info(image_blacklist)").fetchall()
-            }
-            if "thumb_id" not in blacklist_columns:
-                conn.execute(
-                    """
-                    ALTER TABLE image_blacklist
-                    ADD COLUMN thumb_id TEXT NOT NULL DEFAULT ''
-                    """
-                )
-            conn.commit()
+            """
+        )
+        conn.commit()
 
     def _cleanup_old_days_sync(self, date_key: str) -> None:
-        with closing(self._connect()) as conn:
-            conn.execute("DELETE FROM image_usage WHERE date_key != ?", (date_key,))
-            conn.commit()
+        conn = self._get_conn()
+        conn.execute("DELETE FROM image_usage WHERE date_key != ?", (date_key,))
+        conn.commit()
+
+    def _maybe_cleanup_old_days_sync(self, date_key: str) -> None:
+        """每小时最多清理一次，避免写操作频繁触发 DELETE。"""
+        now_ts = time.monotonic()
+        if now_ts - self._last_cleanup_ts < _CLEANUP_THROTTLE_SECONDS:
+            return
+        self._last_cleanup_ts = now_ts
+        self._cleanup_old_days_sync(date_key)
+
+    def _get_page_offset_sync(self, scope: str, source_key: str) -> int:
+        conn = self._get_conn()
+        row = conn.execute(
+            """
+            SELECT page_offset, updated_at FROM source_page_cursor
+            WHERE scope = ? AND source_key = ?
+            """,
+            (scope, source_key),
+        ).fetchone()
+        if row is None:
+            return 0
+        page_offset = row["page_offset"]
+        updated_at = row["updated_at"]
+        # 超过 PAGE_CURSOR_TTL_DAYS 天未访问，重置游标（同一连接）
+        try:
+            updated = datetime.fromisoformat(updated_at)
+            if updated.tzinfo is None:
+                updated = updated.replace(tzinfo=SHANGHAI_TZ)
+            if self._now_dt() - updated > timedelta(days=PAGE_CURSOR_TTL_DAYS):
+                conn.execute(
+                    "DELETE FROM source_page_cursor WHERE scope = ? AND source_key = ?",
+                    (scope, source_key),
+                )
+                conn.commit()
+                return 0
+        except (ValueError, TypeError):
+            return 0
+        return page_offset
+
+    def _advance_page_offset_sync(
+        self, scope: str, source_key: str, results_count: int
+    ) -> int:
+        now = self.now_iso()
+        conn = self._get_conn()
+        row = conn.execute(
+            "SELECT page_offset FROM source_page_cursor WHERE scope = ? AND source_key = ?",
+            (scope, source_key),
+        ).fetchone()
+        current = row["page_offset"] if row is not None else 0
+
+        # 如果结果数明显少于正常页大小，说明已到底，重置为 0
+        if results_count < MIN_RESULTS_FOR_NEXT_PAGE:
+            new_offset = 0
+        else:
+            new_offset = current + results_count
+
+        conn.execute(
+            """
+            INSERT INTO source_page_cursor (scope, source_key, page_offset, updated_at)
+            VALUES (?, ?, ?, ?)
+            ON CONFLICT(scope, source_key) DO UPDATE SET
+                page_offset = excluded.page_offset,
+                updated_at = excluded.updated_at
+            """,
+            (scope, source_key, new_offset, now),
+        )
+        conn.commit()
+        return new_offset
 
     def _get_used_illust_ids_sync(
         self, date_key: str, scope: str, source_key: str
     ) -> set[str]:
-        self._cleanup_old_days_sync(date_key)
-        with closing(self._connect()) as conn:
-            rows = conn.execute(
-                """
-                SELECT illust_id FROM image_usage
-                WHERE date_key = ? AND scope = ? AND source_key = ?
-                """,
-                (date_key, scope, source_key),
-            ).fetchall()
+        conn = self._get_conn()
+        rows = conn.execute(
+            """
+            SELECT illust_id FROM image_usage
+            WHERE date_key = ? AND scope = ? AND source_key = ?
+            """,
+            (date_key, scope, source_key),
+        ).fetchall()
         return {str(row["illust_id"]) for row in rows}
 
     def _get_blacklisted_illust_ids_sync(self) -> set[str]:
-        with closing(self._connect()) as conn:
-            rows = conn.execute("SELECT illust_id FROM image_blacklist").fetchall()
+        conn = self._get_conn()
+        rows = conn.execute("SELECT illust_id FROM image_blacklist").fetchall()
         return {str(row["illust_id"]) for row in rows}
 
     def _list_blacklist_illusts_sync(self) -> list[dict[str, Any]]:
-        with closing(self._connect()) as conn:
-            rows = conn.execute(
-                """
-                SELECT illust_id, title, author, source, record_id, thumb_id, added_at
-                FROM image_blacklist
-                ORDER BY added_at DESC, illust_id DESC
-                """
-            ).fetchall()
+        conn = self._get_conn()
+        rows = conn.execute(
+            """
+            SELECT illust_id, title, author, source, record_id, thumb_id, added_at
+            FROM image_blacklist
+            ORDER BY added_at DESC, illust_id DESC
+            """
+        ).fetchall()
         return [dict(row) for row in rows]
 
     def _is_blacklisted_sync(self, illust_id: str) -> bool:
-        with closing(self._connect()) as conn:
-            row = conn.execute(
-                "SELECT 1 FROM image_blacklist WHERE illust_id = ? LIMIT 1",
-                (illust_id,),
-            ).fetchone()
+        conn = self._get_conn()
+        row = conn.execute(
+            "SELECT 1 FROM image_blacklist WHERE illust_id = ? LIMIT 1",
+            (illust_id,),
+        ).fetchone()
         return row is not None
 
     def _get_blacklist_thumbnail_path_sync(self, illust_id: str) -> Path | None:
-        with closing(self._connect()) as conn:
-            row = conn.execute(
-                "SELECT thumb_id FROM image_blacklist WHERE illust_id = ? LIMIT 1",
-                (illust_id,),
-            ).fetchone()
+        conn = self._get_conn()
+        row = conn.execute(
+            "SELECT thumb_id FROM image_blacklist WHERE illust_id = ? LIMIT 1",
+            (illust_id,),
+        ).fetchone()
         if row is None:
             return None
         thumb_id = str(row["thumb_id"] or "")
@@ -315,14 +431,14 @@ class ImageIndexStore:
         self, illust_ids: list[str]
     ) -> dict[str, Path]:
         placeholders = ",".join("?" for _ in illust_ids)
-        with closing(self._connect()) as conn:
-            rows = conn.execute(
-                f"""
-                SELECT illust_id, thumb_id FROM image_blacklist
-                WHERE illust_id IN ({placeholders})
-                """,
-                illust_ids,
-            ).fetchall()
+        conn = self._get_conn()
+        rows = conn.execute(
+            f"""
+            SELECT illust_id, thumb_id FROM image_blacklist
+            WHERE illust_id IN ({placeholders})
+            """,
+            illust_ids,
+        ).fetchall()
         thumb_dir = self._blacklist_thumb_dir.resolve()
         paths: dict[str, Path] = {}
         for row in rows:
@@ -344,8 +460,16 @@ class ImageIndexStore:
         dest_path = self._blacklist_thumb_dir / thumb_id
         tmp_path = dest_path.with_suffix(dest_path.suffix + ".tmp")
         self._blacklist_thumb_dir.mkdir(parents=True, exist_ok=True)
-        shutil.copyfile(source_path, tmp_path)
-        tmp_path.replace(dest_path)
+        try:
+            shutil.copyfile(source_path, tmp_path)
+            tmp_path.replace(dest_path)
+        except Exception:
+            # 写入失败时清理临时文件，避免残留
+            try:
+                tmp_path.unlink(missing_ok=True)
+            except OSError:
+                pass
+            raise
         return thumb_id
 
     def _add_blacklist_illust_sync(
@@ -358,47 +482,59 @@ class ImageIndexStore:
         thumb_id: str,
         added_at: str,
     ) -> bool:
-        with closing(self._connect()) as conn:
-            cursor = conn.execute(
-                """
-                INSERT INTO image_blacklist (
-                    illust_id, title, author, source, record_id, thumb_id, added_at
-                )
-                VALUES (?, ?, ?, ?, ?, ?, ?)
-                ON CONFLICT(illust_id)
-                DO UPDATE SET
-                    title = excluded.title,
-                    author = excluded.author,
-                    source = excluded.source,
-                    record_id = excluded.record_id,
-                    thumb_id = CASE
-                        WHEN excluded.thumb_id != '' THEN excluded.thumb_id
-                        ELSE image_blacklist.thumb_id
-                    END,
-                    added_at = excluded.added_at
-                """,
-                (illust_id, title, author, source, record_id, thumb_id, added_at),
+        conn = self._get_conn()
+        cursor = conn.execute(
+            """
+            INSERT INTO image_blacklist (
+                illust_id, title, author, source, record_id, thumb_id, added_at
             )
-            conn.commit()
-            return cursor.rowcount > 0
+            VALUES (?, ?, ?, ?, ?, ?, ?)
+            ON CONFLICT(illust_id)
+            DO UPDATE SET
+                title = CASE
+                    WHEN excluded.title != '' THEN excluded.title
+                    ELSE image_blacklist.title
+                END,
+                author = CASE
+                    WHEN excluded.author != '' THEN excluded.author
+                    ELSE image_blacklist.author
+                END,
+                source = CASE
+                    WHEN excluded.source != '' THEN excluded.source
+                    ELSE image_blacklist.source
+                END,
+                record_id = CASE
+                    WHEN excluded.record_id != '' THEN excluded.record_id
+                    ELSE image_blacklist.record_id
+                END,
+                thumb_id = CASE
+                    WHEN excluded.thumb_id != '' THEN excluded.thumb_id
+                    ELSE image_blacklist.thumb_id
+                END,
+                added_at = excluded.added_at
+            """,
+            (illust_id, title, author, source, record_id, thumb_id, added_at),
+        )
+        conn.commit()
+        return cursor.rowcount > 0
 
     def _remove_blacklist_illust_sync(self, illust_id: str) -> dict[str, Any] | None:
-        with closing(self._connect()) as conn:
-            row = conn.execute(
-                """
-                SELECT illust_id, title, author, source, record_id, thumb_id, added_at
-                FROM image_blacklist
-                WHERE illust_id = ?
-                """,
-                (illust_id,),
-            ).fetchone()
-            if row is None:
-                return None
-            record = dict(row)
-            conn.execute(
-                "DELETE FROM image_blacklist WHERE illust_id = ?", (illust_id,)
-            )
-            conn.commit()
+        conn = self._get_conn()
+        row = conn.execute(
+            """
+            SELECT illust_id, title, author, source, record_id, thumb_id, added_at
+            FROM image_blacklist
+            WHERE illust_id = ?
+            """,
+            (illust_id,),
+        ).fetchone()
+        if row is None:
+            return None
+        record = dict(row)
+        conn.execute(
+            "DELETE FROM image_blacklist WHERE illust_id = ?", (illust_id,)
+        )
+        conn.commit()
         thumb_id = str(record.get("thumb_id") or "")
         if thumb_id:
             self._safe_unlink(self._blacklist_thumb_dir / Path(thumb_id).name)
@@ -433,23 +569,23 @@ class ImageIndexStore:
         user_id: str,
         sent_at: str,
     ) -> None:
-        self._cleanup_old_days_sync(date_key)
-        with closing(self._connect()) as conn:
-            conn.execute(
-                """
-                INSERT INTO image_usage (
-                    date_key, scope, source_key, illust_id, feature, user_id, sent_at
-                )
-                VALUES (?, ?, ?, ?, ?, ?, ?)
-                ON CONFLICT(date_key, scope, source_key, illust_id)
-                DO UPDATE SET
-                    feature = excluded.feature,
-                    user_id = excluded.user_id,
-                    sent_at = excluded.sent_at
-                """,
-                (date_key, scope, source_key, illust_id, feature, user_id, sent_at),
+        self._maybe_cleanup_old_days_sync(date_key)
+        conn = self._get_conn()
+        conn.execute(
+            """
+            INSERT INTO image_usage (
+                date_key, scope, source_key, illust_id, feature, user_id, sent_at
             )
-            conn.commit()
+            VALUES (?, ?, ?, ?, ?, ?, ?)
+            ON CONFLICT(date_key, scope, source_key, illust_id)
+            DO UPDATE SET
+                feature = excluded.feature,
+                user_id = excluded.user_id,
+                sent_at = excluded.sent_at
+            """,
+            (date_key, scope, source_key, illust_id, feature, user_id, sent_at),
+        )
+        conn.commit()
 
     def _claim_usage_sync(
         self,
@@ -461,19 +597,19 @@ class ImageIndexStore:
         user_id: str,
         sent_at: str,
     ) -> bool:
-        self._cleanup_old_days_sync(date_key)
-        with closing(self._connect()) as conn:
-            cursor = conn.execute(
-                """
-                INSERT OR IGNORE INTO image_usage (
-                    date_key, scope, source_key, illust_id, feature, user_id, sent_at
-                )
-                VALUES (?, ?, ?, ?, ?, ?, ?)
-                """,
-                (date_key, scope, source_key, illust_id, feature, user_id, sent_at),
+        self._maybe_cleanup_old_days_sync(date_key)
+        conn = self._get_conn()
+        cursor = conn.execute(
+            """
+            INSERT OR IGNORE INTO image_usage (
+                date_key, scope, source_key, illust_id, feature, user_id, sent_at
             )
-            conn.commit()
-            return cursor.rowcount > 0
+            VALUES (?, ?, ?, ?, ?, ?, ?)
+            """,
+            (date_key, scope, source_key, illust_id, feature, user_id, sent_at),
+        )
+        conn.commit()
+        return cursor.rowcount > 0
 
     def _release_usage_sync(
         self,
@@ -483,17 +619,18 @@ class ImageIndexStore:
         illust_id: str,
         feature: str,
     ) -> None:
-        self._cleanup_old_days_sync(date_key)
-        with closing(self._connect()) as conn:
-            conn.execute(
-                """
-                DELETE FROM image_usage
-                WHERE date_key = ? AND scope = ? AND source_key = ?
-                    AND illust_id = ? AND feature = ?
-                """,
-                (date_key, scope, source_key, illust_id, feature),
-            )
-            conn.commit()
+        self._maybe_cleanup_old_days_sync(date_key)
+        conn = self._get_conn()
+        conn.execute(
+            """
+            DELETE FROM image_usage
+            WHERE date_key = ? AND scope = ? AND source_key = ?
+                AND illust_id = ? AND feature = ?
+            """,
+            (date_key, scope, source_key, illust_id, feature),
+        )
+        conn.commit()
+
 
 def ordered_by_unused(illusts: Iterable[dict], used_ids: set[str]) -> list[dict]:
     fresh: list[dict] = []
