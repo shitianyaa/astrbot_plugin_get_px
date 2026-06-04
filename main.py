@@ -98,6 +98,7 @@ RANKING_MODES = {
 DEFAULT_AUTO_DOWNGRADE_ORIGINAL_LIMIT_MB = 3.0
 DEFAULT_BLACKLIST_TAGS = "furry,裸体,全裸,触手,露出,nsfw"
 THUMB_DATA_BATCH_LIMIT = 32
+CHECKIN_BACKGROUND_PAGE_ATTEMPTS = 5
 
 
 # ──────────────────────────────────────────────────────────────────────
@@ -859,21 +860,26 @@ class GetPxPlugin(Star):
             logger.warning(f"{LOG_PREFIX} 签到卡片渲染失败，回退纯文字: {e}")
 
         if card_path:
+            sent_card = False
             try:
                 content = [Image.fromFileSystem(card_path)]
                 if background and background.pixiv_caption:
                     content.append(Plain(background.pixiv_caption))
                 await event.send(event.chain_result(content))
                 await self._record_checkin_background(event, background)
+                sent_card = True
                 return
             except Exception as e:
                 logger.warning(f"{LOG_PREFIX} 签到卡片发送失败，回退纯文字: {e}")
             finally:
                 cleanup(card_path)
+                if not sent_card:
+                    await self._release_checkin_background_claim(event, background)
                 if background and background.image_path and background.mode == "pixiv_daily":
                     cleanup(background.image_path)
 
         if background and background.image_path and background.mode == "pixiv_daily":
+            await self._release_checkin_background_claim(event, background)
             cleanup(background.image_path)
         yield event.plain_result(self._format_checkin_plain_text(result))
 
@@ -928,7 +934,9 @@ class GetPxPlugin(Star):
         background: CardBackground | None = None
         card_path = ""
         try:
-            background = await self._prepare_checkin_background(event, record)
+            background = await self._prepare_checkin_background(
+                event, record, claim_usage=False
+            )
             card_path = await self._render_checkin_card(
                 event,
                 profile=profile,
@@ -1102,7 +1110,7 @@ class GetPxPlugin(Star):
         )
 
     async def _prepare_checkin_background(
-        self, event: AstrMessageEvent, record
+        self, event: AstrMessageEvent, record, *, claim_usage: bool = True
     ) -> CardBackground | None:
         mode = self._cfg_str("checkin_background_mode", "pixiv_daily") or "pixiv_daily"
         if mode == "custom":
@@ -1115,11 +1123,12 @@ class GetPxPlugin(Star):
                     mode="custom",
                     source="custom",
                 )
-            logger.warning(f"{LOG_PREFIX} 签到自定义背景不可用，回退默认背景")
-            return CardBackground(mode="fallback", source="fallback")
-        if mode != "pixiv_daily":
+            logger.warning(f"{LOG_PREFIX} 签到自定义背景不可用，回退 Pixiv 背景")
+        elif mode != "pixiv_daily":
             mode = "pixiv_daily"
-        pixiv_bg = await self._download_checkin_pixiv_background(event, record)
+        pixiv_bg = await self._download_checkin_pixiv_background(
+            event, record, claim_usage=claim_usage
+        )
         if pixiv_bg is not None:
             return pixiv_bg
         return CardBackground(mode="fallback", source="fallback")
@@ -1155,7 +1164,7 @@ class GetPxPlugin(Star):
         return resolved
 
     async def _download_checkin_pixiv_background(
-        self, event: AstrMessageEvent, record
+        self, event: AstrMessageEvent, record, *, claim_usage: bool = True
     ) -> CardBackground | None:
         token = self._cfg_str("pixiv_refresh_token")
         if not token:
@@ -1181,51 +1190,71 @@ class GetPxPlugin(Star):
         if ranking_mode not in RANKING_MODES:
             ranking_mode = "week"
 
-        # 获取作品列表（带分页游标）
-        illusts, raw_count, source_key = await self._fetch_paginated(
-            event, selected_tag, ranking_mode
-        )
-        if not illusts:
-            return None
+        source_key = self._source_key(selected_tag, ranking_mode)
+        used_ids = await self._checkin_background_used_ids(event, source_key)
+        illusts: list[dict] = []
+        raw_count = 0
 
-        r18_mode = self._cfg_int("pixiv_r18", 0, 0, 2)
-        illusts = self._filter_r18(illusts, r18_mode)
-        is_manga_ranking = not selected_tag and ranking_mode == "day_manga"
-        if self._cfg_bool("filter_manga", True) and not is_manga_ranking:
-            illusts = self._filter_manga(illusts)
-        illusts = await self._filter_blacklisted_illusts(illusts)
-        aspect_config = self._cfg_str("checkin_background_aspect_ratio", "16:9")
-        aspect_ratio = parse_aspect_ratio(aspect_config)
-        if aspect_ratio > 0:
-            tolerance = self._cfg_float(
-                "checkin_background_aspect_tolerance", 0.25, 0.0, 1.0
+        for page_attempt in range(1, CHECKIN_BACKGROUND_PAGE_ATTEMPTS + 1):
+            # 获取作品列表（带分页游标）
+            illusts, raw_count, source_key = await self._fetch_paginated(
+                event, selected_tag, ranking_mode
             )
-            aspect_matched = filter_illusts_by_aspect_ratio(
-                illusts, aspect_ratio, tolerance
-            )
-            if aspect_matched:
-                illusts = aspect_matched
-            else:
-                logger.info(
-                    f"{LOG_PREFIX} 签到背景无符合比例 {aspect_config} 的候选作品，回退未限制比例候选"
+            if not illusts:
+                return None
+
+            r18_mode = self._cfg_int("pixiv_r18", 0, 0, 2)
+            illusts = self._filter_r18(illusts, r18_mode)
+            is_manga_ranking = not selected_tag and ranking_mode == "day_manga"
+            if self._cfg_bool("filter_manga", True) and not is_manga_ranking:
+                illusts = self._filter_manga(illusts)
+            illusts = await self._filter_blacklisted_illusts(illusts)
+            aspect_config = self._cfg_str("checkin_background_aspect_ratio", "16:9")
+            aspect_ratio = parse_aspect_ratio(aspect_config)
+            if aspect_ratio > 0:
+                tolerance = self._cfg_float(
+                    "checkin_background_aspect_tolerance", 0.25, 0.0, 1.0
                 )
-        if not illusts:
-            return None
-
-        # 去重：优先选择当天未使用过的作品（与普通发图共用索引）
-        if self.image_index is not None:
-            scope = self._event_scope(event)
-            try:
-                used_ids = await self.image_index.get_used_illust_ids(scope, source_key)
-                ordered = ordered_by_unused(illusts, used_ids)
-                # 若整页全被用过，推进分页游标供下次签到翻页
-                if ordered and str(ordered[0].get("id") or "") in used_ids:
-                    await self.image_index.advance_page_offset(
-                        scope, source_key, raw_count
+                aspect_matched = filter_illusts_by_aspect_ratio(
+                    illusts, aspect_ratio, tolerance
+                )
+                if aspect_matched:
+                    illusts = aspect_matched
+                else:
+                    logger.info(
+                        f"{LOG_PREFIX} 签到背景无符合比例 {aspect_config} 的候选作品，回退未限制比例候选"
                     )
-                illusts = ordered
+            if not illusts:
+                return None
+
+            ordered = ordered_by_unused(illusts, used_ids)
+            fresh = [
+                illust
+                for illust in ordered
+                if str(illust.get("id") or "") not in used_ids
+            ]
+            if fresh:
+                illusts = fresh
+                break
+            if self.image_index is None:
+                logger.info(f"{LOG_PREFIX} 签到背景候选均已在图片历史中，跳过 Pixiv 背景")
+                return None
+
+            try:
+                await self.image_index.advance_page_offset(
+                    self._event_scope(event), source_key, raw_count
+                )
+                logger.info(
+                    f"{LOG_PREFIX} 签到背景第 {page_attempt} 页候选均已使用，切换下一页"
+                )
             except Exception as e:
-                logger.warning(f"{LOG_PREFIX} 签到背景读取去重索引失败: {e}")
+                logger.warning(f"{LOG_PREFIX} 签到背景分页游标更新失败: {e}")
+                return None
+        else:
+            logger.info(
+                f"{LOG_PREFIX} 签到背景连续 {CHECKIN_BACKGROUND_PAGE_ATTEMPTS} 页候选均已使用"
+            )
+            return None
 
         seed = int.from_bytes(
             hashlib.sha256(
@@ -1254,6 +1283,16 @@ class GetPxPlugin(Star):
             if reason:
                 logger.info(f"{LOG_PREFIX} 签到背景跳过：{reason}")
                 continue
+            claimed = False
+            if claim_usage:
+                claimed = await self._claim_checkin_background_usage(
+                    event, source_key, illust_id
+                )
+                if not claimed:
+                    logger.info(
+                        f"{LOG_PREFIX} 签到背景跳过：作品 {illust_id} 已被其他签到占用"
+                    )
+                    continue
             title = illust.get("title", "无标题")
             try:
                 path, actual_q, file_size = await self.downloader.download_for_send(
@@ -1282,7 +1321,82 @@ class GetPxPlugin(Star):
                 )
             except Exception as e:
                 logger.warning(f"{LOG_PREFIX} 签到背景 {illust_id} 下载失败: {e}")
+            if claimed:
+                await self._release_checkin_background_usage(
+                    event, source_key, illust_id
+                )
         return None
+
+    async def _claim_checkin_background_usage(
+        self, event: AstrMessageEvent, source_key: str, illust_id: str
+    ) -> bool:
+        if self.image_index is None or not source_key or not illust_id:
+            return True
+        try:
+            return await self.image_index.claim_usage(
+                scope=self._event_scope(event),
+                source_key=source_key,
+                illust_id=illust_id,
+                feature="checkin_pending",
+                user_id=str(event.get_sender_id() or ""),
+            )
+        except Exception as e:
+            logger.warning(f"{LOG_PREFIX} 签到背景占用索引失败: {e}")
+            return True
+
+    async def _release_checkin_background_usage(
+        self, event: AstrMessageEvent, source_key: str, illust_id: str
+    ) -> None:
+        if self.image_index is None or not source_key or not illust_id:
+            return
+        try:
+            await self.image_index.release_usage(
+                scope=self._event_scope(event),
+                source_key=source_key,
+                illust_id=illust_id,
+                feature="checkin_pending",
+            )
+        except Exception as e:
+            logger.warning(f"{LOG_PREFIX} 释放签到背景占用失败: {e}")
+
+    async def _release_checkin_background_claim(
+        self, event: AstrMessageEvent, background: CardBackground | None
+    ) -> None:
+        if (
+            background is None
+            or background.mode != "pixiv_daily"
+            or not background.source
+            or not background.illust_id
+        ):
+            return
+        await self._release_checkin_background_usage(
+            event, background.source, background.illust_id
+        )
+
+    async def _checkin_background_used_ids(
+        self, event: AstrMessageEvent, source_key: str
+    ) -> set[str]:
+        used_ids: set[str] = set()
+        if self.image_index is not None:
+            try:
+                used_ids.update(
+                    await self.image_index.get_used_illust_ids(
+                        self._event_scope(event), source_key
+                    )
+                )
+            except Exception as e:
+                logger.warning(f"{LOG_PREFIX} 签到背景读取去重索引失败: {e}")
+        if self.image_history is not None:
+            try:
+                records = await self.image_history.list_records()
+                used_ids.update(
+                    str(record.get("illust_id") or "").strip()
+                    for record in records
+                    if str(record.get("illust_id") or "").strip()
+                )
+            except Exception as e:
+                logger.warning(f"{LOG_PREFIX} 签到背景读取图片历史失败: {e}")
+        return used_ids
 
     def _checkin_avatar_url(self, event: AstrMessageEvent) -> str:
         user_id = str(event.get_sender_id() or "")
@@ -1418,7 +1532,7 @@ class GetPxPlugin(Star):
         )
 
         if not illusts:
-            yield event.plain_result(f"❌ Pixiv 请求失败或无结果，换个标签试试")
+            yield event.plain_result("❌ Pixiv 请求失败或无结果，换个标签试试")
             return
 
         # R18 过滤

@@ -5,7 +5,7 @@
 一个面向 AstrBot 的 Pixiv 发图插件：搜索插画、查看排行榜、下载作品、每日签到，并在 WebUI 管理图片历史与黑名单。
 
 ![AstrBot](https://img.shields.io/badge/AstrBot-plugin-5865f2?style=flat-square)
-![Version](https://img.shields.io/badge/version-2.6.0-22c55e?style=flat-square)
+![Version](https://img.shields.io/badge/version-2.6.1-22c55e?style=flat-square)
 ![Python](https://img.shields.io/badge/Python-3.10%2B-3776ab?style=flat-square)
 ![Platform](https://img.shields.io/badge/platform-OneBot%20%2F%20aiocqhttp-f97316?style=flat-square)
 
@@ -121,7 +121,7 @@
 | `70 - 139.99` | 信赖 |
 | `140+` | 挚友 |
 
-签到卡片固定渲染为 `960x540` 的 16:9 横图。背景可以使用 Pixiv 每日自动背景，也可以指定本地图片。Pixiv 背景会沿用 R18 模式、拉黑标签和作品 ID 黑名单；如果下载、记录或 HTML 渲染失败，签到奖励仍会发放，并回退为纯文字结果。
+签到卡片固定渲染为 `960x540` 的 16:9 横图。背景可以使用 Pixiv 每日自动背景，也可以指定本地图片。Pixiv 背景会沿用 R18 模式、拉黑标签和作品 ID 黑名单，并同时参考当天 SQLite 索引和图片历史避开已用作品；当前页候选都用过时会自动切换下一页。正式签到会在下载背景前预占用作品索引，下载、渲染或发送失败时释放占用，减少并发签到拿到同一张背景的概率。自定义背景不可用时会继续尝试 Pixiv 背景；如果 Pixiv 下载、记录或 HTML 渲染失败，签到奖励仍会发放，并回退为纯文字结果。
 
 ## 后续计划
 
@@ -173,7 +173,7 @@
 | `auto_trigger_enabled` | 自然语言自动触发 | `false` |
 | `checkin_enabled` | 签到开关 | `true` |
 | `checkin_bot_name` | 签到卡片中的 bot 角色名 | `neko` |
-| `checkin_background_mode` | 签到背景模式：`pixiv_daily` 或 `custom` | `pixiv_daily` |
+| `checkin_background_mode` | 签到背景模式：`pixiv_daily` 或 `custom`；自定义背景不可用时会继续尝试 Pixiv 背景 | `pixiv_daily` |
 | `checkin_background_tag` | 签到 Pixiv 背景标签，多个标签用英文逗号分隔 | 空 |
 | `checkin_background_aspect_ratio` | 签到 Pixiv 背景优先比例，如 `16:9`、`1:1`、`2.2:1` | `16:9` |
 | `checkin_background_aspect_tolerance` | 比例容差，`0.25` 表示允许上下 25% | `0.25` |
@@ -195,6 +195,7 @@
 ## 数据与清理
 
 - 当天去重使用 SQLite 记录，同一群聊或私聊内，同一标签或排行榜当天尽量不重复。
+- 签到 Pixiv 背景会同时参考当天 SQLite 索引和图片历史；正式签到会预占用索引，失败时释放占用，当前页候选全用过时自动翻页。
 - 图片历史和黑名单保存在 AstrBot 插件数据目录中。
 - 发送用原图或大图是临时文件，发送完成后会自动清理。
 - 图片历史删除或加入黑名单不会清空当天已发作品索引。
