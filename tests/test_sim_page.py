@@ -7,7 +7,6 @@
 
 import asyncio
 import json
-import os
 import sys
 import tempfile
 from pathlib import Path
@@ -82,7 +81,7 @@ async def run_simulation(token: str):
             # 重置游标（模拟 advance_page_offset 中 <20 的自动重置）
             if offset > 0:
                 _ = await store.advance_page_offset(SCOPE, SOURCE_KEY, 0)
-                print(f"         → 游标自动重置为 0\n")
+                print("         → 游标自动重置为 0\n")
             break
 
         ids = [str(i["id"]) for i in illusts]
@@ -135,7 +134,7 @@ async def run_simulation(token: str):
 
     # 验证 TTL 过期（模拟 4 天前最后访问）
     import sqlite3 as _sq
-    from datetime import datetime as _dt, timedelta as _td, timezone as _tz
+    from datetime import datetime as _dt, timedelta as _td
     from zoneinfo import ZoneInfo as _ZI
     _shanghai = _ZI("Asia/Shanghai")
     old_time = (_dt.now(_shanghai) - _td(days=4)).isoformat(timespec="seconds")

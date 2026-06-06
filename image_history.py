@@ -221,7 +221,6 @@ class ImageAssetManager:
 
     def _cleanup_corrupt_backups(self) -> None:
         """保留最近 5 个 .corrupt.* 备份文件，删除更早的。"""
-        from pathlib import Path as _Path
         parent = self._history_path.parent
         base = self._history_path.name
         corrupt_files = sorted(

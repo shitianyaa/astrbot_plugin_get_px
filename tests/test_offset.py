@@ -85,10 +85,10 @@ async def test_offset():
         print(f"  [✗] 两页有重叠: {overlap}")
         sys.exit(1)
     else:
-        print(f"  [✓] 两页无重叠，offset 参数生效！")
+        print("  [✓] 两页无重叠，offset 参数生效！")
 
     # ── 测试 illust_ranking offset ──
-    print(f"\n── 测试 illust_ranking(mode='week') ──")
+    print("\n── 测试 illust_ranking(mode='week') ──")
 
     try:
         resp_r0 = await api.illust_ranking(mode="week", offset=0)
@@ -112,9 +112,9 @@ async def test_offset():
         print(f"  [✗] 两页有重叠: {overlap_r}")
         sys.exit(1)
     else:
-        print(f"  [✓] 两页无重叠，offset 参数生效！")
+        print("  [✓] 两页无重叠，offset 参数生效！")
 
-    print(f"\n[✓] 全部测试通过！offset 参数可用于分页去重。")
+    print("\n[✓] 全部测试通过！offset 参数可用于分页去重。")
 
 
 if __name__ == "__main__":
