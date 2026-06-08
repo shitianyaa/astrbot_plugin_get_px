@@ -1176,24 +1176,47 @@ class GetPxPlugin(Star):
             return None
 
         tag_config = self._cfg_str("checkin_background_tag", "")
-        tags = self._split_config_tags(tag_config)
-        selected_tag = ""
-        if tags:
-            seed = int.from_bytes(
-                hashlib.sha256(
-                    f"checkin-bg-tag|{record.date_key}|{tag_config}".encode("utf-8")
-                ).digest()[:8],
-                "big",
-            )
-            selected_tag = tags[seed % len(tags)]
+        tag_candidates = self._checkin_background_tag_candidates(tag_config)
         ranking_mode = self._cfg_str("pixiv_ranking_mode", "week")
         if ranking_mode not in RANKING_MODES:
             ranking_mode = "week"
 
+        for selected_tag in tag_candidates:
+            background = await self._download_checkin_pixiv_background_from_source(
+                event,
+                record,
+                selected_tag,
+                ranking_mode,
+                claim_usage=claim_usage,
+            )
+            if background is not None:
+                return background
+        return None
+
+    def _checkin_background_tag_candidates(self, tag_config: object) -> list[str]:
+        tags = self._split_config_tags(tag_config)
+        if not tags:
+            return [""]
+        candidates = list(tags)
+        random.shuffle(candidates)
+        return candidates
+
+    async def _download_checkin_pixiv_background_from_source(
+        self,
+        event: AstrMessageEvent,
+        record,
+        selected_tag: str,
+        ranking_mode: str,
+        *,
+        claim_usage: bool,
+    ) -> CardBackground | None:
         source_key = self._source_key(selected_tag, ranking_mode)
         used_ids = await self._checkin_background_used_ids(event, source_key)
         illusts: list[dict] = []
         raw_count = 0
+        source_label = (
+            f"标签 {selected_tag!r}" if selected_tag else f"排行榜 {ranking_mode}"
+        )
 
         for page_attempt in range(1, CHECKIN_BACKGROUND_PAGE_ATTEMPTS + 1):
             # 获取作品列表（带分页游标）
@@ -1201,6 +1224,7 @@ class GetPxPlugin(Star):
                 event, selected_tag, ranking_mode
             )
             if not illusts:
+                logger.info(f"{LOG_PREFIX} 签到背景{source_label}无候选作品")
                 return None
 
             r18_mode = self._cfg_int("pixiv_r18", 0, 0, 2)
@@ -1225,6 +1249,7 @@ class GetPxPlugin(Star):
                         f"{LOG_PREFIX} 签到背景无符合比例 {aspect_config} 的候选作品，回退未限制比例候选"
                     )
             if not illusts:
+                logger.info(f"{LOG_PREFIX} 签到背景{source_label}过滤后无可用候选")
                 return None
 
             ordered = ordered_by_unused(illusts, used_ids)
@@ -1408,8 +1433,14 @@ class GetPxPlugin(Star):
         return ""
 
     @staticmethod
-    def _split_config_tags(value: str) -> list[str]:
-        return [tag.strip() for tag in value.split(",") if tag.strip()]
+    def _split_config_tags(value: object) -> list[str]:
+        if not isinstance(value, str):
+            return []
+        return [
+            tag.strip()
+            for tag in re.split(r"[,，、;；\r\n]+", value)
+            if tag.strip()
+        ]
 
     def _blacklist_tags(self) -> set[str]:
         return {
