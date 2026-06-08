@@ -1193,7 +1193,7 @@ class GetPxPlugin(Star):
                 return background
         return None
 
-    def _checkin_background_tag_candidates(self, tag_config: str) -> list[str]:
+    def _checkin_background_tag_candidates(self, tag_config: object) -> list[str]:
         tags = self._split_config_tags(tag_config)
         if not tags:
             return [""]
@@ -1434,9 +1434,11 @@ class GetPxPlugin(Star):
 
     @staticmethod
     def _split_config_tags(value: object) -> list[str]:
+        if not isinstance(value, str):
+            return []
         return [
             tag.strip()
-            for tag in re.split(r"[,，、;；\r\n]+", str(value or ""))
+            for tag in re.split(r"[,，、;；\r\n]+", value)
             if tag.strip()
         ]
 

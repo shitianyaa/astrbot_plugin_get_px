@@ -70,6 +70,24 @@ class CheckinBackgroundSelectionTest(unittest.IsolatedAsyncioTestCase):
 
         self.assertEqual(tags, ["alpha", "beta", "gamma", "delta", "epsilon", "zeta"])
 
+    def test_split_config_tags_handles_empty_and_non_string_values(self):
+        for value in ["", "   ", "\n\t", None, 123]:
+            with self.subTest(value=value):
+                self.assertEqual(GetPxPlugin._split_config_tags(value), [])
+
+    def test_checkin_background_tag_candidates_fallback_for_empty_values(self):
+        plugin = object.__new__(GetPxPlugin)
+
+        with patch("astrbot_plugin_get_px.main.random.shuffle") as shuffle:
+            for value in ["", "   ", None]:
+                with self.subTest(value=value):
+                    self.assertEqual(
+                        plugin._checkin_background_tag_candidates(value),
+                        [""],
+                    )
+
+        shuffle.assert_not_called()
+
     def test_checkin_background_tag_candidates_are_randomized(self):
         plugin = object.__new__(GetPxPlugin)
 
@@ -195,6 +213,55 @@ class CheckinBackgroundSelectionTest(unittest.IsolatedAsyncioTestCase):
                 selected_tag = plugin.client.search_calls[0][0]
                 self.assertIn(selected_tag, {"blue archive", "miku"})
                 self.assertEqual(background.source, f"search:{selected_tag}")
+            finally:
+                plugin.image_index.close()
+
+    async def test_checkin_background_returns_none_when_all_tags_have_no_result(
+        self,
+    ):
+        with tempfile.TemporaryDirectory() as tmp:
+            plugin = object.__new__(GetPxPlugin)
+            plugin.config = {
+                "pixiv_refresh_token": "token",
+                "pixiv_ranking_mode": "week",
+                "pixiv_r18": 0,
+                "filter_manga": True,
+                "blacklist_tags": "",
+                "checkin_background_tag": "blue archive,miku",
+                "checkin_background_aspect_ratio": "16:9",
+                "checkin_background_aspect_tolerance": 0.25,
+                "image_quality": "large",
+                "pixiv_proxy_url": "",
+                "request_timeout": 30.0,
+                "auto_downgrade_original_mb": 3.0,
+            }
+            plugin.image_index = ImageIndexStore(tmp)
+            plugin.image_history = FakeHistory([])
+            plugin.downloader = FakeDownloader()
+            plugin.client = FakePixivClient(
+                {},
+                search_pages={
+                    ("blue archive", 0): [],
+                    ("miku", 0): [],
+                },
+            )
+
+            try:
+                with patch(
+                    "astrbot_plugin_get_px.main.random.shuffle",
+                    side_effect=lambda tags: None,
+                ):
+                    background = await plugin._download_checkin_pixiv_background(
+                        FakeEvent(),
+                        SimpleNamespace(date_key="2026-06-08", user_id="10001"),
+                    )
+
+                self.assertIsNone(background)
+                self.assertEqual(plugin.client.ranking_offsets, [])
+                self.assertEqual(
+                    plugin.client.search_calls,
+                    [("blue archive", 0), ("miku", 0)],
+                )
             finally:
                 plugin.image_index.close()
 
