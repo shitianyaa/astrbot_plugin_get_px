@@ -7,7 +7,9 @@ from checkin import (
     CheckinStore,
     affection_level,
     boost_remaining_days,
+    dump_checkin_snapshot_json,
     is_boost_active,
+    load_checkin_snapshot_json,
 )
 from checkin_background import (
     filter_illusts_by_aspect_ratio,
@@ -143,6 +145,102 @@ class CheckinStoreTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(affection_level(30)["name"], "亲近")
         self.assertEqual(affection_level(70)["name"], "信赖")
         self.assertEqual(affection_level(140)["name"], "挚友")
+
+
+    async def test_export_import_round_trip_preserves_profile_and_records(self):
+        with tempfile.TemporaryDirectory() as src_tmp, tempfile.TemporaryDirectory() as dst_tmp:
+            source = FrozenCheckinStore(src_tmp, date_key="2026-05-26")
+            for day in range(26, 30):
+                source.date_key = f"2026-05-{day}"
+                await source.checkin(
+                    user_id="10001",
+                    username="tester",
+                    bot_name="neko",
+                )
+            purchase = await source.purchase_boost(user_id="10001", days=1)
+            self.assertTrue(purchase.success)
+            await source.update_record_background(
+                user_id="10001",
+                date_key="2026-05-29",
+                mode="pixiv_daily",
+                source="search:blue_archive",
+                illust_id="445566",
+                title="Blue Sky",
+                author="Someone",
+            )
+
+            snapshot = await source.export_snapshot()
+            serialized = dump_checkin_snapshot_json(snapshot)
+            restored = load_checkin_snapshot_json(serialized.encode("utf-8"))
+
+            target = FrozenCheckinStore(dst_tmp, date_key="2026-05-29")
+            summary = await target.import_snapshot(restored)
+            profile = await target.get_profile("10001")
+            record = await target.get_today_record("10001")
+
+            self.assertEqual(summary["profiles"], 1)
+            self.assertEqual(summary["records"], 4)
+            self.assertEqual(profile.total_days, 4)
+            self.assertEqual(profile.last_checkin_date, "2026-05-29")
+            self.assertEqual(profile.boost_start_date, "2026-05-30")
+            self.assertEqual(profile.boost_until_date, "2026-05-30")
+            self.assertIsNotNone(record)
+            self.assertEqual(record.background_mode, "pixiv_daily")
+            self.assertEqual(record.background_source, "search:blue_archive")
+            self.assertEqual(record.background_illust_id, "445566")
+            self.assertEqual(record.background_title, "Blue Sky")
+            self.assertEqual(record.background_author, "Someone")
+
+    async def test_import_overwrites_existing_data(self):
+        with tempfile.TemporaryDirectory() as src_tmp, tempfile.TemporaryDirectory() as dst_tmp:
+            source = FrozenCheckinStore(src_tmp, date_key="2026-05-26")
+            await source.checkin(user_id="20002", username="source", bot_name="neko")
+            snapshot = await source.export_snapshot()
+
+            target = FrozenCheckinStore(dst_tmp, date_key="2026-05-26")
+            await target.checkin(user_id="10001", username="target", bot_name="neko")
+            await target.import_snapshot(snapshot)
+
+            old_profile = await target.get_profile("10001")
+            new_profile = await target.get_profile("20002")
+            self.assertEqual(old_profile.total_days, 0)
+            self.assertEqual(new_profile.total_days, 1)
+            self.assertIsNotNone(await target.get_today_record("20002"))
+            self.assertIsNone(await target.get_today_record("10001"))
+
+    async def test_import_rejects_invalid_snapshot_without_mutating_data(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            store = FrozenCheckinStore(tmp, date_key="2026-05-26")
+            await store.checkin(user_id="10001", username="tester", bot_name="neko")
+            before = await store.export_snapshot()
+
+            with self.assertRaisesRegex(ValueError, "不支持的签到备份版本"):
+                await store.import_snapshot(
+                    {
+                        **before,
+                        "schema_version": 999,
+                    }
+                )
+
+            after = await store.export_snapshot()
+            self.assertEqual(after, before)
+
+    async def test_import_rolls_back_when_rows_conflict(self):
+        with tempfile.TemporaryDirectory() as src_tmp, tempfile.TemporaryDirectory() as dst_tmp:
+            source = FrozenCheckinStore(src_tmp, date_key="2026-05-26")
+            await source.checkin(user_id="20002", username="source", bot_name="neko")
+            snapshot = await source.export_snapshot()
+            snapshot["records"].append(dict(snapshot["records"][0]))
+
+            target = FrozenCheckinStore(dst_tmp, date_key="2026-05-26")
+            await target.checkin(user_id="10001", username="target", bot_name="neko")
+            before = await target.export_snapshot()
+
+            with self.assertRaises(Exception):
+                await target.import_snapshot(snapshot)
+
+            after = await target.export_snapshot()
+            self.assertEqual(after, before)
 
 
 class CheckinBackgroundTest(unittest.TestCase):

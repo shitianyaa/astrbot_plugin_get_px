@@ -370,6 +370,127 @@ select:focus-visible {
 }
 
 /* =============================================
+   CHECKIN BACKUP
+   ============================================= */
+.checkin-transfer {
+  display: grid;
+  grid-template-columns: minmax(0, 1.1fr) minmax(320px, 0.9fr);
+  gap: 18px;
+  margin-bottom: 20px;
+  padding: 18px;
+  border: 1px solid color-mix(in srgb, var(--danger) 20%, var(--line));
+  border-radius: var(--radius-lg);
+  background:
+    radial-gradient(circle at 100% 0%, color-mix(in srgb, var(--danger) 8%, transparent) 0, transparent 32%),
+    linear-gradient(180deg, color-mix(in srgb, var(--paper) 94%, var(--paper-2) 6%), var(--paper));
+  box-shadow: var(--shadow-sm);
+}
+
+.checkin-transfer-copy {
+  min-width: 0;
+}
+
+.checkin-transfer-copy h2 {
+  font-family: var(--font-serif);
+  font-size: 24px;
+  line-height: 1.2;
+  margin-bottom: 8px;
+}
+
+.checkin-transfer-copy p {
+  color: var(--muted);
+}
+
+.checkin-transfer-copy code {
+  padding: 2px 6px;
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--paper-2) 72%, var(--paper) 28%);
+  border: 1px solid var(--line);
+  font-size: 12px;
+}
+
+.checkin-transfer-actions {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  min-width: 0;
+}
+
+.upload-button {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 44px;
+  padding: 10px 16px;
+  border-radius: var(--radius-md);
+  border: 1px solid var(--line-strong);
+  background: color-mix(in srgb, var(--paper) 92%, var(--accent-3) 8%);
+  color: var(--accent-2);
+  font-weight: 700;
+  cursor: pointer;
+  transition: transform var(--dur) var(--ease-out),
+              box-shadow var(--dur) var(--ease-out),
+              border-color var(--dur) var(--ease-out);
+}
+
+.upload-button:hover {
+  transform: translateY(-1px);
+  border-color: var(--accent-2);
+  box-shadow: var(--shadow-sm);
+}
+
+.upload-button input {
+  position: absolute;
+  inset: 0;
+  opacity: 0;
+  cursor: pointer;
+}
+
+.checkin-transfer-meta {
+  min-height: 20px;
+  color: var(--ink);
+  font-size: 13px;
+  word-break: break-word;
+}
+
+.danger-note {
+  padding: 10px 12px;
+  border-radius: var(--radius-md);
+  border: 1px solid color-mix(in srgb, var(--danger) 22%, var(--line));
+  background: color-mix(in srgb, var(--danger-light) 70%, var(--paper) 30%);
+  color: var(--danger);
+  font-size: 13px;
+}
+
+.checkin-transfer-result {
+  padding: 12px 14px;
+  border-radius: var(--radius-md);
+  border: 1px solid var(--line);
+  background: color-mix(in srgb, var(--paper-2) 70%, var(--paper) 30%);
+  font-size: 13px;
+}
+
+.checkin-transfer-result[hidden] {
+  display: none;
+}
+
+.checkin-transfer-result.success {
+  border-color: color-mix(in srgb, var(--success) 26%, var(--line));
+  color: var(--success);
+}
+
+.checkin-transfer-result.error {
+  border-color: color-mix(in srgb, var(--danger) 26%, var(--line));
+  color: var(--danger);
+}
+
+.checkin-transfer-result strong {
+  display: block;
+  margin-bottom: 4px;
+}
+
+/* =============================================
    FILTERS
    ============================================= */
 .filters {
@@ -1325,6 +1446,10 @@ select:focus-visible {
     grid-template-columns: repeat(2, 1fr);
   }
 
+  .checkin-transfer {
+    grid-template-columns: 1fr;
+  }
+
   .filters-row {
     gap: 10px;
   }
@@ -1354,6 +1479,10 @@ select:focus-visible {
 
   .insights {
     grid-template-columns: 1fr 1fr;
+  }
+
+  .checkin-transfer {
+    padding: 16px;
   }
 
   .filters-row {

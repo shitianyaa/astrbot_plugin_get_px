@@ -16,6 +16,9 @@ const state = {
   source: "all",
   r18: "all",
   session: "all",
+  checkinImportFile: null,
+  checkinImporting: false,
+  checkinImportResult: null,
   toastTimer: 0,
   queryTimer: 0,
   lastFocus: null,
@@ -54,6 +57,10 @@ const els = {
   actionDialogDesc: document.getElementById("actionDialogDesc"),
   actionCancelBtn: document.getElementById("actionCancelBtn"),
   actionConfirmBtn: document.getElementById("actionConfirmBtn"),
+  checkinImportInput: document.getElementById("checkinImportInput"),
+  checkinImportMeta: document.getElementById("checkinImportMeta"),
+  checkinImportBtn: document.getElementById("checkinImportBtn"),
+  checkinImportResult: document.getElementById("checkinImportResult"),
 };
 
 function escapeHtml(value) {
@@ -132,6 +139,13 @@ function formatBytes(value) {
   return `${(size / 1024 / 1024).toFixed(2)} MB`;
 }
 
+function formatUploadBytes(value) {
+  const size = Number(value || 0);
+  if (size <= 0) return "0 B";
+  if (size < 1024) return `${size} B`;
+  return formatBytes(size);
+}
+
 function sourceLabel(value) {
   if (!value) return "-";
   if (value === "checkin") return "签到背景";
@@ -178,6 +192,48 @@ function pageLabel(record) {
 function updateMetric(element, value) {
   if (!element) return;
   element.textContent = String(value);
+}
+
+function renderCheckinImportPanel() {
+  if (!els.checkinImportMeta || !els.checkinImportBtn || !els.checkinImportResult) {
+    return;
+  }
+
+  const file = state.checkinImportFile;
+  els.checkinImportMeta.textContent = file
+    ? `${file.name} · ${formatUploadBytes(file.size)}`
+    : "未选择备份文件";
+  els.checkinImportBtn.disabled = !file || state.checkinImporting;
+  els.checkinImportBtn.textContent = state.checkinImporting ? "导入中..." : "导入并覆盖";
+
+  const result = state.checkinImportResult;
+  if (!result) {
+    els.checkinImportResult.hidden = true;
+    els.checkinImportResult.className = "checkin-transfer-result";
+    els.checkinImportResult.innerHTML = "";
+    return;
+  }
+
+  if (result.success) {
+    els.checkinImportResult.hidden = false;
+    els.checkinImportResult.className = "checkin-transfer-result success";
+    els.checkinImportResult.innerHTML = `
+      <strong>导入完成</strong>
+      <div>用户数：${escapeHtml(result.profiles ?? "-")}</div>
+      <div>签到记录：${escapeHtml(result.records ?? "-")}</div>
+      <div>导出时间：${escapeHtml(result.exported_at || "-")}</div>
+      <div>导入时间：${escapeHtml(result.imported_at || "-")}</div>
+      <div>回滚备份：${escapeHtml(result.rollback_path || "-")}</div>
+    `;
+    return;
+  }
+
+  els.checkinImportResult.hidden = false;
+  els.checkinImportResult.className = "checkin-transfer-result error";
+  els.checkinImportResult.innerHTML = `
+    <strong>导入失败</strong>
+    <div>${escapeHtml(result.error || "未知错误")}</div>
+  `;
 }
 
 function setBusy(isBusy) {
@@ -834,6 +890,7 @@ async function reload() {
   state.thumbs = {};
   state.blacklistThumbs = {};
   setBusy(true);
+  renderCheckinImportPanel();
   renderContent();
   try {
     if (!bridge) throw new Error("AstrBotPluginPage bridge not available");
@@ -866,9 +923,52 @@ async function reload() {
   } finally {
     state.loading = false;
     setBusy(false);
+    renderCheckinImportPanel();
     renderContent();
   }
 }
+
+async function importCheckinBackup() {
+  if (!state.checkinImportFile || state.checkinImporting) return;
+  state.checkinImporting = true;
+  state.checkinImportResult = null;
+  renderCheckinImportPanel();
+  try {
+    const result = apiResult(
+      await bridge.upload("checkin-import", state.checkinImportFile),
+    );
+    state.checkinImportResult = { success: true, ...result };
+    state.checkinImportFile = null;
+    if (els.checkinImportInput) {
+      els.checkinImportInput.value = "";
+    }
+    showToast("签到备份导入成功");
+    await reload();
+  } catch (error) {
+    state.checkinImportResult = {
+      success: false,
+      error: error.message || "导入失败",
+    };
+    showToast(state.checkinImportResult.error, "error");
+  } finally {
+    state.checkinImporting = false;
+    renderCheckinImportPanel();
+  }
+}
+
+if (els.checkinImportInput) {
+  els.checkinImportInput.addEventListener("change", (event) => {
+    const files = event.target?.files;
+    state.checkinImportFile = files && files.length ? files[0] : null;
+    state.checkinImportResult = null;
+    renderCheckinImportPanel();
+  });
+}
+
+if (els.checkinImportBtn) {
+  els.checkinImportBtn.addEventListener("click", importCheckinBackup);
+}
+
 els.refreshBtn.addEventListener("click", reload);
 els.inlineRefreshBtn.addEventListener("click", reload);
 els.historyModeBtn.addEventListener("click", () => {

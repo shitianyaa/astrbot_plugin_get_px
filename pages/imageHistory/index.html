@@ -57,6 +57,26 @@
         </div>
       </section>
 
+      <section class="checkin-transfer" aria-label="签到备份恢复">
+        <div class="checkin-transfer-copy">
+          <p class="eyebrow">Checkin Backup Restore</p>
+          <h2>签到备份恢复</h2>
+          <p>这里只支持上传由 <code>/签到导出</code> 生成的完整 JSON 备份文件。</p>
+        </div>
+        <div class="checkin-transfer-actions">
+          <label class="upload-button" for="checkinImportInput">
+            <span>选择备份文件</span>
+            <input id="checkinImportInput" type="file" accept=".json,application/json" />
+          </label>
+          <div id="checkinImportMeta" class="checkin-transfer-meta">未选择备份文件</div>
+          <p class="danger-note">导入会覆盖当前全部签到数据，导入前会自动创建回滚备份。</p>
+          <button id="checkinImportBtn" class="button-danger-solid" type="button" disabled>
+            导入并覆盖
+          </button>
+          <div id="checkinImportResult" class="checkin-transfer-result" hidden></div>
+        </div>
+      </section>
+
       <section class="filters" aria-label="筛选">
         <div class="filters-row">
           <label class="field field-search">

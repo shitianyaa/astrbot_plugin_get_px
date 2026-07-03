@@ -5,6 +5,7 @@ from contextlib import closing
 from dataclasses import dataclass
 from datetime import date, datetime, timedelta
 import hashlib
+import json
 import random
 import sqlite3
 from pathlib import Path
@@ -13,6 +14,9 @@ from zoneinfo import ZoneInfo
 
 
 SHANGHAI_TZ = ZoneInfo("Asia/Shanghai")
+CHECKIN_SNAPSHOT_SCHEMA_VERSION = 1
+CHECKIN_SNAPSHOT_SCOPE = "checkin"
+CHECKIN_SNAPSHOT_PLUGIN_NAME = "astrbot_plugin_get_px"
 
 BASE_COIN_MIN = 50
 BASE_COIN_MAX = 100
@@ -186,6 +190,14 @@ class CheckinStore:
                 self.now_iso(),
             )
 
+    async def export_snapshot(self) -> dict[str, Any]:
+        async with self._lock:
+            return await asyncio.to_thread(self._export_snapshot_sync)
+
+    async def import_snapshot(self, snapshot: dict[str, Any]) -> dict[str, Any]:
+        async with self._lock:
+            return await asyncio.to_thread(self._import_snapshot_sync, snapshot)
+
     def _connect(self) -> sqlite3.Connection:
         conn = sqlite3.connect(self._db_path)
         conn.row_factory = sqlite3.Row
@@ -271,6 +283,100 @@ class CheckinStore:
                 if name not in record_columns:
                     conn.execute(f"ALTER TABLE checkin_records ADD COLUMN {name} {ddl}")
             conn.commit()
+
+    def _export_snapshot_sync(self) -> dict[str, Any]:
+        with closing(self._connect()) as conn:
+            profiles = [
+                dict(row)
+                for row in conn.execute(
+                    "SELECT * FROM checkin_profiles ORDER BY user_id"
+                ).fetchall()
+            ]
+            records = [
+                dict(row)
+                for row in conn.execute(
+                    "SELECT * FROM checkin_records ORDER BY date_key, user_id"
+                ).fetchall()
+            ]
+        return {
+            "schema_version": CHECKIN_SNAPSHOT_SCHEMA_VERSION,
+            "plugin_name": CHECKIN_SNAPSHOT_PLUGIN_NAME,
+            "scope": CHECKIN_SNAPSHOT_SCOPE,
+            "exported_at": self.now_iso(),
+            "profiles": profiles,
+            "records": records,
+        }
+
+    def _import_snapshot_sync(self, snapshot: dict[str, Any]) -> dict[str, Any]:
+        normalized = _validate_checkin_snapshot(snapshot)
+        profiles = normalized["profiles"]
+        records = normalized["records"]
+
+        with closing(self._connect()) as conn:
+            conn.execute("BEGIN")
+            try:
+                conn.execute("DELETE FROM checkin_records")
+                conn.execute("DELETE FROM checkin_profiles")
+                if profiles:
+                    conn.executemany(
+                        """
+                        INSERT INTO checkin_profiles (
+                            user_id, coins, affection, total_days, streak_days,
+                            last_checkin_date, boost_start_date, boost_until_date,
+                            repeat_penalty_date, repeat_penalty_total,
+                            created_at, updated_at
+                        )
+                        VALUES (
+                            :user_id, :coins, :affection, :total_days, :streak_days,
+                            :last_checkin_date, :boost_start_date, :boost_until_date,
+                            :repeat_penalty_date, :repeat_penalty_total,
+                            :created_at, :updated_at
+                        )
+                        """,
+                        profiles,
+                    )
+                if records:
+                    conn.executemany(
+                        """
+                        INSERT INTO checkin_records (
+                            date_key, user_id, username, bot_name,
+                            base_coins, bonus_coins, coins_reward,
+                            base_affection, bonus_affection, affection_reward,
+                            boost_active, boost_multiplier,
+                            total_coins_after, total_affection_after,
+                            total_days_after, streak_days_after,
+                            note, background_mode, background_source,
+                            background_illust_id, background_title,
+                            background_author, created_at, updated_at
+                        )
+                        VALUES (
+                            :date_key, :user_id, :username, :bot_name,
+                            :base_coins, :bonus_coins, :coins_reward,
+                            :base_affection, :bonus_affection, :affection_reward,
+                            :boost_active, :boost_multiplier,
+                            :total_coins_after, :total_affection_after,
+                            :total_days_after, :streak_days_after,
+                            :note, :background_mode, :background_source,
+                            :background_illust_id, :background_title,
+                            :background_author, :created_at, :updated_at
+                        )
+                        """,
+                        records,
+                    )
+                conn.commit()
+            except Exception:
+                conn.rollback()
+                raise
+
+        return {
+            "schema_version": normalized["schema_version"],
+            "plugin_name": normalized["plugin_name"],
+            "scope": normalized["scope"],
+            "profiles": len(profiles),
+            "records": len(records),
+            "exported_at": normalized["exported_at"],
+            "imported_at": self.now_iso(),
+        }
 
     def _get_or_create_profile_sync(self, user_id: str) -> CheckinProfile:
         with closing(self._connect()) as conn:
@@ -658,3 +764,202 @@ def _parse_date(value: str) -> date | None:
         return date.fromisoformat(value)
     except ValueError:
         return None
+
+
+def dump_checkin_snapshot_json(snapshot: dict[str, Any]) -> str:
+    normalized = _validate_checkin_snapshot(snapshot)
+    return json.dumps(normalized, ensure_ascii=False, indent=2)
+
+
+def load_checkin_snapshot_json(raw: str | bytes) -> dict[str, Any]:
+    if isinstance(raw, bytes):
+        text = raw.decode("utf-8-sig")
+    else:
+        text = str(raw)
+    try:
+        data = json.loads(text)
+    except json.JSONDecodeError as exc:
+        raise ValueError("签到备份文件不是合法的 JSON") from exc
+    return _validate_checkin_snapshot(data)
+
+
+def _validate_checkin_snapshot(snapshot: dict[str, Any]) -> dict[str, Any]:
+    if not isinstance(snapshot, dict):
+        raise ValueError("签到备份数据必须是对象")
+
+    schema_version = snapshot.get("schema_version")
+    if schema_version != CHECKIN_SNAPSHOT_SCHEMA_VERSION:
+        raise ValueError(
+            f"不支持的签到备份版本: {schema_version!r}，当前仅支持 {CHECKIN_SNAPSHOT_SCHEMA_VERSION}"
+        )
+
+    plugin_name = str(snapshot.get("plugin_name") or "").strip()
+    if plugin_name != CHECKIN_SNAPSHOT_PLUGIN_NAME:
+        raise ValueError("签到备份文件不属于当前插件")
+
+    scope = str(snapshot.get("scope") or "").strip()
+    if scope != CHECKIN_SNAPSHOT_SCOPE:
+        raise ValueError("签到备份文件作用域不正确")
+
+    exported_at = str(snapshot.get("exported_at") or "").strip()
+    if not exported_at:
+        raise ValueError("签到备份缺少 exported_at")
+
+    profiles = snapshot.get("profiles")
+    if not isinstance(profiles, list):
+        raise ValueError("签到备份 profiles 必须是数组")
+
+    records = snapshot.get("records")
+    if not isinstance(records, list):
+        raise ValueError("签到备份 records 必须是数组")
+
+    normalized_profiles = [
+        _normalize_profile_snapshot_row(row, index) for index, row in enumerate(profiles)
+    ]
+    normalized_records = [
+        _normalize_record_snapshot_row(row, index) for index, row in enumerate(records)
+    ]
+    return {
+        "schema_version": CHECKIN_SNAPSHOT_SCHEMA_VERSION,
+        "plugin_name": CHECKIN_SNAPSHOT_PLUGIN_NAME,
+        "scope": CHECKIN_SNAPSHOT_SCOPE,
+        "exported_at": exported_at,
+        "profiles": normalized_profiles,
+        "records": normalized_records,
+    }
+
+
+def _normalize_profile_snapshot_row(row: Any, index: int) -> dict[str, Any]:
+    if not isinstance(row, dict):
+        raise ValueError(f"profiles[{index}] 必须是对象")
+    return {
+        "user_id": _require_text(row, "user_id", f"profiles[{index}]"),
+        "coins": _require_int(row, "coins", f"profiles[{index}]"),
+        "affection": _require_float(row, "affection", f"profiles[{index}]"),
+        "total_days": _require_int(row, "total_days", f"profiles[{index}]"),
+        "streak_days": _require_int(row, "streak_days", f"profiles[{index}]"),
+        "last_checkin_date": _require_text(
+            row, "last_checkin_date", f"profiles[{index}]"
+        ),
+        "boost_start_date": _require_text(
+            row, "boost_start_date", f"profiles[{index}]"
+        ),
+        "boost_until_date": _require_text(
+            row, "boost_until_date", f"profiles[{index}]"
+        ),
+        "repeat_penalty_date": _require_text(
+            row, "repeat_penalty_date", f"profiles[{index}]"
+        ),
+        "repeat_penalty_total": _require_float(
+            row, "repeat_penalty_total", f"profiles[{index}]"
+        ),
+        "created_at": _require_text(row, "created_at", f"profiles[{index}]"),
+        "updated_at": _require_text(row, "updated_at", f"profiles[{index}]"),
+    }
+
+
+def _normalize_record_snapshot_row(row: Any, index: int) -> dict[str, Any]:
+    if not isinstance(row, dict):
+        raise ValueError(f"records[{index}] 必须是对象")
+    return {
+        "date_key": _require_text(row, "date_key", f"records[{index}]"),
+        "user_id": _require_text(row, "user_id", f"records[{index}]"),
+        "username": _require_text(row, "username", f"records[{index}]"),
+        "bot_name": _require_text(row, "bot_name", f"records[{index}]"),
+        "base_coins": _require_int(row, "base_coins", f"records[{index}]"),
+        "bonus_coins": _require_int(row, "bonus_coins", f"records[{index}]"),
+        "coins_reward": _require_int(row, "coins_reward", f"records[{index}]"),
+        "base_affection": _require_float(
+            row, "base_affection", f"records[{index}]"
+        ),
+        "bonus_affection": _require_float(
+            row, "bonus_affection", f"records[{index}]"
+        ),
+        "affection_reward": _require_float(
+            row, "affection_reward", f"records[{index}]"
+        ),
+        "boost_active": _require_boolish_int(
+            row, "boost_active", f"records[{index}]"
+        ),
+        "boost_multiplier": _require_float(
+            row, "boost_multiplier", f"records[{index}]"
+        ),
+        "total_coins_after": _require_int(
+            row, "total_coins_after", f"records[{index}]"
+        ),
+        "total_affection_after": _require_float(
+            row, "total_affection_after", f"records[{index}]"
+        ),
+        "total_days_after": _require_int(
+            row, "total_days_after", f"records[{index}]"
+        ),
+        "streak_days_after": _require_int(
+            row, "streak_days_after", f"records[{index}]"
+        ),
+        "note": _require_text(row, "note", f"records[{index}]"),
+        "background_mode": _require_text(
+            row, "background_mode", f"records[{index}]"
+        ),
+        "background_source": _require_text(
+            row, "background_source", f"records[{index}]"
+        ),
+        "background_illust_id": _require_text(
+            row, "background_illust_id", f"records[{index}]"
+        ),
+        "background_title": _require_text(
+            row, "background_title", f"records[{index}]"
+        ),
+        "background_author": _require_text(
+            row, "background_author", f"records[{index}]"
+        ),
+        "created_at": _require_text(row, "created_at", f"records[{index}]"),
+        "updated_at": _require_text(row, "updated_at", f"records[{index}]"),
+    }
+
+
+def _require_text(row: dict[str, Any], key: str, location: str) -> str:
+    if key not in row:
+        raise ValueError(f"{location} 缺少字段 {key}")
+    value = row.get(key)
+    if value is None:
+        return ""
+    return str(value)
+
+
+def _require_int(row: dict[str, Any], key: str, location: str) -> int:
+    if key not in row:
+        raise ValueError(f"{location} 缺少字段 {key}")
+    value = row.get(key)
+    if isinstance(value, bool):
+        raise ValueError(f"{location}.{key} 必须是整数")
+    try:
+        return int(value)
+    except (TypeError, ValueError) as exc:
+        raise ValueError(f"{location}.{key} 必须是整数") from exc
+
+
+def _require_float(row: dict[str, Any], key: str, location: str) -> float:
+    if key not in row:
+        raise ValueError(f"{location} 缺少字段 {key}")
+    value = row.get(key)
+    if isinstance(value, bool):
+        raise ValueError(f"{location}.{key} 必须是数字")
+    try:
+        return float(value)
+    except (TypeError, ValueError) as exc:
+        raise ValueError(f"{location}.{key} 必须是数字") from exc
+
+
+def _require_boolish_int(row: dict[str, Any], key: str, location: str) -> int:
+    if key not in row:
+        raise ValueError(f"{location} 缺少字段 {key}")
+    value = row.get(key)
+    if isinstance(value, bool):
+        return 1 if value else 0
+    try:
+        int_value = int(value)
+    except (TypeError, ValueError) as exc:
+        raise ValueError(f"{location}.{key} 必须是布尔值或 0/1") from exc
+    if int_value not in (0, 1):
+        raise ValueError(f"{location}.{key} 只能是 0 或 1")
+    return int_value

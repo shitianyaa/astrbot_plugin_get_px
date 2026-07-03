@@ -29,7 +29,7 @@ import random
 import re
 import time
 
-from astrbot.api.all import AstrBotConfig, Image, Plain, logger
+from astrbot.api.all import AstrBotConfig, File, Image, Plain, logger
 from astrbot.api.event import AstrMessageEvent, filter
 from astrbot.api.message_components import Node, Nodes
 from astrbot.api.star import Context, Star
@@ -45,6 +45,8 @@ from .checkin import (
     CheckinStore,
     affection_level,
     boost_status_text,
+    dump_checkin_snapshot_json,
+    load_checkin_snapshot_json,
 )
 from .checkin_background import filter_illusts_by_aspect_ratio, parse_aspect_ratio
 from .checkin_card import (
@@ -114,6 +116,7 @@ class GetPxPlugin(Star):
         self.downloader = ImageDownloader()
         self.ai = AiCommenter(context)
         self._last_request: dict[str, float] = {}
+        self.data_dir: Path | None = None
         self.image_index: ImageIndexStore | None = None
         self.image_history: ImageAssetManager | None = None
         self.checkin_store: CheckinStore | None = None
@@ -126,6 +129,7 @@ class GetPxPlugin(Star):
         """插件加载时初始化 Pixiv 客户端。"""
         self._init_client()
         data_dir = StarTools.get_data_dir(PLUGIN_NAME)
+        self.data_dir = Path(data_dir)
         self.image_index = ImageIndexStore(data_dir)
         await self.image_index.cleanup_old_days()
         self.image_history = ImageAssetManager(data_dir)
@@ -216,6 +220,12 @@ class GetPxPlugin(Star):
             self._web_config,
             ["GET"],
             "Get plugin web UI configuration",
+        )
+        self.context.register_web_api(
+            f"/{PLUGIN_NAME}/checkin-import",
+            self._web_checkin_import,
+            ["POST"],
+            "Import checkin backup snapshot",
         )
 
     def _web_internal_error(self, action: str, exc: Exception):
@@ -436,6 +446,48 @@ class GetPxPlugin(Star):
             }
         )
 
+    async def _web_checkin_import(self):
+        if self.checkin_store is None:
+            return jsonify({"success": False, "error": "签到数据尚未初始化"}), 503
+        try:
+            files = await request.files
+            uploaded = []
+            for key in files.keys():
+                uploaded.extend(files.getlist(key))
+            if not uploaded:
+                return jsonify({"success": False, "error": "缺少备份文件"}), 400
+            if len(uploaded) != 1:
+                return jsonify({"success": False, "error": "一次只能上传 1 个备份文件"}), 400
+
+            upload = uploaded[0]
+            filename = str(getattr(upload, "filename", "") or "").strip()
+            if not filename:
+                return jsonify({"success": False, "error": "备份文件名不能为空"}), 400
+            if not filename.lower().endswith(".json"):
+                return jsonify({"success": False, "error": "只支持导入 JSON 备份文件"}), 400
+
+            raw = await self._read_uploaded_file_bytes(upload)
+            snapshot = load_checkin_snapshot_json(raw)
+            rollback_path = await self._write_checkin_snapshot_backup(
+                prefix="checkin-import-backup"
+            )
+            result = await self.checkin_store.import_snapshot(snapshot)
+            return jsonify(
+                {
+                    "success": True,
+                    "filename": filename,
+                    "profiles": result["profiles"],
+                    "records": result["records"],
+                    "exported_at": result["exported_at"],
+                    "imported_at": result["imported_at"],
+                    "rollback_path": str(rollback_path),
+                }
+            )
+        except ValueError as e:
+            return jsonify({"success": False, "error": str(e)}), 400
+        except Exception as e:
+            return self._web_internal_error("导入签到备份", e)
+
     async def terminate(self):
         """插件卸载/停用时清理资源。"""
         if self.client is not None:
@@ -571,6 +623,15 @@ class GetPxPlugin(Star):
         async for result in self._handle_checkin_preview(event):
             yield result
 
+    @filter.permission_type(filter.PermissionType.ADMIN)
+    @filter.command("签到导出")
+    async def cmd_checkin_export(self, event: AstrMessageEvent):
+        """管理员导出签到完整备份。"""
+        event.stop_event()
+        result = await self._handle_checkin_export(event)
+        if result is not None:
+            yield result
+
     @filter.regex(CHECKIN_REGEX_PATTERN)
     async def checkin_auto_trigger(self, event: AstrMessageEvent):
         """纯文本触发签到。"""
@@ -674,6 +735,51 @@ class GetPxPlugin(Star):
             encoded = base64.b64encode(path.read_bytes()).decode("ascii")
             thumbs[item_id] = f"data:image/jpeg;base64,{encoded}"
         return thumbs
+
+    def _plugin_data_dir(self) -> Path:
+        data_dir = self.data_dir
+        if data_dir is None:
+            data_dir = Path(StarTools.get_data_dir(PLUGIN_NAME))
+            self.data_dir = data_dir
+        return Path(data_dir)
+
+    def _checkin_backup_dir(self) -> Path:
+        backup_dir = self._plugin_data_dir() / "checkin_backups"
+        backup_dir.mkdir(parents=True, exist_ok=True)
+        return backup_dir
+
+    @staticmethod
+    def _checkin_backup_name(prefix: str) -> str:
+        return f"{prefix}-{time.strftime('%Y%m%d-%H%M%S')}.json"
+
+    async def _write_checkin_snapshot_backup(self, *, prefix: str) -> Path:
+        if self.checkin_store is None:
+            raise RuntimeError("签到数据尚未初始化")
+        snapshot = await self.checkin_store.export_snapshot()
+        return self._write_checkin_snapshot_file(snapshot, prefix=prefix)
+
+    def _write_checkin_snapshot_file(
+        self, snapshot: dict[str, object], *, prefix: str
+    ) -> Path:
+        backup_dir = self._checkin_backup_dir()
+        file_path = backup_dir / self._checkin_backup_name(prefix)
+        index = 1
+        while file_path.exists():
+            file_path = backup_dir / f"{prefix}-{time.strftime('%Y%m%d-%H%M%S')}-{index}.json"
+            index += 1
+        payload = dump_checkin_snapshot_json(snapshot)
+        file_path.write_text(payload, encoding="utf-8")
+        return file_path
+
+    async def _read_uploaded_file_bytes(self, upload) -> bytes:
+        filename = str(getattr(upload, "filename", "") or "").strip() or "upload.json"
+        safe_name = re.sub(r"[^A-Za-z0-9._-]+", "_", Path(filename).name)
+        temp_path = self._checkin_backup_dir() / f".upload-{time.time_ns()}-{safe_name}"
+        await upload.save(str(temp_path))
+        try:
+            return temp_path.read_bytes()
+        finally:
+            cleanup(str(temp_path))
 
     async def _record_sent_image(
         self,
@@ -969,6 +1075,25 @@ class GetPxPlugin(Star):
         yield event.plain_result(
             "签到测试预览（未写入数据）\n" + self._format_checkin_plain_text(result)
         )
+
+    async def _handle_checkin_export(self, event: AstrMessageEvent):
+        if self.checkin_store is None:
+            return event.plain_result("签到数据尚未初始化，请稍后再试")
+        try:
+            export_path = await self._write_checkin_snapshot_backup(
+                prefix="checkin-export"
+            )
+        except Exception as e:
+            logger.error(f"{LOG_PREFIX} 导出签到备份失败: {e}")
+            return event.plain_result(f"导出签到备份失败: {e}")
+        try:
+            await event.send(
+                event.chain_result([File(name=export_path.name, file=str(export_path))])
+            )
+            return None
+        except Exception as e:
+            logger.error(f"{LOG_PREFIX} 发送签到备份文件失败: {e}")
+            return event.plain_result(f"发送签到备份文件失败: {e}")
 
     async def _handle_checkin_status(self, event: AstrMessageEvent):
         if not self._cfg_bool("checkin_enabled", True):
@@ -2234,6 +2359,9 @@ class GetPxPlugin(Star):
             "",
             "签到测试",
             "　　管理员预览签到卡片，不写入签到数据",
+            "",
+            "签到导出",
+            "　　管理员导出签到完整备份文件",
             "",
             "签到状态",
             "　　查看累计签到、金币、好感度和加持状态",
