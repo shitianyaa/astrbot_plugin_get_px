@@ -115,6 +115,10 @@ class ImageAssetManager:
             if self._thumb_dir.exists():
                 shutil.rmtree(self._thumb_dir, ignore_errors=True)
             self._thumb_dir.mkdir(parents=True, exist_ok=True)
+            logger.info(
+                f"{LOG_PREFIX} 已清空图片历史: records={count}, "
+                f"thumb_dir={self._thumb_dir}"
+            )
             return count
 
     async def get_record(self, record_id: str) -> dict[str, Any] | None:
@@ -250,7 +254,11 @@ class ImageAssetManager:
             if thumb_id:
                 self._safe_unlink(self._thumb_dir / thumb_id)
         self._save_records(kept)
-        self._cleanup_orphan_thumbnails(kept)
+        orphan_count = self._cleanup_orphan_thumbnails(kept)
+        logger.info(
+            f"{LOG_PREFIX} 已删除图片历史记录: records={len(deleted)}, "
+            f"orphan_thumbnails={orphan_count}"
+        )
         return deleted
 
     def _save_records(self, records: list[dict[str, Any]]) -> None:
@@ -264,17 +272,30 @@ class ImageAssetManager:
     def _trim_records(self, records: list[dict[str, Any]]) -> list[dict[str, Any]]:
         if len(records) <= self._limit:
             return records
+        trimmed_count = len(records) - self._limit
         for record in records[self._limit :]:
             thumb_id = str(record.get("thumb_id") or "")
             if thumb_id:
                 self._safe_unlink(self._thumb_dir / thumb_id)
+        logger.info(
+            f"{LOG_PREFIX} 图片历史超过保留上限，已清理旧记录: "
+            f"removed={trimmed_count}, limit={self._limit}"
+        )
         return records[: self._limit]
 
-    def _cleanup_orphan_thumbnails(self, records: list[dict[str, Any]]) -> None:
+    def _cleanup_orphan_thumbnails(self, records: list[dict[str, Any]]) -> int:
         valid = {str(record.get("thumb_id") or "") for record in records}
+        removed = 0
         for path in self._thumb_dir.glob("*.jpg"):
             if path.name not in valid:
                 self._safe_unlink(path)
+                removed += 1
+        if removed:
+            logger.info(
+                f"{LOG_PREFIX} 已清理图片历史孤儿缩略图: "
+                f"removed={removed}, thumb_dir={self._thumb_dir}"
+            )
+        return removed
 
     def _deduplicate_records(
         self, records: list[dict[str, Any]]

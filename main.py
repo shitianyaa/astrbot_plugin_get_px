@@ -303,6 +303,7 @@ class GetPxPlugin(Star):
             return jsonify({"success": False, "error": "图片历史尚未初始化"}), 503
         try:
             deleted = await self.image_history.clear()
+            logger.info(f"{LOG_PREFIX} WebUI 已清空图片历史: deleted={deleted}")
             return jsonify({"success": True, "deleted": deleted})
         except Exception as e:
             return self._web_internal_error("清空图片历史", e)
@@ -318,6 +319,10 @@ class GetPxPlugin(Star):
             deleted = await self.image_history.delete_record(record_id)
             if deleted is None:
                 return jsonify({"success": False, "error": "记录不存在"}), 404
+            logger.info(
+                f"{LOG_PREFIX} WebUI 已删除图片历史记录: "
+                f"record_id={record_id}, illust_id={deleted.get('illust_id', '')}"
+            )
             return jsonify({"success": True, "record": deleted})
         except Exception as e:
             return self._web_internal_error("删除图片历史记录", e)
@@ -357,6 +362,10 @@ class GetPxPlugin(Star):
                 if str(item.get("illust_id") or "") == illust_id:
                     blacklist_record = item
                     break
+            logger.info(
+                f"{LOG_PREFIX} WebUI 已加入图片黑名单并清理历史记录: "
+                f"illust_id={illust_id}, deleted={len(deleted)}, thumb_id={thumb_id}"
+            )
             return jsonify(
                 {
                     "success": True,
