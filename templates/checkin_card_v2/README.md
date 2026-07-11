@@ -27,5 +27,7 @@
 
 - 首次签到把最终问候与作品信息写入当天记录；重复签到不重新发奖、不扣好感度、不重新选图，也不再次调用问候模型。
 - 成品 JPEG 缓存保留一天，同一天重复签到优先重发缓存；缓存缺失、损坏或模板版本变化时按已保存记录重建。
+- 法定节假日数据在首次安装、插件版本变化及距上次成功更新满 180 天时后台更新；网络失败使用旧缓存和内置公历/农历规则，不影响签到。
 - AI 问候默认关闭。启用后优先使用 `checkin_ai_greeting_provider_id` 指定的文本模型，留空时尝试当前会话文本模型；默认 `8` 秒超时，任何失败均回退本地文案。
+- 用户佩戴称号通过 ViewModel 的 `user_title` 注入；生日、全局事件、节假日、里程碑和连签按优先级生成主事件及单行次要备注。
 - 对应配置为 `checkin_ai_greeting_enabled`、`checkin_ai_greeting_provider_id`、`checkin_ai_greeting_prompt`、`checkin_ai_greeting_timeout`。

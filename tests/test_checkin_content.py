@@ -4,6 +4,7 @@ from dataclasses import replace
 
 from checkin import CheckinProfile, CheckinRecord
 from checkin_content import resolve_checkin_content
+from holiday_calendar import OnlineHoliday
 
 
 def make_record(**overrides: object) -> CheckinRecord:
@@ -103,10 +104,12 @@ def test_event_priority_birthday_then_custom_then_holiday() -> None:
 
     assert birthday.title == "生日纪念"
     assert birthday.event_key == "birthday"
-    assert birthday.badges[0] == "生日"
+    assert birthday.badges == ("30天",)
     assert custom.event_key == "custom"
     assert custom.event_label == "相遇纪念日"
+    assert custom.badges == ("30天",)
     assert built_in.event_key == "national_day"
+    assert built_in.badges == ("30天",)
 
 
 def test_event_priority_holiday_then_milestone_then_streak_then_normal() -> None:
@@ -150,6 +153,74 @@ def test_known_lunar_festivals_are_resolved_with_lunar_python() -> None:
         "mid_autumn",
         "中秋节",
     )
+
+
+def test_online_off_day_preserves_builtin_calendar_and_workday_does_not_override() -> None:
+    record = make_record(date_key="2026-10-01")
+    profile = make_profile()
+
+    online = resolve_checkin_content(
+        record,
+        profile,
+        online_holiday=OnlineHoliday("国庆黄金周", True),
+    )
+    workday = resolve_checkin_content(
+        record,
+        profile,
+        online_holiday=OnlineHoliday("国庆节", False),
+    )
+
+    assert online.event_key == "national_day"
+    assert online.event_label == "国庆节"
+    assert workday.event_key == "national_day"
+
+
+def test_event_stack_keeps_secondary_events_and_workday_note() -> None:
+    record = make_record(
+        date_key="2026-07-11", total_days_after=30, streak_days_after=7
+    )
+    content = resolve_checkin_content(
+        record,
+        make_profile(total_days=30, streak_days=7),
+        birthday_label="生日",
+        custom_event_label="相遇纪念日",
+        online_holiday=OnlineHoliday("调休", False),
+        secondary_event_labels=("服务器周年",),
+        current_title="七日同行",
+        unlocked_achievements=("月下常客",),
+    )
+
+    assert content.event_key == "birthday"
+    assert content.secondary_note.startswith(
+        "相遇纪念日 · 服务器周年 · 累计签到 30 天 · 连续签到 7 天"
+    )
+    assert len(content.secondary_note) <= 44
+    plain = content.context.to_plain_text()
+    assert "当前称号：七日同行" in plain
+    assert "今日解锁：月下常客" in plain
+
+
+def test_workday_uses_specific_local_greeting_without_replacing_normal_title() -> None:
+    content = resolve_checkin_content(
+        make_record(total_days_after=12, streak_days_after=3),
+        make_profile(),
+        online_holiday=OnlineHoliday("调休", False),
+    )
+    assert content.event_key == "normal"
+    assert content.title == "今日签到"
+    assert content.secondary_note == "今日为调休工作日"
+    assert "调休" in content.greeting or "补班" in content.greeting
+
+
+def test_online_holiday_keeps_builtin_event_key_and_specific_copy() -> None:
+    content = resolve_checkin_content(
+        make_record(date_key="2026-02-17"),
+        make_profile(),
+        online_holiday=OnlineHoliday("春节", True),
+    )
+    assert content.event_key == "spring_festival"
+    assert content.title == "新春相遇"
+    assert "春节" in content.greeting or "新春" in content.greeting
 
 
 def test_content_limits_badges_and_greeting_and_accepts_plain_birthday_data() -> None:

@@ -134,11 +134,6 @@ def _card_title(event_key: str, event_label: str) -> str:
 
 def _default_badges(record: CheckinRecord) -> tuple[str, ...]:
     badges: list[str] = []
-    if record.event_key == "birthday":
-        badges.append("生日")
-    elif record.event_label:
-        badges.append(_truncate_display(record.event_label, 8))
-
     if record.total_days_after in MILESTONES and record.event_key != "milestone":
         badges.append(f"{record.total_days_after}天")
     elif (
@@ -147,9 +142,7 @@ def _default_badges(record: CheckinRecord) -> tuple[str, ...]:
         and record.event_key != "streak"
     ):
         badges.append(f"连签{record.streak_days_after}天")
-    if record.boost_active:
-        badges.append(f"×{record.boost_multiplier:g}")
-    return tuple(badges[:2])
+    return tuple(badges[:1])
 
 
 def _affection_next_text(value: float, level: dict[str, Any]) -> str:
@@ -214,7 +207,7 @@ def build_checkin_card_view_model(
     return CheckinCardViewModel(
         date_label=_date_label(record.date_key),
         title=_truncate_display(title, 12),
-        badges=tuple(_truncate_display(badge, 8) for badge in badges)[:2],
+        badges=tuple(_truncate_display(badge, 8) for badge in badges)[:1],
         event_label=_one_line(event_label),
         username=_one_line(record.username or "访客"),
         avatar_url=_one_line(avatar_url),

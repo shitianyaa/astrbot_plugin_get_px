@@ -39,6 +39,7 @@ from quart import jsonify, request, send_file
 
 from .ai_commenter import AiCommenter
 from .checkin import (
+    ACHIEVEMENTS,
     BOOST_PRODUCTS,
     CheckinProfile,
     CheckinRecord,
@@ -49,6 +50,7 @@ from .checkin import (
     dump_checkin_snapshot_json,
     load_checkin_snapshot_json,
 )
+from .checkin_birthday import birthday_matches, parse_month_day, parse_qq_birthday
 from .checkin_background import (
     CHECKIN_ARTWORK_TARGET_RATIO,
     CHECKIN_ARTWORK_TOLERANCE,
@@ -70,6 +72,7 @@ from .checkin_greeting import (
 from .downloader import ImageDownloader, cleanup, pick_image_url, pick_image_url_exact
 from .image_index import ImageIndexStore, ordered_by_unused
 from .image_history import DEFAULT_HISTORY_LIMIT, ImageAssetManager
+from .holiday_calendar import HolidayCalendar
 from .pixiv_client import PixivClient
 
 # ──────────────────────────────────────────────────────────────────────
@@ -78,6 +81,7 @@ from .pixiv_client import PixivClient
 
 LOG_PREFIX = "[GetPx]"
 PLUGIN_NAME = "astrbot_plugin_get_px"
+PLUGIN_VERSION = "2.6.1"
 WEB_INTERNAL_ERROR_MESSAGE = "服务内部错误，请稍后重试"
 
 AUTO_TRIGGER_PATTERN = r"^/?(来\s*(.*?)(份|个|张|点))(.*?)(福利|色|瑟|涩|塞)?图$"
@@ -133,6 +137,8 @@ class GetPxPlugin(Star):
         self.checkin_store: CheckinStore | None = None
         self.checkin_cache: CheckinCardCache | None = None
         self.checkin_greeting = CheckinGreetingGenerator(context)
+        self.holiday_calendar: HolidayCalendar | None = None
+        self._holiday_refresh_task: asyncio.Task | None = None
         self._checkin_flow_locks: dict[str, asyncio.Lock] = {}
 
     # ──────────────────────────────────────────────────────────────
@@ -152,8 +158,27 @@ class GetPxPlugin(Star):
             self.data_dir / "checkin_card_cache"
         )
         self.checkin_cache.cleanup_expired(force=True)
+        self.holiday_calendar = HolidayCalendar(
+            self.data_dir,
+            plugin_version=PLUGIN_VERSION,
+        )
+        self._holiday_refresh_task = asyncio.create_task(
+            self._refresh_holiday_calendar()
+        )
         self._register_image_history_web_apis()
         logger.info(f"{LOG_PREFIX} 插件已加载")
+
+    async def _refresh_holiday_calendar(self) -> None:
+        if self.holiday_calendar is None:
+            return
+        try:
+            updated = await self.holiday_calendar.refresh_if_due()
+            if updated:
+                logger.info(f"{LOG_PREFIX} 节假日数据已更新")
+        except asyncio.CancelledError:
+            raise
+        except Exception as exc:
+            logger.warning(f"{LOG_PREFIX} 节假日数据更新失败，继续使用本地规则: {exc}")
 
     def _init_client(self):
         """根据配置初始化 Pixiv 客户端。"""
@@ -505,6 +530,9 @@ class GetPxPlugin(Star):
                     "filename": filename,
                     "profiles": result["profiles"],
                     "records": result["records"],
+                    "preferences": result.get("preferences", 0),
+                    "global_events": result.get("global_events", 0),
+                    "achievements": result.get("achievements", 0),
                     "exported_at": result["exported_at"],
                     "imported_at": result["imported_at"],
                     "rollback_path": str(rollback_path),
@@ -517,6 +545,10 @@ class GetPxPlugin(Star):
 
     async def terminate(self):
         """插件卸载/停用时清理资源。"""
+        if self._holiday_refresh_task is not None:
+            self._holiday_refresh_task.cancel()
+            await asyncio.gather(self._holiday_refresh_task, return_exceptions=True)
+            self._holiday_refresh_task = None
         if self.client is not None:
             await self.client.close()
             self.client = None
@@ -690,6 +722,50 @@ class GetPxPlugin(Star):
         event.stop_event()
         async for result in self._handle_buy_checkin_boost(event, days):
             yield result
+
+    @filter.command("签到生日")
+    async def cmd_checkin_birthday(self, event: AstrMessageEvent, action: str = "", value: str = ""):
+        """查看、设置、清除或同步签到生日。"""
+        event.stop_event()
+        yield event.plain_result(await self._handle_checkin_birthday(event, action, value))
+
+    @filter.command("签到成就")
+    async def cmd_checkin_achievements(self, event: AstrMessageEvent):
+        """查看签到成就。"""
+        event.stop_event()
+        yield event.plain_result(await self._handle_checkin_achievements(event))
+
+    @filter.command("签到称号")
+    async def cmd_checkin_titles(self, event: AstrMessageEvent):
+        """查看签到称号。"""
+        event.stop_event()
+        yield event.plain_result(await self._handle_checkin_titles(event))
+
+    @filter.command("佩戴称号")
+    async def cmd_select_checkin_title(self, event: AstrMessageEvent, title: str = ""):
+        """佩戴已解锁的签到称号。"""
+        event.stop_event()
+        yield event.plain_result(await self._handle_select_checkin_title(event, title))
+
+    @filter.permission_type(filter.PermissionType.ADMIN)
+    @filter.command("签到事件")
+    async def cmd_checkin_event_admin(
+        self, event: AstrMessageEvent, action: str = "", event_type: str = "", date_value: str = "", name: str = ""
+    ):
+        """管理员维护全局签到纪念日。"""
+        event.stop_event()
+        raw = event.get_message_str().strip().lstrip("/")
+        parts = raw.split(maxsplit=4)
+        if parts and parts[0] == "签到事件":
+            action = parts[1] if len(parts) > 1 else action
+            event_type = parts[2] if len(parts) > 2 else event_type
+            date_value = parts[3] if len(parts) > 3 else date_value
+            name = parts[4] if len(parts) > 4 else name
+        yield event.plain_result(
+            await self._handle_checkin_event_admin(
+                event, action, event_type, date_value, name
+            )
+        )
 
     @filter.regex(AUTO_TRIGGER_PATTERN)
     async def auto_trigger(self, event: AstrMessageEvent):
@@ -1014,6 +1090,7 @@ class GetPxPlugin(Star):
         card_path: Path | None = None
         claim_held = False
         profile_snapshot = self._checkin_profile_from_record(record)
+        user_title = await self._get_checkin_user_title(record.user_id)
         try:
             if result.duplicate:
                 background = self._checkin_background_from_record(record)
@@ -1031,6 +1108,7 @@ class GetPxPlugin(Star):
                 record=record,
                 background=background,
                 bot_name=bot_name,
+                user_title=user_title,
             )
             cached_path = cache.get(record.date_key, cache_key)
             if cached_path is None and result.duplicate:
@@ -1046,6 +1124,7 @@ class GetPxPlugin(Star):
                     record=record,
                     background=background,
                     bot_name=bot_name,
+                    user_title=user_title,
                 )
                 return renderer_source_path
 
@@ -1105,9 +1184,51 @@ class GetPxPlugin(Star):
         if record.greeting:
             return record
 
+        feature_store_available = all(
+            hasattr(self.checkin_store, name)
+            for name in ("get_user_preference", "unlock_achievements", "events_for_date")
+        )
+        preference = None
+        unlocked_ids: tuple[str, ...] = ()
+        title = ""
+        if feature_store_available:
+            preference = await self._ensure_checkin_birthday(event, record.user_id)
+            unlocked_ids = await self.checkin_store.unlock_achievements(
+                self._checkin_profile_from_record(record)
+            )
+            preference = await self.checkin_store.get_user_preference(record.user_id)
+            title = (
+                str(ACHIEVEMENTS[preference.selected_title_id]["title"])
+                if preference.selected_title_id in ACHIEVEMENTS
+                else ""
+            )
+        birthday_label = ""
+        if preference is not None and preference.birthday_label and birthday_matches(
+            record.date_key, preference.birthday_month, preference.birthday_day
+        ):
+            birthday_label = "生日"
+        global_events = (
+            await self.checkin_store.events_for_date(record.date_key)
+            if feature_store_available else ()
+        )
+        custom_event_label = global_events[0].name if global_events else ""
+        extra_global_labels = tuple(item.name for item in global_events[1:])
+
         content = resolve_checkin_content(
             record,
             self._checkin_profile_from_record(record),
+            birthday_label=birthday_label,
+            custom_event_label=custom_event_label,
+            online_holiday=(
+                calendar.lookup(record.date_key)
+                if (calendar := getattr(self, "holiday_calendar", None)) is not None
+                else None
+            ),
+            secondary_event_labels=extra_global_labels,
+            current_title=title,
+            unlocked_achievements=tuple(
+                str(ACHIEVEMENTS[item]["title"]) for item in unlocked_ids
+            ),
         )
         record = await self.checkin_store.update_record_content(
             user_id=record.user_id,
@@ -1151,6 +1272,49 @@ class GetPxPlugin(Star):
             template_version=record.template_version or "v2",
         )
 
+    async def _ensure_checkin_birthday(self, event: AstrMessageEvent, user_id: str):
+        preference = await self.checkin_store.get_user_preference(user_id)
+        if preference.birthday_source == "manual" or preference.qq_birthday_checked:
+            return preference
+        parsed = await self._fetch_qq_birthday(event, user_id)
+        await self.checkin_store.mark_qq_birthday_checked(user_id)
+        if parsed is not None:
+            return await self.checkin_store.set_qq_birthday_if_not_manual(
+                user_id=user_id, month=parsed[0], day=parsed[1]
+            )
+        return await self.checkin_store.get_user_preference(user_id)
+
+    async def _get_checkin_user_title(self, user_id: str) -> str:
+        store = self.checkin_store
+        if store is None or not hasattr(store, "get_user_preference"):
+            return ""
+        preference = await store.get_user_preference(user_id)
+        if preference.selected_title_id not in ACHIEVEMENTS:
+            return ""
+        return str(ACHIEVEMENTS[preference.selected_title_id]["title"])
+
+    @staticmethod
+    async def _fetch_qq_birthday(
+        event: AstrMessageEvent, user_id: str
+    ) -> tuple[int, int] | None:
+        try:
+            if event.get_platform_name() != "aiocqhttp":
+                return None
+            bot = getattr(event, "bot", None)
+            if bot is None or not hasattr(bot, "call_action"):
+                return None
+            payload = await asyncio.wait_for(
+                bot.call_action(
+                    action="get_stranger_info",
+                    user_id=int(user_id),
+                    no_cache=False,
+                ),
+                timeout=3.0,
+            )
+            return parse_qq_birthday(payload)
+        except (asyncio.TimeoutError, TypeError, ValueError, Exception):
+            return None
+
     @staticmethod
     def _checkin_profile_from_record(record: CheckinRecord) -> CheckinProfile:
         return CheckinProfile(
@@ -1186,6 +1350,7 @@ class GetPxPlugin(Star):
         record: CheckinRecord,
         background: CardBackground | None,
         bot_name: str,
+        user_title: str = "",
     ) -> str:
         background = background or self._checkin_background_from_record(record)
         identity_background = CardBackground(
@@ -1206,6 +1371,7 @@ class GetPxPlugin(Star):
             bot_name=bot_name,
             avatar_url=avatar_url,
             background=identity_background,
+            user_title=user_title,
         )
         view_model["background_mode"] = identity_background.mode
         view_model["background_source"] = identity_background.source
@@ -1422,6 +1588,129 @@ class GetPxPlugin(Star):
         ]
         yield event.plain_result("\n".join(lines))
 
+    async def _handle_checkin_birthday(
+        self, event: AstrMessageEvent, action: str, value: str
+    ) -> str:
+        if self.checkin_store is None:
+            return "签到数据尚未初始化，请稍后再试"
+        user_id = str(event.get_sender_id() or "")
+        if not user_id:
+            return "无法识别用户 ID"
+        action = str(action or "").strip()
+        try:
+            if action == "设置":
+                parsed = parse_month_day(value)
+                if parsed is None:
+                    return "用法: /签到生日 设置 MM-DD"
+                preference = await self.checkin_store.set_birthday(
+                    user_id=user_id, month=parsed[0], day=parsed[1], source="manual"
+                )
+                return f"生日已设置为 {preference.birthday_label}（手动）"
+            if action == "清除":
+                await self.checkin_store.clear_birthday(user_id)
+                return "生日已清除，下次签到会重新尝试读取 QQ 资料"
+            if action == "同步":
+                preference = await self.checkin_store.get_user_preference(user_id)
+                if preference.birthday_source == "manual":
+                    return "当前使用手动生日；如需采用 QQ 资料，请先清除生日"
+                parsed = await self._fetch_qq_birthday(event, user_id)
+                await self.checkin_store.mark_qq_birthday_checked(user_id)
+                if parsed is None:
+                    return "未能从当前 QQ 平台资料中读取生日"
+                preference = await self.checkin_store.set_qq_birthday_if_not_manual(
+                    user_id=user_id, month=parsed[0], day=parsed[1]
+                )
+                if preference.birthday_source == "manual":
+                    return "同步期间生日已被手动设置，已保留手动生日"
+                return f"已从 QQ 资料同步生日 {preference.birthday_label}"
+            preference = await self.checkin_store.get_user_preference(user_id)
+            if preference.birthday_label:
+                source = "手动" if preference.birthday_source == "manual" else "QQ资料"
+                return f"当前签到生日: {preference.birthday_label}（{source}）"
+            status = "已尝试自动读取" if preference.qq_birthday_checked else "尚未尝试自动读取"
+            return f"尚未设置签到生日（{status}）\n用法: /签到生日 设置 MM-DD"
+        except ValueError as exc:
+            return str(exc)
+
+    async def _handle_checkin_achievements(self, event: AstrMessageEvent) -> str:
+        if self.checkin_store is None:
+            return "签到数据尚未初始化，请稍后再试"
+        user_id = str(event.get_sender_id() or "")
+        profile = await self.checkin_store.get_profile(user_id)
+        unlocked = set(await self.checkin_store.list_achievements(user_id))
+        lines = ["签到成就"]
+        for achievement_id, definition in ACHIEVEMENTS.items():
+            value = profile.total_days if definition["kind"] == "total" else profile.streak_days
+            mark = "✓" if achievement_id in unlocked else "·"
+            lines.append(f"{mark} {definition['title']}（{min(value, definition['threshold'])}/{definition['threshold']}）")
+        return "\n".join(lines)
+
+    async def _handle_checkin_titles(self, event: AstrMessageEvent) -> str:
+        if self.checkin_store is None:
+            return "签到数据尚未初始化，请稍后再试"
+        user_id = str(event.get_sender_id() or "")
+        preference = await self.checkin_store.get_user_preference(user_id)
+        unlocked = await self.checkin_store.list_achievements(user_id)
+        lines = ["签到称号"]
+        if not unlocked:
+            lines.append("尚未解锁称号，完成首次签到即可获得")
+        for achievement_id in unlocked:
+            title = str(ACHIEVEMENTS[achievement_id]["title"])
+            mark = "当前" if achievement_id == preference.selected_title_id else "可用"
+            lines.append(f"[{mark}] {title}（{achievement_id}）")
+        lines.append("使用 /佩戴称号 <称号ID或名称> 切换")
+        return "\n".join(lines)
+
+    async def _handle_select_checkin_title(self, event: AstrMessageEvent, title: str) -> str:
+        if self.checkin_store is None:
+            return "签到数据尚未初始化，请稍后再试"
+        if not title:
+            return "用法: /佩戴称号 <称号ID或名称>"
+        try:
+            title_id = await self.checkin_store.select_title(
+                user_id=str(event.get_sender_id() or ""), title=title
+            )
+        except ValueError as exc:
+            return str(exc)
+        return f"已佩戴称号：{ACHIEVEMENTS[title_id]['title']}"
+
+    async def _handle_checkin_event_admin(
+        self, event: AstrMessageEvent, action: str, event_type: str, date_value: str, name: str
+    ) -> str:
+        if self.checkin_store is None:
+            return "签到数据尚未初始化，请稍后再试"
+        if action == "列表" or not action:
+            events = await self.checkin_store.list_global_events()
+            if not events:
+                return "当前没有全局签到事件"
+            return "\n".join(
+                ["全局签到事件"]
+                + [f"#{item.event_id} {item.event_type} {item.date_value} {item.name}" for item in events]
+            )
+        if action == "删除":
+            if not event_type.isdigit():
+                return "用法: /签到事件 删除 ID"
+            deleted = await self.checkin_store.delete_global_event(int(event_type))
+            return "事件已删除" if deleted else "未找到该事件"
+        if action in {"添加年度", "添加单次"}:
+            name = " ".join(part for part in (date_value, name) if part).strip()
+            date_value = event_type
+            event_type = action.removeprefix("添加")
+            action = "添加"
+        if action != "添加":
+            return "用法: /签到事件 添加 <年度|单次> <日期> <名称>"
+        type_map = {"年度": "annual", "单次": "once"}
+        if event_type not in type_map or not name:
+            return "用法: /签到事件 添加年度 MM-DD 名称\n或: /签到事件 添加单次 YYYY-MM-DD 名称"
+        try:
+            item = await self.checkin_store.add_global_event(
+                event_type=type_map[event_type], date_value=date_value,
+                name=name, created_by=str(event.get_sender_id() or ""),
+            )
+        except ValueError as exc:
+            return str(exc)
+        return f"已添加事件 #{item.event_id}: {item.date_value} {item.name}"
+
     async def _handle_buy_checkin_boost(self, event: AstrMessageEvent, days: str):
         if not self._cfg_bool("checkin_enabled", True):
             yield event.plain_result("签到功能已关闭")
@@ -1492,6 +1781,7 @@ class GetPxPlugin(Star):
         record,
         background: CardBackground | None,
         bot_name: str,
+        user_title: str = "",
     ) -> str:
         avatar_url = self._checkin_avatar_url(event) if self._cfg_bool("checkin_avatar_enabled", True) else ""
         width = CHECKIN_CARD_WIDTH
@@ -1502,6 +1792,7 @@ class GetPxPlugin(Star):
             bot_name=bot_name,
             avatar_url=avatar_url,
             background=background,
+            user_title=user_title,
             width=width,
             height=height,
         )
@@ -2655,6 +2946,12 @@ class GetPxPlugin(Star):
             "",
             "签到商店 / 购买加持",
             "　　查看并购买好感度双倍加持",
+            "",
+            "签到生日 / 签到成就 / 签到称号 / 佩戴称号",
+            "　　管理生日，查看成就并切换卡片称号",
+            "",
+            "签到事件（管理员）",
+            "　　添加、查看或删除全局年度/单次纪念日",
             "",
             "🤖 自然语言触发（需配置开启 auto_trigger_enabled）",
             "　　来一份图 → 发送 1 张排行榜图片",

@@ -507,7 +507,7 @@ class CheckinStoreTest(unittest.IsolatedAsyncioTestCase):
             )
 
             snapshot = await source.export_snapshot()
-            self.assertEqual(snapshot["schema_version"], 2)
+            self.assertEqual(snapshot["schema_version"], 3)
             serialized = dump_checkin_snapshot_json(snapshot)
             restored = load_checkin_snapshot_json(serialized.encode("utf-8"))
 
@@ -554,7 +554,7 @@ class CheckinStoreTest(unittest.IsolatedAsyncioTestCase):
             normalized = load_checkin_snapshot_json(
                 dump_checkin_snapshot_json(legacy).encode("utf-8")
             )
-            self.assertEqual(normalized["schema_version"], 2)
+            self.assertEqual(normalized["schema_version"], 3)
             self.assertEqual(normalized["records"][0]["event_key"], "")
             self.assertEqual(normalized["records"][0]["event_label"], "")
             self.assertEqual(normalized["records"][0]["greeting"], "")
@@ -565,7 +565,7 @@ class CheckinStoreTest(unittest.IsolatedAsyncioTestCase):
             target = FrozenCheckinStore(dst_tmp, date_key="2026-05-26")
             summary = await target.import_snapshot(normalized)
             record = await target.get_today_record("20002")
-            self.assertEqual(summary["schema_version"], 2)
+            self.assertEqual(summary["schema_version"], 3)
             self.assertIsNotNone(record)
             self.assertEqual(record.greeting_source, "local")
             self.assertEqual(record.template_version, "v2")

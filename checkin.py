@@ -8,13 +8,14 @@ import hashlib
 import json
 import random
 import sqlite3
+import unicodedata
 from pathlib import Path
 from typing import Any
 from zoneinfo import ZoneInfo
 
 
 SHANGHAI_TZ = ZoneInfo("Asia/Shanghai")
-CHECKIN_SNAPSHOT_SCHEMA_VERSION = 2
+CHECKIN_SNAPSHOT_SCHEMA_VERSION = 3
 CHECKIN_SNAPSHOT_SCOPE = "checkin"
 CHECKIN_SNAPSHOT_PLUGIN_NAME = "astrbot_plugin_get_px"
 
@@ -35,6 +36,15 @@ BOOST_PRODUCTS: dict[int, int] = {
     1: 200,
     3: 500,
     7: 1000,
+}
+
+ACHIEVEMENTS: dict[str, dict[str, Any]] = {
+    "first_meeting": {"title": "初见旅人", "kind": "total", "threshold": 1},
+    "streak_7": {"title": "七日同行", "kind": "streak", "threshold": 7},
+    "total_30": {"title": "月下常客", "kind": "total", "threshold": 30},
+    "total_100": {"title": "百日珍藏", "kind": "total", "threshold": 100},
+    "total_365": {"title": "周年相守", "kind": "total", "threshold": 365},
+    "total_1000": {"title": "千日物语", "kind": "total", "threshold": 1000},
 }
 
 
@@ -106,6 +116,35 @@ class BoostPurchaseResult:
     message: str
 
 
+@dataclass(frozen=True)
+class CheckinUserPreference:
+    user_id: str
+    birthday_month: int
+    birthday_day: int
+    birthday_source: str
+    qq_birthday_checked: bool
+    selected_title_id: str
+    created_at: str
+    updated_at: str
+
+    @property
+    def birthday_label(self) -> str:
+        if self.birthday_month <= 0 or self.birthday_day <= 0:
+            return ""
+        return f"{self.birthday_month:02d}-{self.birthday_day:02d}"
+
+
+@dataclass(frozen=True)
+class CheckinGlobalEvent:
+    event_id: int
+    event_type: str
+    date_value: str
+    name: str
+    created_by: str
+    created_at: str
+    updated_at: str
+
+
 class CheckinStore:
     def __init__(self, data_dir: Path | str):
         self._db_path = Path(data_dir) / "checkin.sqlite3"
@@ -168,6 +207,94 @@ class CheckinStore:
         async with self._lock:
             return await asyncio.to_thread(
                 self._purchase_boost_sync, date_key, now, user_id, days
+            )
+
+    async def get_user_preference(self, user_id: str) -> CheckinUserPreference:
+        async with self._lock:
+            return await asyncio.to_thread(
+                self._get_or_create_preference_sync, str(user_id or "")
+            )
+
+    async def set_birthday(
+        self, *, user_id: str, month: int, day: int, source: str
+    ) -> CheckinUserPreference:
+        _validate_month_day(month, day)
+        if source not in {"manual", "qq"}:
+            raise ValueError("birthday source must be manual or qq")
+        async with self._lock:
+            return await asyncio.to_thread(
+                self._set_birthday_sync, str(user_id or ""), month, day, source
+            )
+
+    async def set_qq_birthday_if_not_manual(
+        self, *, user_id: str, month: int, day: int
+    ) -> CheckinUserPreference:
+        _validate_month_day(month, day)
+        async with self._lock:
+            return await asyncio.to_thread(
+                self._set_qq_birthday_if_not_manual_sync,
+                str(user_id or ""),
+                month,
+                day,
+            )
+
+    async def clear_birthday(self, user_id: str) -> CheckinUserPreference:
+        async with self._lock:
+            return await asyncio.to_thread(
+                self._clear_birthday_sync, str(user_id or "")
+            )
+
+    async def mark_qq_birthday_checked(self, user_id: str) -> None:
+        async with self._lock:
+            await asyncio.to_thread(
+                self._mark_qq_birthday_checked_sync, str(user_id or "")
+            )
+
+    async def unlock_achievements(self, profile: CheckinProfile) -> tuple[str, ...]:
+        async with self._lock:
+            return await asyncio.to_thread(self._unlock_achievements_sync, profile)
+
+    async def list_achievements(self, user_id: str) -> tuple[str, ...]:
+        async with self._lock:
+            return await asyncio.to_thread(
+                self._list_achievements_sync, str(user_id or "")
+            )
+
+    async def select_title(self, *, user_id: str, title: str) -> str:
+        async with self._lock:
+            return await asyncio.to_thread(
+                self._select_title_sync, str(user_id or ""), str(title or "")
+            )
+
+    async def add_global_event(
+        self, *, event_type: str, date_value: str, name: str, created_by: str
+    ) -> CheckinGlobalEvent:
+        normalized_type, normalized_date = _validate_global_event_date(
+            event_type, date_value
+        )
+        clean_name = _clean_event_name(name)
+        async with self._lock:
+            return await asyncio.to_thread(
+                self._add_global_event_sync,
+                normalized_type,
+                normalized_date,
+                clean_name,
+                str(created_by or ""),
+            )
+
+    async def list_global_events(self) -> tuple[CheckinGlobalEvent, ...]:
+        async with self._lock:
+            return await asyncio.to_thread(self._list_global_events_sync)
+
+    async def delete_global_event(self, event_id: int) -> bool:
+        async with self._lock:
+            return await asyncio.to_thread(self._delete_global_event_sync, int(event_id))
+
+    async def events_for_date(self, date_key: str) -> tuple[CheckinGlobalEvent, ...]:
+        day = date.fromisoformat(date_key)
+        async with self._lock:
+            return await asyncio.to_thread(
+                self._events_for_date_sync, day.isoformat(), day.strftime("%m-%d")
             )
 
     async def update_record_background(
@@ -328,6 +455,44 @@ class CheckinStore:
             }.items():
                 if name not in record_columns:
                     conn.execute(f"ALTER TABLE checkin_records ADD COLUMN {name} {ddl}")
+            conn.execute(
+                """
+                CREATE TABLE IF NOT EXISTS checkin_user_preferences (
+                    user_id TEXT PRIMARY KEY,
+                    birthday_month INTEGER NOT NULL DEFAULT 0,
+                    birthday_day INTEGER NOT NULL DEFAULT 0,
+                    birthday_source TEXT NOT NULL DEFAULT '',
+                    qq_birthday_checked INTEGER NOT NULL DEFAULT 0,
+                    selected_title_id TEXT NOT NULL DEFAULT '',
+                    created_at TEXT NOT NULL,
+                    updated_at TEXT NOT NULL
+                )
+                """
+            )
+            conn.execute(
+                """
+                CREATE TABLE IF NOT EXISTS checkin_global_events (
+                    event_id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    event_type TEXT NOT NULL,
+                    date_value TEXT NOT NULL,
+                    name TEXT NOT NULL,
+                    created_by TEXT NOT NULL DEFAULT '',
+                    created_at TEXT NOT NULL,
+                    updated_at TEXT NOT NULL,
+                    UNIQUE(event_type, date_value)
+                )
+                """
+            )
+            conn.execute(
+                """
+                CREATE TABLE IF NOT EXISTS checkin_achievements (
+                    user_id TEXT NOT NULL,
+                    achievement_id TEXT NOT NULL,
+                    unlocked_at TEXT NOT NULL,
+                    PRIMARY KEY (user_id, achievement_id)
+                )
+                """
+            )
             conn.commit()
 
     def _export_snapshot_sync(self) -> dict[str, Any]:
@@ -344,6 +509,15 @@ class CheckinStore:
                     "SELECT * FROM checkin_records ORDER BY date_key, user_id"
                 ).fetchall()
             ]
+            preferences = [dict(row) for row in conn.execute(
+                "SELECT * FROM checkin_user_preferences ORDER BY user_id"
+            ).fetchall()]
+            global_events = [dict(row) for row in conn.execute(
+                "SELECT * FROM checkin_global_events ORDER BY event_id"
+            ).fetchall()]
+            achievements = [dict(row) for row in conn.execute(
+                "SELECT * FROM checkin_achievements ORDER BY user_id, achievement_id"
+            ).fetchall()]
         return {
             "schema_version": CHECKIN_SNAPSHOT_SCHEMA_VERSION,
             "plugin_name": CHECKIN_SNAPSHOT_PLUGIN_NAME,
@@ -351,17 +525,26 @@ class CheckinStore:
             "exported_at": self.now_iso(),
             "profiles": profiles,
             "records": records,
+            "preferences": preferences,
+            "global_events": global_events,
+            "achievements": achievements,
         }
 
     def _import_snapshot_sync(self, snapshot: dict[str, Any]) -> dict[str, Any]:
         normalized = _validate_checkin_snapshot(snapshot)
         profiles = normalized["profiles"]
         records = normalized["records"]
+        preferences = normalized["preferences"]
+        global_events = normalized["global_events"]
+        achievements = normalized["achievements"]
 
         with closing(self._connect()) as conn:
             conn.execute("BEGIN")
             try:
                 conn.execute("DELETE FROM checkin_records")
+                conn.execute("DELETE FROM checkin_achievements")
+                conn.execute("DELETE FROM checkin_global_events")
+                conn.execute("DELETE FROM checkin_user_preferences")
                 conn.execute("DELETE FROM checkin_profiles")
                 if profiles:
                     conn.executemany(
@@ -413,6 +596,31 @@ class CheckinStore:
                         """,
                         records,
                     )
+                if preferences:
+                    conn.executemany(
+                        """
+                        INSERT INTO checkin_user_preferences
+                        (user_id, birthday_month, birthday_day, birthday_source,
+                         qq_birthday_checked, selected_title_id, created_at, updated_at)
+                        VALUES (:user_id, :birthday_month, :birthday_day, :birthday_source,
+                                :qq_birthday_checked, :selected_title_id, :created_at, :updated_at)
+                        """, preferences,
+                    )
+                if global_events:
+                    conn.executemany(
+                        """
+                        INSERT INTO checkin_global_events
+                        (event_id, event_type, date_value, name, created_by, created_at, updated_at)
+                        VALUES (:event_id, :event_type, :date_value, :name, :created_by, :created_at, :updated_at)
+                        """, global_events,
+                    )
+                if achievements:
+                    conn.executemany(
+                        """
+                        INSERT INTO checkin_achievements (user_id, achievement_id, unlocked_at)
+                        VALUES (:user_id, :achievement_id, :unlocked_at)
+                        """, achievements,
+                    )
                 conn.commit()
             except Exception:
                 conn.rollback()
@@ -424,6 +632,9 @@ class CheckinStore:
             "scope": normalized["scope"],
             "profiles": len(profiles),
             "records": len(records),
+            "preferences": len(preferences),
+            "global_events": len(global_events),
+            "achievements": len(achievements),
             "exported_at": normalized["exported_at"],
             "imported_at": self.now_iso(),
         }
@@ -755,6 +966,217 @@ class CheckinStore:
                 raise
         return self._row_to_record(updated_row)
 
+    def _get_or_create_preference_sync(self, user_id: str) -> CheckinUserPreference:
+        if not user_id:
+            raise ValueError("user_id is required")
+        now = self.now_iso()
+        with closing(self._connect()) as conn:
+            conn.execute(
+                """
+                INSERT OR IGNORE INTO checkin_user_preferences
+                (user_id, created_at, updated_at) VALUES (?, ?, ?)
+                """,
+                (user_id, now, now),
+            )
+            conn.commit()
+            row = conn.execute(
+                "SELECT * FROM checkin_user_preferences WHERE user_id = ?", (user_id,)
+            ).fetchone()
+        return self._row_to_preference(row)
+
+    def _set_birthday_sync(
+        self, user_id: str, month: int, day: int, source: str
+    ) -> CheckinUserPreference:
+        self._get_or_create_preference_sync(user_id)
+        now = self.now_iso()
+        with closing(self._connect()) as conn:
+            conn.execute(
+                """
+                UPDATE checkin_user_preferences
+                SET birthday_month = ?, birthday_day = ?, birthday_source = ?,
+                    qq_birthday_checked = 1, updated_at = ? WHERE user_id = ?
+                """,
+                (month, day, source, now, user_id),
+            )
+            conn.commit()
+        return self._get_or_create_preference_sync(user_id)
+
+    def _set_qq_birthday_if_not_manual_sync(
+        self, user_id: str, month: int, day: int
+    ) -> CheckinUserPreference:
+        self._get_or_create_preference_sync(user_id)
+        with closing(self._connect()) as conn:
+            conn.execute("BEGIN IMMEDIATE")
+            conn.execute(
+                """
+                UPDATE checkin_user_preferences
+                SET birthday_month = ?, birthday_day = ?, birthday_source = 'qq',
+                    qq_birthday_checked = 1, updated_at = ?
+                WHERE user_id = ? AND birthday_source != 'manual'
+                """,
+                (month, day, self.now_iso(), user_id),
+            )
+            conn.commit()
+        return self._get_or_create_preference_sync(user_id)
+
+    def _clear_birthday_sync(self, user_id: str) -> CheckinUserPreference:
+        self._get_or_create_preference_sync(user_id)
+        with closing(self._connect()) as conn:
+            conn.execute(
+                """
+                UPDATE checkin_user_preferences SET birthday_month = 0,
+                    birthday_day = 0, birthday_source = '', qq_birthday_checked = 0,
+                    updated_at = ? WHERE user_id = ?
+                """,
+                (self.now_iso(), user_id),
+            )
+            conn.commit()
+        return self._get_or_create_preference_sync(user_id)
+
+    def _mark_qq_birthday_checked_sync(self, user_id: str) -> None:
+        self._get_or_create_preference_sync(user_id)
+        with closing(self._connect()) as conn:
+            conn.execute(
+                "UPDATE checkin_user_preferences SET qq_birthday_checked = 1, updated_at = ? WHERE user_id = ?",
+                (self.now_iso(), user_id),
+            )
+            conn.commit()
+
+    def _unlock_achievements_sync(self, profile: CheckinProfile) -> tuple[str, ...]:
+        now = self.now_iso()
+        unlocked: list[str] = []
+        with closing(self._connect()) as conn:
+            conn.execute("BEGIN IMMEDIATE")
+            for achievement_id, definition in ACHIEVEMENTS.items():
+                value = profile.total_days if definition["kind"] == "total" else profile.streak_days
+                if value < int(definition["threshold"]):
+                    continue
+                changed = conn.execute(
+                    "INSERT OR IGNORE INTO checkin_achievements (user_id, achievement_id, unlocked_at) VALUES (?, ?, ?)",
+                    (profile.user_id, achievement_id, now),
+                ).rowcount
+                if changed:
+                    unlocked.append(achievement_id)
+            preference = conn.execute(
+                "SELECT selected_title_id FROM checkin_user_preferences WHERE user_id = ?",
+                (profile.user_id,),
+            ).fetchone()
+            if preference is None:
+                conn.execute(
+                    "INSERT INTO checkin_user_preferences (user_id, created_at, updated_at) VALUES (?, ?, ?)",
+                    (profile.user_id, now, now),
+                )
+                selected = ""
+            else:
+                selected = str(preference["selected_title_id"] or "")
+            if not selected and unlocked:
+                conn.execute(
+                    "UPDATE checkin_user_preferences SET selected_title_id = ?, updated_at = ? WHERE user_id = ?",
+                    (unlocked[0], now, profile.user_id),
+                )
+            conn.commit()
+        return tuple(unlocked)
+
+    def _list_achievements_sync(self, user_id: str) -> tuple[str, ...]:
+        with closing(self._connect()) as conn:
+            rows = conn.execute(
+                "SELECT achievement_id FROM checkin_achievements WHERE user_id = ? ORDER BY unlocked_at, achievement_id",
+                (user_id,),
+            ).fetchall()
+        return tuple(str(row["achievement_id"]) for row in rows)
+
+    def _select_title_sync(self, user_id: str, title: str) -> str:
+        title_id = title if title in ACHIEVEMENTS else next(
+            (key for key, value in ACHIEVEMENTS.items() if value["title"] == title), ""
+        )
+        if not title_id:
+            raise ValueError("未知称号")
+        if title_id not in self._list_achievements_sync(user_id):
+            raise ValueError("该称号尚未解锁")
+        self._get_or_create_preference_sync(user_id)
+        with closing(self._connect()) as conn:
+            conn.execute(
+                "UPDATE checkin_user_preferences SET selected_title_id = ?, updated_at = ? WHERE user_id = ?",
+                (title_id, self.now_iso(), user_id),
+            )
+            conn.commit()
+        return title_id
+
+    def _add_global_event_sync(
+        self, event_type: str, date_value: str, name: str, created_by: str
+    ) -> CheckinGlobalEvent:
+        now = self.now_iso()
+        with closing(self._connect()) as conn:
+            try:
+                cursor = conn.execute(
+                    """
+                    INSERT INTO checkin_global_events
+                    (event_type, date_value, name, created_by, created_at, updated_at)
+                    VALUES (?, ?, ?, ?, ?, ?)
+                    """,
+                    (event_type, date_value, name, created_by, now, now),
+                )
+                conn.commit()
+            except sqlite3.IntegrityError as exc:
+                raise ValueError("该日期已存在同类型事件") from exc
+            row = conn.execute(
+                "SELECT * FROM checkin_global_events WHERE event_id = ?",
+                (cursor.lastrowid,),
+            ).fetchone()
+        return self._row_to_global_event(row)
+
+    def _list_global_events_sync(self) -> tuple[CheckinGlobalEvent, ...]:
+        with closing(self._connect()) as conn:
+            rows = conn.execute(
+                "SELECT * FROM checkin_global_events ORDER BY event_type, date_value, event_id"
+            ).fetchall()
+        return tuple(self._row_to_global_event(row) for row in rows)
+
+    def _delete_global_event_sync(self, event_id: int) -> bool:
+        with closing(self._connect()) as conn:
+            changed = conn.execute(
+                "DELETE FROM checkin_global_events WHERE event_id = ?", (event_id,)
+            ).rowcount
+            conn.commit()
+        return bool(changed)
+
+    def _events_for_date_sync(
+        self, exact_date: str, annual_date: str
+    ) -> tuple[CheckinGlobalEvent, ...]:
+        with closing(self._connect()) as conn:
+            rows = conn.execute(
+                """
+                SELECT * FROM checkin_global_events
+                WHERE (event_type = 'once' AND date_value = ?)
+                   OR (event_type = 'annual' AND date_value = ?)
+                ORDER BY CASE event_type WHEN 'once' THEN 0 ELSE 1 END, event_id
+                """,
+                (exact_date, annual_date),
+            ).fetchall()
+        return tuple(self._row_to_global_event(row) for row in rows)
+
+    @staticmethod
+    def _row_to_preference(row: sqlite3.Row) -> CheckinUserPreference:
+        return CheckinUserPreference(
+            user_id=str(row["user_id"]),
+            birthday_month=int(row["birthday_month"] or 0),
+            birthday_day=int(row["birthday_day"] or 0),
+            birthday_source=str(row["birthday_source"] or ""),
+            qq_birthday_checked=bool(row["qq_birthday_checked"]),
+            selected_title_id=str(row["selected_title_id"] or ""),
+            created_at=str(row["created_at"] or ""),
+            updated_at=str(row["updated_at"] or ""),
+        )
+
+    @staticmethod
+    def _row_to_global_event(row: sqlite3.Row) -> CheckinGlobalEvent:
+        return CheckinGlobalEvent(
+            event_id=int(row["event_id"]), event_type=str(row["event_type"]),
+            date_value=str(row["date_value"]), name=str(row["name"]),
+            created_by=str(row["created_by"] or ""),
+            created_at=str(row["created_at"]), updated_at=str(row["updated_at"]),
+        )
+
     @staticmethod
     def _row_to_profile(row: sqlite3.Row) -> CheckinProfile:
         return CheckinProfile(
@@ -922,9 +1344,13 @@ def _validate_checkin_snapshot(snapshot: dict[str, Any]) -> dict[str, Any]:
         raise ValueError("签到备份数据必须是对象")
 
     schema_version = snapshot.get("schema_version")
-    if schema_version not in (1, CHECKIN_SNAPSHOT_SCHEMA_VERSION):
+    if (
+        isinstance(schema_version, bool)
+        or not isinstance(schema_version, int)
+        or schema_version not in (1, 2, CHECKIN_SNAPSHOT_SCHEMA_VERSION)
+    ):
         raise ValueError(
-            f"不支持的签到备份版本: {schema_version!r}，当前支持 1 和 {CHECKIN_SNAPSHOT_SCHEMA_VERSION}"
+            f"不支持的签到备份版本: {schema_version!r}，当前支持 1、2 和 {CHECKIN_SNAPSHOT_SCHEMA_VERSION}"
         )
 
     plugin_name = str(snapshot.get("plugin_name") or "").strip()
@@ -946,6 +1372,12 @@ def _validate_checkin_snapshot(snapshot: dict[str, Any]) -> dict[str, Any]:
     records = snapshot.get("records")
     if not isinstance(records, list):
         raise ValueError("签到备份 records 必须是数组")
+    preferences = snapshot.get("preferences") if schema_version >= 3 else []
+    global_events = snapshot.get("global_events") if schema_version >= 3 else []
+    achievements = snapshot.get("achievements") if schema_version >= 3 else []
+    for key, value in (("preferences", preferences), ("global_events", global_events), ("achievements", achievements)):
+        if not isinstance(value, list):
+            raise ValueError(f"签到备份 {key} 必须是数组")
 
     normalized_profiles = [
         _normalize_profile_snapshot_row(row, index) for index, row in enumerate(profiles)
@@ -953,6 +1385,9 @@ def _validate_checkin_snapshot(snapshot: dict[str, Any]) -> dict[str, Any]:
     normalized_records = [
         _normalize_record_snapshot_row(row, index) for index, row in enumerate(records)
     ]
+    normalized_preferences = [_normalize_preference_snapshot_row(row, index) for index, row in enumerate(preferences)]
+    normalized_events = [_normalize_global_event_snapshot_row(row, index) for index, row in enumerate(global_events)]
+    normalized_achievements = [_normalize_achievement_snapshot_row(row, index) for index, row in enumerate(achievements)]
     profile_user_ids: set[str] = set()
     for index, profile in enumerate(normalized_profiles):
         user_id = profile["user_id"]
@@ -974,6 +1409,31 @@ def _validate_checkin_snapshot(snapshot: dict[str, Any]) -> dict[str, Any]:
                 f"records[{index}].user_id has no matching profile: "
                 f"{record['user_id']}"
             )
+    preference_ids: set[str] = set()
+    for index, preference in enumerate(normalized_preferences):
+        user_id = preference["user_id"]
+        if user_id in preference_ids:
+            raise ValueError(f"preferences[{index}].user_id duplicate: {user_id}")
+        preference_ids.add(user_id)
+    achievement_keys: set[tuple[str, str]] = set()
+    for index, achievement in enumerate(normalized_achievements):
+        key = (achievement["user_id"], achievement["achievement_id"])
+        if key in achievement_keys:
+            raise ValueError(f"achievements[{index}] duplicate")
+        achievement_keys.add(key)
+        if achievement["user_id"] not in profile_user_ids:
+            raise ValueError(f"achievements[{index}].user_id has no matching profile")
+    event_ids: set[int] = set()
+    event_dates: set[tuple[str, str]] = set()
+    for index, event in enumerate(normalized_events):
+        if event["event_id"] in event_ids or (event["event_type"], event["date_value"]) in event_dates:
+            raise ValueError(f"global_events[{index}] duplicate")
+        event_ids.add(event["event_id"])
+        event_dates.add((event["event_type"], event["date_value"]))
+    for index, preference in enumerate(normalized_preferences):
+        selected = preference["selected_title_id"]
+        if selected and (preference["user_id"], selected) not in achievement_keys:
+            raise ValueError(f"preferences[{index}].selected_title_id 未解锁")
     return {
         "schema_version": CHECKIN_SNAPSHOT_SCHEMA_VERSION,
         "plugin_name": CHECKIN_SNAPSHOT_PLUGIN_NAME,
@@ -981,6 +1441,9 @@ def _validate_checkin_snapshot(snapshot: dict[str, Any]) -> dict[str, Any]:
         "exported_at": exported_at,
         "profiles": normalized_profiles,
         "records": normalized_records,
+        "preferences": normalized_preferences,
+        "global_events": normalized_events,
+        "achievements": normalized_achievements,
     }
 
 
@@ -1081,6 +1544,59 @@ def _normalize_record_snapshot_row(row: Any, index: int) -> dict[str, Any]:
     }
 
 
+def _normalize_preference_snapshot_row(row: Any, index: int) -> dict[str, Any]:
+    if not isinstance(row, dict):
+        raise ValueError(f"preferences[{index}] 必须是对象")
+    month = _require_int(row, "birthday_month", f"preferences[{index}]")
+    day = _require_int(row, "birthday_day", f"preferences[{index}]")
+    source = _optional_text(row, "birthday_source", "")
+    if (month, day) != (0, 0):
+        _validate_month_day(month, day)
+        if source not in {"manual", "qq"}:
+            raise ValueError(f"preferences[{index}].birthday_source 无效")
+    selected = _optional_text(row, "selected_title_id", "")
+    if selected and selected not in ACHIEVEMENTS:
+        raise ValueError(f"preferences[{index}].selected_title_id 无效")
+    return {
+        "user_id": _require_text(row, "user_id", f"preferences[{index}]"),
+        "birthday_month": month, "birthday_day": day, "birthday_source": source,
+        "qq_birthday_checked": _require_boolish_int(row, "qq_birthday_checked", f"preferences[{index}]"),
+        "selected_title_id": selected,
+        "created_at": _require_text(row, "created_at", f"preferences[{index}]"),
+        "updated_at": _require_text(row, "updated_at", f"preferences[{index}]"),
+    }
+
+
+def _normalize_global_event_snapshot_row(row: Any, index: int) -> dict[str, Any]:
+    if not isinstance(row, dict):
+        raise ValueError(f"global_events[{index}] 必须是对象")
+    event_type, date_value = _validate_global_event_date(
+        _require_text(row, "event_type", f"global_events[{index}]"),
+        _require_text(row, "date_value", f"global_events[{index}]"),
+    )
+    return {
+        "event_id": _require_int(row, "event_id", f"global_events[{index}]"),
+        "event_type": event_type, "date_value": date_value,
+        "name": _clean_event_name(_require_text(row, "name", f"global_events[{index}]")),
+        "created_by": _optional_text(row, "created_by", ""),
+        "created_at": _require_text(row, "created_at", f"global_events[{index}]"),
+        "updated_at": _require_text(row, "updated_at", f"global_events[{index}]"),
+    }
+
+
+def _normalize_achievement_snapshot_row(row: Any, index: int) -> dict[str, Any]:
+    if not isinstance(row, dict):
+        raise ValueError(f"achievements[{index}] 必须是对象")
+    achievement_id = _require_text(row, "achievement_id", f"achievements[{index}]")
+    if achievement_id not in ACHIEVEMENTS:
+        raise ValueError(f"achievements[{index}].achievement_id 无效")
+    return {
+        "user_id": _require_text(row, "user_id", f"achievements[{index}]"),
+        "achievement_id": achievement_id,
+        "unlocked_at": _require_text(row, "unlocked_at", f"achievements[{index}]"),
+    }
+
+
 def _require_text(row: dict[str, Any], key: str, location: str) -> str:
     if key not in row:
         raise ValueError(f"{location} 缺少字段 {key}")
@@ -1102,6 +1618,47 @@ def _validate_greeting_source(value: Any, location: str) -> str:
     if source not in ("local", "ai"):
         raise ValueError(f"{location} 仅允许 local/ai")
     return source
+
+
+def _validate_month_day(month: int, day: int) -> None:
+    try:
+        date(2000, int(month), int(day))
+    except (TypeError, ValueError) as exc:
+        raise ValueError("生日格式无效，请使用 MM-DD") from exc
+
+
+def _validate_global_event_date(event_type: str, value: str) -> tuple[str, str]:
+    normalized_type = str(event_type or "").strip().lower()
+    normalized_value = str(value or "").strip()
+    if normalized_type == "annual":
+        try:
+            month_text, day_text = normalized_value.split("-", 1)
+            _validate_month_day(int(month_text), int(day_text))
+            return normalized_type, f"{int(month_text):02d}-{int(day_text):02d}"
+        except (ValueError, TypeError) as exc:
+            raise ValueError("年度事件日期必须为 MM-DD") from exc
+    if normalized_type == "once":
+        try:
+            return normalized_type, date.fromisoformat(normalized_value).isoformat()
+        except ValueError as exc:
+            raise ValueError("单次事件日期必须为 YYYY-MM-DD") from exc
+    raise ValueError("事件类型仅允许 annual/once")
+
+
+def _clean_event_name(value: object) -> str:
+    raw = str(value or "")
+    cleaned = "".join(
+        (" " if char.isspace() else "")
+        if unicodedata.category(char) in {"Cc", "Cf"}
+        else char
+        for char in raw
+    )
+    text = " ".join(cleaned.split())
+    if not text:
+        raise ValueError("事件名称不能为空")
+    if len(text) > 20:
+        raise ValueError("事件名称最多 20 个字符")
+    return text
 
 
 def _require_int(row: dict[str, Any], key: str, location: str) -> int:

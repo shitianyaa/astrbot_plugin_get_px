@@ -51,7 +51,6 @@
         <section class="account-summary" aria-label="账户摘要">
           <div><span>累计签到</span><strong>{{ total_days }} 天</strong></div>
           <div><span>金币余额</span><strong>{{ coins_total }}</strong></div>
-          <div><span>关系等级</span><strong>{{ affection_level }}</strong></div>
         </section>
 
         <section class="affection-progress">
@@ -66,7 +65,6 @@
             <span>下一纪念</span>
             <strong>{{ milestone_next_text }}</strong>
           </div>
-          {% if boost_status_text %}<p class="boost-status">{{ boost_status_text }}</p>{% endif %}
         </section>
       </section>
 

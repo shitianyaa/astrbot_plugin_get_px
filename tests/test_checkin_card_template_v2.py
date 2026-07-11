@@ -76,12 +76,29 @@ class CheckinCardTemplateV2Test(unittest.TestCase):
         artwork_column = _css_rule(css, ".artwork-column")
         artwork_frame = _css_rule(css, ".artwork-frame")
 
-        self.assertIn("gap: 4px", information)
+        self.assertIn("justify-content: space-between", information)
         self.assertIn("display: flex", heading)
-        self.assertIn("align-items: baseline", heading)
+        self.assertIn("align-items: flex-start", heading)
+        self.assertIn("flex-direction: column", heading)
         self.assertIn("padding-block: 10px", artwork_column)
         self.assertIn("width: 306px", artwork_frame)
         self.assertIn("height: 408px", artwork_frame)
+
+    def test_compact_layout_removes_repeated_status_fields(self):
+        html = (TEMPLATE_DIR / "index.html").read_text(encoding="utf-8")
+        css = (TEMPLATE_DIR / "style.css").read_text(encoding="utf-8")
+
+        self.assertNotIn("<span>关系等级</span>", html)
+        self.assertNotIn('class="boost-status"', html)
+        self.assertEqual(html.count('class="badge"'), 1)
+
+        summary = _css_rule(css, ".account-summary")
+        nickname = _css_rule(css, ".identity-copy strong")
+        signature = _css_rule(css, ".greeting .signature")
+        self.assertIn("repeat(2", summary)
+        self.assertIn("white-space: nowrap", nickname)
+        self.assertIn("text-overflow: ellipsis", nickname)
+        self.assertIn("text-align: right", signature)
 
 
 if __name__ == "__main__":

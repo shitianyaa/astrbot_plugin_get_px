@@ -4,7 +4,7 @@ import sys
 import tempfile
 import threading
 import unittest
-from datetime import date
+from datetime import date, timedelta
 from pathlib import Path
 from unittest.mock import patch
 
@@ -26,7 +26,8 @@ class CheckinCardCacheTest(unittest.IsolatedAsyncioTestCase):
         self._tmp = tempfile.TemporaryDirectory()
         self.root = Path(self._tmp.name) / "checkin_card_cache"
         self.cache = CheckinCardCache(self.root)
-        self.date_key = "2026-07-11"
+        self.date_key = date.today().isoformat()
+        self.next_day = date.fromisoformat(self.date_key) + timedelta(days=1)
         self.key = self.cache.cache_key(
             date_key=self.date_key,
             user_id="10001",
@@ -52,7 +53,7 @@ class CheckinCardCacheTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(first, reordered)
         self.assertRegex(first, r"^[0-9a-f]{64}$")
         for field, changed in (
-            ("date_key", "2026-07-12"),
+            ("date_key", self.next_day.isoformat()),
             ("user_id", "10002"),
             ("template_version", "v3"),
             ("view_model", {"badges": ["夏日"], "greeting": "再见"}),
@@ -137,7 +138,7 @@ class CheckinCardCacheTest(unittest.IsolatedAsyncioTestCase):
             cleanup_task = asyncio.create_task(
                 asyncio.to_thread(
                     self.cache.cleanup_expired,
-                    today=date(2026, 7, 12),
+                    today=self.next_day,
                     force=True,
                 )
             )
@@ -207,7 +208,7 @@ class CheckinCardCacheTest(unittest.IsolatedAsyncioTestCase):
             cleanup_task = asyncio.create_task(
                 asyncio.to_thread(
                     self.cache.cleanup_expired,
-                    today=date(2026, 7, 12),
+                    today=self.next_day,
                     force=True,
                 )
             )
@@ -250,12 +251,12 @@ class CheckinCardCacheTest(unittest.IsolatedAsyncioTestCase):
 
         first_cleanup = await asyncio.to_thread(
             self.cache.cleanup_expired,
-            today=date(2026, 7, 12),
+            today=self.next_day,
             force=True,
         )
         finish_renderer.set()
         stored = await store_task
-        second_cleanup = self.cache.cleanup_expired(today=date(2026, 7, 12))
+        second_cleanup = self.cache.cleanup_expired(today=self.next_day)
 
         self.assertEqual(first_cleanup, 0)
         self.assertEqual(second_cleanup, 1)
@@ -287,13 +288,13 @@ class CheckinCardCacheTest(unittest.IsolatedAsyncioTestCase):
             self.assertTrue(await asyncio.to_thread(copy_started.wait, 2))
             first_cleanup = await asyncio.to_thread(
                 self.cache.cleanup_expired,
-                today=date(2026, 7, 12),
+                today=self.next_day,
                 force=True,
             )
             finish_copy.set()
             stored = await store_task
 
-        second_cleanup = self.cache.cleanup_expired(today=date(2026, 7, 12))
+        second_cleanup = self.cache.cleanup_expired(today=self.next_day)
 
         self.assertEqual(first_cleanup, 0)
         self.assertEqual(second_cleanup, 1)
