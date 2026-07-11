@@ -1,0 +1,444 @@
+:root {
+  --ink: #f7f3ea;
+  --muted: rgba(247, 243, 234, 0.66);
+  --line: rgba(255, 255, 255, 0.16);
+  --night: #111a2b;
+  --amber: #f3c477;
+  --coral: #dd796c;
+  --mint: #a8d8cf;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html,
+body {
+  width: 100%;
+  min-height: 100%;
+  margin: 0;
+}
+
+body {
+  display: grid;
+  place-items: center;
+  background: #0b1019;
+  color: var(--ink);
+  font-family: "Microsoft YaHei UI", "Microsoft YaHei", sans-serif;
+}
+
+.stage {
+  width: 960px;
+  height: 540px;
+}
+
+.checkin-card {
+  position: relative;
+  width: 960px;
+  height: 540px;
+  overflow: hidden;
+  color: var(--ink);
+  background: var(--night);
+  isolation: isolate;
+}
+
+.checkin-card::after {
+  position: absolute;
+  inset: 16px;
+  z-index: 6;
+  border: 1px solid rgba(255, 255, 255, 0.2);
+  border-radius: 22px;
+  content: "";
+  pointer-events: none;
+}
+
+.artwork-layer,
+.readability-layer {
+  position: absolute;
+  inset: 0;
+}
+
+.artwork-layer {
+  overflow: hidden;
+  background:
+    radial-gradient(circle at 76% 45%, rgba(241, 191, 119, 0.36), transparent 26%),
+    linear-gradient(142deg, #263e59 0%, #6d6677 48%, #d29872 100%);
+}
+
+.artwork-layer::before {
+  position: absolute;
+  top: -112px;
+  right: -28px;
+  width: 520px;
+  height: 680px;
+  border-radius: 52% 0 0 52%;
+  background:
+    linear-gradient(154deg, transparent 8%, rgba(34, 40, 59, 0.36) 8.5% 26%, transparent 26.5%),
+    linear-gradient(28deg, transparent 38%, rgba(255, 225, 182, 0.2) 38.5% 52%, transparent 52.5%);
+  content: "";
+  transform: rotate(-7deg);
+}
+
+.sun-disc {
+  position: absolute;
+  top: 68px;
+  right: 114px;
+  width: 246px;
+  height: 246px;
+  border: 1px solid rgba(255, 236, 204, 0.56);
+  border-radius: 50%;
+  background:
+    radial-gradient(circle at 35% 34%, rgba(255, 246, 220, 0.9), transparent 4%),
+    radial-gradient(circle, #f0be7c 0%, #d77968 70%, rgba(208, 105, 97, 0.18) 71%);
+  box-shadow: 0 0 84px rgba(237, 174, 111, 0.28);
+  opacity: 0.78;
+}
+
+.paper-wing {
+  position: absolute;
+  right: 75px;
+  width: 178px;
+  height: 102px;
+  border: 1px solid rgba(255, 245, 224, 0.36);
+  clip-path: polygon(0 52%, 100% 0, 63% 62%, 100% 100%);
+  background: linear-gradient(145deg, rgba(255, 239, 210, 0.28), rgba(31, 41, 61, 0.14));
+  transform: rotate(-13deg);
+}
+
+.paper-wing-one {
+  top: 237px;
+}
+
+.paper-wing-two {
+  top: 317px;
+  right: 196px;
+  transform: rotate(20deg) scale(0.7);
+  opacity: 0.54;
+}
+
+.grain {
+  position: absolute;
+  inset: -40%;
+  background-image: repeating-radial-gradient(circle at 20% 40%, rgba(255, 255, 255, 0.13) 0 0.7px, transparent 0.8px 4px);
+  opacity: 0.14;
+  transform: rotate(11deg);
+}
+
+.readability-layer {
+  z-index: 0;
+  background:
+    linear-gradient(90deg, rgba(9, 15, 27, 0.96) 0%, rgba(9, 15, 27, 0.84) 40%, rgba(9, 15, 27, 0.38) 64%, rgba(9, 15, 27, 0.08) 100%),
+    linear-gradient(0deg, rgba(8, 13, 24, 0.92) 0%, transparent 38%);
+}
+
+.card-header,
+.identity,
+.greeting,
+.rewards,
+.growth,
+.artwork-credit,
+.folio {
+  position: absolute;
+  z-index: 2;
+}
+
+.card-header {
+  top: 35px;
+  left: 38px;
+  right: 38px;
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+}
+
+.date,
+.eyebrow {
+  margin: 0;
+  color: var(--muted);
+  font-size: 13px;
+  font-weight: 700;
+  letter-spacing: 0.18em;
+}
+
+.date span {
+  display: inline-block;
+  width: 22px;
+  height: 1px;
+  margin: 0 9px 3px;
+  background: var(--coral);
+}
+
+.card-header h1 {
+  margin: 5px 0 0;
+  font-family: "STKaiti", "KaiTi", serif;
+  font-size: 42px;
+  font-weight: 500;
+  letter-spacing: 0.04em;
+  line-height: 1;
+}
+
+.badges {
+  display: flex;
+  gap: 8px;
+  margin-top: 1px;
+}
+
+.badge {
+  padding: 7px 12px;
+  border: 1px solid rgba(255, 255, 255, 0.2);
+  border-radius: 999px;
+  background: rgba(15, 24, 40, 0.36);
+  color: rgba(255, 255, 255, 0.82);
+  font-size: 12px;
+  letter-spacing: 0.06em;
+  backdrop-filter: blur(8px);
+}
+
+.badge-event {
+  border-color: rgba(243, 196, 119, 0.5);
+  color: #ffe0a4;
+}
+
+.identity {
+  top: 122px;
+  left: 38px;
+  display: flex;
+  align-items: center;
+  gap: 11px;
+}
+
+.avatar {
+  display: grid;
+  width: 42px;
+  height: 42px;
+  place-items: center;
+  border: 1px solid rgba(255, 255, 255, 0.42);
+  border-radius: 50%;
+  background: linear-gradient(145deg, rgba(243, 196, 119, 0.92), rgba(221, 121, 108, 0.78));
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.18);
+  color: #20283a;
+  font-family: Georgia, serif;
+  font-size: 20px;
+  font-weight: 700;
+}
+
+.identity-copy {
+  display: grid;
+  gap: 3px;
+}
+
+.identity-copy strong {
+  font-size: 16px;
+  letter-spacing: 0.03em;
+}
+
+.identity-copy span {
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.greeting {
+  top: 190px;
+  left: 38px;
+  width: 506px;
+}
+
+.eyebrow {
+  color: var(--amber);
+  font-size: 11px;
+}
+
+.greeting blockquote {
+  margin: 14px 0 7px;
+  font-family: "STKaiti", "KaiTi", serif;
+  font-size: 27px;
+  font-weight: 400;
+  letter-spacing: 0.035em;
+  line-height: 1.55;
+  text-shadow: 0 2px 18px rgba(0, 0, 0, 0.28);
+}
+
+.signature {
+  margin: 0;
+  color: var(--muted);
+  font-family: Georgia, serif;
+  font-size: 13px;
+  font-style: italic;
+  letter-spacing: 0.08em;
+}
+
+.rewards {
+  top: 343px;
+  left: 38px;
+  display: flex;
+  width: 488px;
+  border-top: 1px solid var(--line);
+  border-bottom: 1px solid var(--line);
+}
+
+.reward-item {
+  display: grid;
+  width: 33.333%;
+  gap: 1px;
+  padding: 11px 18px 12px 0;
+}
+
+.reward-item + .reward-item {
+  padding-left: 18px;
+  border-left: 1px solid var(--line);
+}
+
+.reward-item span {
+  color: var(--muted);
+  font-size: 13px;
+  letter-spacing: 0.08em;
+}
+
+.reward-item strong {
+  color: #fff7e6;
+  font-family: Georgia, "Times New Roman", serif;
+  font-size: 23px;
+  line-height: 1.1;
+}
+
+.reward-item small {
+  color: var(--amber);
+  font-family: "Microsoft YaHei UI", sans-serif;
+  font-size: 11px;
+  font-weight: 600;
+}
+
+.growth {
+  left: 38px;
+  right: 38px;
+  bottom: 45px;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 244px;
+  gap: 24px;
+  min-height: 68px;
+  padding: 13px 16px;
+  border: 1px solid rgba(255, 255, 255, 0.16);
+  border-radius: 14px;
+  background: rgba(10, 18, 31, 0.58);
+  box-shadow: 0 16px 40px rgba(0, 0, 0, 0.16);
+  backdrop-filter: blur(14px);
+}
+
+.growth-copy {
+  display: grid;
+  align-content: center;
+  gap: 9px;
+}
+
+.growth-row,
+.milestone {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+
+.growth-row span,
+.growth-row strong,
+.milestone span,
+.milestone small {
+  font-size: 12px;
+}
+
+.growth-row span,
+.milestone span {
+  color: rgba(255, 255, 255, 0.82);
+}
+
+.growth-row strong,
+.milestone small {
+  color: var(--muted);
+  font-weight: 500;
+}
+
+.progress {
+  height: 5px;
+  overflow: hidden;
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.13);
+}
+
+.progress i {
+  display: block;
+  height: 100%;
+  border-radius: inherit;
+  background: linear-gradient(90deg, var(--amber), var(--coral), var(--mint));
+  box-shadow: 0 0 18px rgba(243, 196, 119, 0.32);
+}
+
+.milestone {
+  display: grid;
+  align-content: center;
+  justify-content: stretch;
+  gap: 3px;
+  padding-left: 20px;
+  border-left: 1px solid var(--line);
+}
+
+.milestone strong {
+  font-family: "STKaiti", "KaiTi", serif;
+  font-size: 17px;
+  font-weight: 500;
+}
+
+.artwork-credit {
+  right: 38px;
+  bottom: 20px;
+  display: flex;
+  align-items: center;
+  max-width: 590px;
+  gap: 6px;
+  overflow: hidden;
+  color: rgba(255, 255, 255, 0.58);
+  font-size: 14px;
+  letter-spacing: 0.025em;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.artwork-credit strong {
+  overflow: hidden;
+  color: rgba(255, 255, 255, 0.86);
+  font-weight: 600;
+  text-overflow: ellipsis;
+}
+
+.artwork-credit i {
+  color: var(--coral);
+  font-style: normal;
+}
+
+.folio {
+  top: 194px;
+  right: 34px;
+  color: rgba(255, 255, 255, 0.34);
+  font-family: Georgia, serif;
+  font-size: 11px;
+  letter-spacing: 0.18em;
+  line-height: 1.35;
+  text-align: right;
+}
+
+@media (prefers-reduced-motion: no-preference) {
+  .checkin-card {
+    animation: reveal 500ms ease-out both;
+  }
+
+  .sun-disc {
+    animation: breathe 7s ease-in-out infinite alternate;
+  }
+}
+
+@keyframes reveal {
+  from { opacity: 0; transform: translateY(8px) scale(0.992); }
+  to { opacity: 1; transform: translateY(0) scale(1); }
+}
+
+@keyframes breathe {
+  from { transform: scale(0.98); filter: saturate(0.92); }
+  to { transform: scale(1.03); filter: saturate(1.08); }
+}
