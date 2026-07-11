@@ -840,22 +840,27 @@ class GetPxPlugin(Star):
         if (
             background is None
             or background.mode != "pixiv_daily"
-            or not background.image_path
-            or not background.illust
+            or not background.source
+            or not background.illust_id
         ):
             return
-        await self._record_sent_image(
-            event,
-            background.illust,
-            background.image_path,
-            source="checkin",
-            quality=background.quality,
-            file_size=background.file_size,
-        )
+        illust = dict(background.illust or {})
+        illust.setdefault("id", background.illust_id)
+        illust.setdefault("title", background.title)
+        illust.setdefault("user", {"name": background.author})
+        if background.image_path and background.illust:
+            await self._record_sent_image(
+                event,
+                illust,
+                background.image_path,
+                source="checkin",
+                quality=background.quality,
+                file_size=background.file_size,
+            )
         await self._record_image_usage(
             event,
             background.source,
-            background.illust,
+            illust,
             feature="checkin",
             user_id=str(event.get_sender_id() or ""),
         )
@@ -1031,21 +1036,28 @@ class GetPxPlugin(Star):
             if cached_path is None and result.duplicate:
                 background = await self._restore_checkin_background(event, record)
 
+            renderer_source_path = ""
+
             async def render_card() -> str:
-                return await self._render_checkin_card(
+                nonlocal renderer_source_path
+                renderer_source_path = await self._render_checkin_card(
                     event,
                     profile=profile_snapshot,
                     record=record,
                     background=background,
                     bot_name=bot_name,
                 )
+                return renderer_source_path
 
             if cached_path is None:
-                cached_path = await cache.store(
-                    record.date_key,
-                    cache_key,
-                    render_card,
-                )
+                try:
+                    cached_path = await cache.store(
+                        record.date_key,
+                        cache_key,
+                        render_card,
+                    )
+                finally:
+                    cleanup(renderer_source_path)
 
             if not result.duplicate and background is not None:
                 await self.checkin_store.update_record_background(

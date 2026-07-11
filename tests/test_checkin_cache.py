@@ -1,9 +1,12 @@
 import asyncio
+import shutil
 import sys
 import tempfile
+import threading
 import unittest
 from datetime import date
 from pathlib import Path
+from unittest.mock import patch
 
 from PIL import Image
 
@@ -106,6 +109,50 @@ class CheckinCardCacheTest(unittest.IsolatedAsyncioTestCase):
 
         self.assertEqual(first, second)
         self.assertEqual(render_count, 1)
+
+    async def test_cross_day_cleanup_does_not_remove_an_active_store_temp(self):
+        renderer_output = Path(self._tmp.name) / "renderer-output.jpg"
+        _write_jpeg(renderer_output)
+        copy_started = threading.Event()
+        finish_copy = threading.Event()
+        original_copyfileobj = shutil.copyfileobj
+
+        def slow_copy(source, target, *args, **kwargs):
+            copy_started.set()
+            if not finish_copy.wait(timeout=2):
+                raise TimeoutError("test did not release cache copy")
+            return original_copyfileobj(source, target, *args, **kwargs)
+
+        async def render() -> str:
+            return str(renderer_output)
+
+        with patch(
+            "astrbot_plugin_get_px.checkin_cache.shutil.copyfileobj",
+            side_effect=slow_copy,
+        ):
+            store_task = asyncio.create_task(
+                self.cache.store(self.date_key, self.key, render)
+            )
+            self.assertTrue(await asyncio.to_thread(copy_started.wait, 2))
+            cleanup_task = asyncio.create_task(
+                asyncio.to_thread(
+                    self.cache.cleanup_expired,
+                    today=date(2026, 7, 12),
+                    force=True,
+                )
+            )
+            await asyncio.sleep(0.02)
+            finish_copy.set()
+            cleanup_result, store_result = await asyncio.gather(
+                cleanup_task,
+                store_task,
+                return_exceptions=True,
+            )
+
+        self.assertIsInstance(cleanup_result, int)
+        self.assertIsInstance(store_result, Path)
+        self.assertTrue(store_result.exists())
+        self.assertEqual(self.cache.get(self.date_key, self.key), store_result)
 
     def test_cleanup_removes_previous_days_and_stale_temps_but_preserves_today(self):
         yesterday = self.root / "2026-07-10"

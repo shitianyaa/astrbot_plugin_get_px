@@ -11,6 +11,7 @@ from pathlib import Path
 import re
 import shutil
 import tempfile
+import threading
 from typing import Any, Awaitable, Callable
 from zoneinfo import ZoneInfo
 
@@ -35,6 +36,8 @@ class CheckinCardCache:
         self.retention_days = int(retention_days)
         self._locks: dict[str, asyncio.Lock] = {}
         self._last_cleanup_date: date | None = None
+        self._active_store_lock = threading.Lock()
+        self._active_store_dates: dict[str, int] = {}
 
     @staticmethod
     def cache_key(
@@ -86,13 +89,17 @@ class CheckinCardCache:
             if cached is not None:
                 return cached
 
-            rendered = renderer()
-            source = await rendered if inspect.isawaitable(rendered) else rendered
-            return await asyncio.to_thread(
-                self._store_sync,
-                Path(source),
-                final_path,
-            )
+            self._begin_store(date_key)
+            try:
+                rendered = renderer()
+                source = await rendered if inspect.isawaitable(rendered) else rendered
+                return await asyncio.to_thread(
+                    self._store_sync,
+                    Path(source),
+                    final_path,
+                )
+            finally:
+                self._end_store(date_key)
 
     def cleanup_expired(
         self,
@@ -107,39 +114,56 @@ class CheckinCardCache:
 
         removed = 0
         cutoff = current - timedelta(days=self.retention_days - 1)
-        self.root.mkdir(parents=True, exist_ok=True)
-        for entry in tuple(self.root.iterdir()):
-            if entry.is_file() or entry.is_symlink():
-                if entry.name.endswith(".tmp"):
-                    entry.unlink(missing_ok=True)
-                    removed += 1
-                elif entry.is_symlink():
-                    entry_date = _directory_date(entry.name)
-                    if entry_date is not None and entry_date < cutoff:
+        with self._active_store_lock:
+            self.root.mkdir(parents=True, exist_ok=True)
+            for entry in tuple(self.root.iterdir()):
+                if entry.is_file() or entry.is_symlink():
+                    if entry.name.endswith(".tmp"):
                         entry.unlink(missing_ok=True)
                         removed += 1
-                continue
+                    elif entry.is_symlink():
+                        entry_date = _directory_date(entry.name)
+                        if entry_date is not None and entry_date < cutoff:
+                            entry.unlink(missing_ok=True)
+                            removed += 1
+                    continue
 
-            if not entry.is_dir():
-                continue
-            entry_date = _directory_date(entry.name)
-            if entry_date is None:
-                continue
-            try:
-                resolved = _inside(entry, self.root)
-            except ValueError:
-                continue
-            if entry_date < cutoff:
-                shutil.rmtree(resolved)
-                removed += 1
-                continue
-            for temporary in resolved.glob("*.tmp"):
-                if temporary.is_file() or temporary.is_symlink():
-                    temporary.unlink(missing_ok=True)
+                if not entry.is_dir():
+                    continue
+                entry_date = _directory_date(entry.name)
+                if entry_date is None:
+                    continue
+                if entry.name in self._active_store_dates:
+                    continue
+                try:
+                    resolved = _inside(entry, self.root)
+                except ValueError:
+                    continue
+                if entry_date < cutoff:
+                    shutil.rmtree(resolved)
                     removed += 1
+                    continue
+                for temporary in resolved.glob("*.tmp"):
+                    if temporary.is_file() or temporary.is_symlink():
+                        temporary.unlink(missing_ok=True)
+                        removed += 1
 
         self._last_cleanup_date = current
         return removed
+
+    def _begin_store(self, date_key: str) -> None:
+        with self._active_store_lock:
+            self._active_store_dates[date_key] = (
+                self._active_store_dates.get(date_key, 0) + 1
+            )
+
+    def _end_store(self, date_key: str) -> None:
+        with self._active_store_lock:
+            remaining = self._active_store_dates.get(date_key, 0) - 1
+            if remaining > 0:
+                self._active_store_dates[date_key] = remaining
+            else:
+                self._active_store_dates.pop(date_key, None)
 
     def _cache_path(self, date_key: str, key: str) -> Path:
         normalized_date = _validated_date_key(date_key)

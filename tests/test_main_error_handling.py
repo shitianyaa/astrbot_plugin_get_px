@@ -179,9 +179,9 @@ class _FakeCache:
     async def store(self, date_key, key, renderer):
         self.order.append("cache_store")
         self.store_calls.append((date_key, key))
+        rendered_path = Path(await renderer())
         if self.fail_store:
             raise ValueError("invalid rendered card")
-        rendered_path = Path(await renderer())
         self.cache_path.parent.mkdir(parents=True, exist_ok=True)
         shutil.copyfile(rendered_path, self.cache_path)
         self.hit = True
@@ -415,6 +415,7 @@ class MainErrorHandlingTest(unittest.IsolatedAsyncioTestCase):
             self.assertLess(order.index("background_metadata"), order.index("send"))
             self.assertLess(order.index("send"), order.index("usage"))
             self.assertTrue(plugin.checkin_cache.cache_path.exists())
+            self.assertFalse(rendered.exists())
 
     async def test_render_failure_does_not_persist_artwork_or_usage(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -435,6 +436,8 @@ class MainErrorHandlingTest(unittest.IsolatedAsyncioTestCase):
             )
             plugin._prepare_checkin_background.return_value = background
             plugin.checkin_cache.fail_store = True
+            rendered = Path(tmp) / "rendered.jpg"
+            plugin._render_checkin_card.return_value = _make_card(rendered)
 
             output = await _collect(plugin._handle_checkin(_FakeEvent(order)))
 
@@ -442,6 +445,7 @@ class MainErrorHandlingTest(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(plugin.checkin_store.background_updates, [])
             plugin._record_checkin_background.assert_not_awaited()
             plugin._release_checkin_background_claim.assert_awaited_once()
+            self.assertFalse(rendered.exists())
 
     async def test_send_failure_keeps_cache_but_does_not_record_usage(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -472,6 +476,49 @@ class MainErrorHandlingTest(unittest.IsolatedAsyncioTestCase):
             self.assertTrue(plugin.checkin_cache.cache_path.exists())
             plugin._record_checkin_background.assert_not_awaited()
             plugin._release_checkin_background_claim.assert_awaited_once()
+
+    async def test_failed_first_send_then_cached_resend_records_metadata_usage_once(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            order = []
+            first_result = CheckinResult(
+                _profile(), _record(persisted=False, with_background=False), duplicate=False
+            )
+            plugin = _plugin_for_checkin(tmp, first_result, order)
+            store = _ConcurrentCheckinStore(first_result, order)
+            plugin.checkin_store = store
+            del plugin._record_checkin_background
+            plugin._record_sent_image = AsyncMock()
+            plugin._record_image_usage = AsyncMock()
+            source = Path(tmp) / "selected.png"
+            PILImage.new("RGB", (750, 1000), (40, 80, 160)).save(source)
+            plugin._prepare_checkin_background.return_value = CardBackground(
+                image_path=str(source),
+                mode="pixiv_daily",
+                source="rank:week",
+                illust_id="445566",
+                title="Blue Sky",
+                author="Someone",
+                illust={"id": 445566, "title": "Blue Sky"},
+            )
+            rendered = Path(tmp) / "rendered.jpg"
+            plugin._render_checkin_card.return_value = _make_card(rendered)
+
+            first_output = await _collect(
+                plugin._handle_checkin(_FakeEvent(order, fail_send=True))
+            )
+            second_output = await _collect(plugin._handle_checkin(_FakeEvent(order)))
+
+            self.assertEqual(len(first_output), 1)
+            self.assertEqual(second_output, [])
+            self.assertEqual(plugin._prepare_checkin_background.await_count, 1)
+            plugin._restore_checkin_background.assert_not_awaited()
+            plugin._record_sent_image.assert_not_awaited()
+            plugin._record_image_usage.assert_awaited_once()
+            usage_args = plugin._record_image_usage.await_args
+            self.assertEqual(usage_args.args[1], "rank:week")
+            self.assertEqual(str(usage_args.args[2]["id"]), "445566")
+            self.assertEqual(usage_args.kwargs["feature"], "checkin")
+            self.assertEqual(usage_args.kwargs["user_id"], "10001")
 
     async def test_same_user_concurrent_checkins_wait_for_the_first_full_flow(self):
         with tempfile.TemporaryDirectory() as tmp:
