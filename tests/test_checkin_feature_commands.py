@@ -52,6 +52,7 @@ async def test_automatic_birthday_is_attempted_only_once() -> None:
         second = await plugin._ensure_checkin_birthday(event, "10001")
         assert first.qq_birthday_checked and second.qq_birthday_checked
         assert event.bot.call_action.await_count == 1
+        assert event.bot.call_action.await_args.kwargs["no_cache"] is True
 
 
 @pytest.mark.asyncio

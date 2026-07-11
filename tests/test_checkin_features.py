@@ -32,6 +32,11 @@ def test_qq_birthday_parser_accepts_common_shapes_and_leap_day() -> None:
     assert parse_qq_birthday({"birthday_month": 2, "birthday_day": 29}) == (2, 29)
     assert parse_qq_birthday({"birthday": "2000-07-11"}) == (7, 11)
     assert parse_qq_birthday({"birthday": {"month": "10", "day": "1"}}) == (10, 1)
+    assert parse_qq_birthday(
+        {"data": {"detail": {"simpleInfo": {"baseInfo": {
+            "birthday_year": 2000, "birthday_month": 12, "birthday_day": 31
+        }}}}}
+    ) == (12, 31)
     assert parse_month_day("07-11") == (7, 11)
     assert parse_month_day(20000711) == (7, 11)
     assert birthday_matches("2028-02-29", 2, 29)

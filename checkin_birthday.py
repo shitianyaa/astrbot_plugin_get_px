@@ -59,6 +59,11 @@ def parse_qq_birthday(payload: object) -> tuple[int, int] | None:
         pair = parse_month_day(payload.get(key))
         if pair:
             return pair
+    for key in ("data", "baseInfo", "base_info", "simpleInfo", "detail"):
+        nested = payload.get(key)
+        pair = parse_qq_birthday(nested)
+        if pair:
+            return pair
     return None
 
 

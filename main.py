@@ -1299,20 +1299,39 @@ class GetPxPlugin(Star):
     ) -> tuple[int, int] | None:
         try:
             if event.get_platform_name() != "aiocqhttp":
+                logger.info(
+                    f"{LOG_PREFIX} QQ 生日读取跳过: platform={event.get_platform_name()}"
+                )
                 return None
             bot = getattr(event, "bot", None)
             if bot is None or not hasattr(bot, "call_action"):
+                logger.warning(f"{LOG_PREFIX} QQ 生日读取失败: 当前事件不支持 call_action")
                 return None
             payload = await asyncio.wait_for(
                 bot.call_action(
                     action="get_stranger_info",
                     user_id=int(user_id),
-                    no_cache=False,
+                    no_cache=True,
                 ),
                 timeout=3.0,
             )
-            return parse_qq_birthday(payload)
-        except (asyncio.TimeoutError, TypeError, ValueError, Exception):
+            parsed = parse_qq_birthday(payload)
+            if parsed is None:
+                keys = sorted(map(str, payload.keys())) if isinstance(payload, dict) else []
+                logger.warning(
+                    f"{LOG_PREFIX} QQ 生日读取失败: 返回资料不含可用生日字段, keys={keys}"
+                )
+            else:
+                logger.info(f"{LOG_PREFIX} QQ 生日读取成功: user_id={user_id}")
+            return parsed
+        except asyncio.TimeoutError:
+            logger.warning(f"{LOG_PREFIX} QQ 生日读取超时: user_id={user_id}")
+            return None
+        except (TypeError, ValueError) as exc:
+            logger.warning(f"{LOG_PREFIX} QQ 生日资料解析失败: {exc}")
+            return None
+        except Exception as exc:
+            logger.warning(f"{LOG_PREFIX} QQ 生日读取异常: {exc}", exc_info=True)
             return None
 
     @staticmethod
