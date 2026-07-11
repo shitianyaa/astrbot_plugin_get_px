@@ -1,21 +1,58 @@
+import asyncio
 import json
+import inspect
+import shutil
 import sys
+import tempfile
 import unittest
+from dataclasses import replace
 from pathlib import Path
+from unittest.mock import AsyncMock
 
 from quart import Quart
+from PIL import Image as PILImage
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 
 from astrbot_plugin_get_px.main import GetPxPlugin  # noqa: E402
+from astrbot_plugin_get_px.checkin import (  # noqa: E402
+    CheckinProfile,
+    CheckinRecord,
+    CheckinResult,
+)
+from astrbot_plugin_get_px.checkin_card import CardBackground  # noqa: E402
 
 
 class _FakeEvent:
+    def __init__(self, order=None, *, fail_send=False):
+        self.order = order if order is not None else []
+        self.fail_send = fail_send
+        self.sent = []
+        self.unified_msg_origin = "private:10001"
+
     def get_sender_id(self):
         return "10001"
 
+    def get_sender_name(self):
+        return "Alice"
+
+    def get_group_id(self):
+        return ""
+
+    def get_platform_name(self):
+        return "aiocqhttp"
+
     def plain_result(self, text):
         return text
+
+    def chain_result(self, chain):
+        return chain
+
+    async def send(self, payload):
+        self.order.append("send")
+        if self.fail_send:
+            raise RuntimeError("send failed")
+        self.sent.append(payload)
 
 
 class _FailingClient:
@@ -27,7 +64,218 @@ async def _collect(async_iterable):
     return [item async for item in async_iterable]
 
 
+def _profile() -> CheckinProfile:
+    return CheckinProfile(
+        user_id="10001",
+        coins=180,
+        affection=12.5,
+        total_days=3,
+        streak_days=3,
+        last_checkin_date="2026-07-11",
+        boost_start_date="",
+        boost_until_date="",
+        repeat_penalty_date="",
+        repeat_penalty_total=0.0,
+        created_at="2026-07-11T08:00:00+08:00",
+        updated_at="2026-07-11T08:00:00+08:00",
+    )
+
+
+def _record(*, persisted=True, with_background=True) -> CheckinRecord:
+    return CheckinRecord(
+        date_key="2026-07-11",
+        user_id="10001",
+        username="Alice",
+        bot_name="neko",
+        base_coins=80,
+        bonus_coins=0,
+        coins_reward=80,
+        base_affection=0.8,
+        bonus_affection=0.0,
+        affection_reward=0.8,
+        boost_active=False,
+        boost_multiplier=1.0,
+        total_coins_after=180,
+        total_affection_after=12.5,
+        total_days_after=3,
+        streak_days_after=3,
+        note="今日小记",
+        background_mode="pixiv_daily" if with_background else "",
+        background_source="rank:week" if with_background else "",
+        background_illust_id="445566" if with_background else "",
+        background_title="Blue Sky" if with_background else "",
+        background_author="Someone" if with_background else "",
+        created_at="2026-07-11T08:00:00+08:00",
+        updated_at="2026-07-11T08:00:00+08:00",
+        event_key="normal" if persisted else "",
+        event_label="",
+        greeting="今天也见面了" if persisted else "",
+        greeting_source="local",
+        secondary_note="",
+        template_version="v2",
+    )
+
+
+class _FakeCheckinStore:
+    def __init__(self, result: CheckinResult, order):
+        self.result = result
+        self.order = order
+        self.content_updates = []
+        self.background_updates = []
+
+    async def checkin(self, **_kwargs):
+        self.order.append("checkin")
+        return self.result
+
+    async def update_record_content(self, **kwargs):
+        source = kwargs["greeting_source"]
+        self.order.append(f"content:{source}")
+        self.content_updates.append(kwargs)
+        return replace(
+            self.result.record,
+            event_key=kwargs["event_key"],
+            event_label=kwargs["event_label"],
+            greeting=kwargs["greeting"],
+            greeting_source=source,
+            secondary_note=kwargs["secondary_note"],
+            template_version=kwargs["template_version"],
+        )
+
+    async def update_record_background(self, **kwargs):
+        self.order.append("background_metadata")
+        self.background_updates.append(kwargs)
+
+
+class _FakeGreetingGenerator:
+    def __init__(self, order):
+        self.order = order
+        self.calls = []
+
+    async def generate(self, event, context, **kwargs):
+        self.order.append("ai")
+        self.calls.append((event, context, kwargs))
+        return "AI 今天也很高兴见到你", "ai"
+
+
+class _FakeCache:
+    def __init__(self, cache_path: Path, order, *, hit=False, fail_store=False):
+        self.cache_path = cache_path
+        self.order = order
+        self.hit = hit
+        self.fail_store = fail_store
+        self.get_calls = []
+        self.store_calls = []
+        self.key_inputs = []
+
+    def cache_key(self, **kwargs):
+        self.key_inputs.append(kwargs)
+        return "a" * 64
+
+    def get(self, date_key, key):
+        self.order.append("cache_get")
+        self.get_calls.append((date_key, key))
+        return self.cache_path if self.hit else None
+
+    async def store(self, date_key, key, renderer):
+        self.order.append("cache_store")
+        self.store_calls.append((date_key, key))
+        if self.fail_store:
+            raise ValueError("invalid rendered card")
+        rendered_path = Path(await renderer())
+        self.cache_path.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copyfile(rendered_path, self.cache_path)
+        self.hit = True
+        return self.cache_path
+
+
+def _make_card(path: Path) -> str:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    PILImage.new("RGB", (960, 540), (238, 224, 196)).save(path, format="JPEG")
+    return str(path)
+
+
+def _plugin_for_checkin(tmp: str, result: CheckinResult, order, *, cache_hit=False):
+    plugin = object.__new__(GetPxPlugin)
+    plugin.config = {
+        "checkin_enabled": True,
+        "checkin_bot_name": "neko",
+        "checkin_avatar_enabled": False,
+        "checkin_ai_greeting_enabled": True,
+        "checkin_ai_greeting_provider_id": "provider-1",
+        "checkin_ai_greeting_prompt": "prompt",
+        "checkin_ai_greeting_timeout": 8.0,
+    }
+    plugin.checkin_store = _FakeCheckinStore(result, order)
+    plugin.checkin_greeting = _FakeGreetingGenerator(order)
+    cache_path = Path(tmp) / "cache" / "card.jpg"
+    if cache_hit:
+        _make_card(cache_path)
+    plugin.checkin_cache = _FakeCache(cache_path, order, hit=cache_hit)
+    plugin._prepare_checkin_background = AsyncMock()
+    plugin._restore_checkin_background = AsyncMock()
+    plugin._render_checkin_card = AsyncMock()
+
+    async def record_usage(_event, background):
+        if background and background.image_path:
+            order.append("usage")
+
+    plugin._record_checkin_background = AsyncMock(side_effect=record_usage)
+    plugin._release_checkin_background_claim = AsyncMock(
+        side_effect=lambda *_: order.append("release_claim")
+    )
+    return plugin
+
+
+class _ConcurrentCheckinStore(_FakeCheckinStore):
+    def __init__(self, first_result: CheckinResult, order):
+        super().__init__(first_result, order)
+        self.checkin_calls = 0
+        self.current_record = first_result.record
+
+    async def checkin(self, **_kwargs):
+        self.checkin_calls += 1
+        self.order.append(f"checkin:{self.checkin_calls}")
+        if self.checkin_calls == 1:
+            return self.result
+        return CheckinResult(_profile(), self.current_record, duplicate=True)
+
+    async def update_record_content(self, **kwargs):
+        updated = await super().update_record_content(**kwargs)
+        self.current_record = updated
+        return updated
+
+    async def update_record_background(self, **kwargs):
+        await super().update_record_background(**kwargs)
+        self.current_record = replace(
+            self.current_record,
+            background_mode=kwargs["mode"],
+            background_source=kwargs["source"],
+            background_illust_id=kwargs["illust_id"],
+            background_title=kwargs["title"],
+            background_author=kwargs["author"],
+        )
+
+
 class MainErrorHandlingTest(unittest.IsolatedAsyncioTestCase):
+    def test_duplicate_penalty_formatter_is_removed(self):
+        source = inspect.getsource(GetPxPlugin)
+
+        self.assertNotIn("_format_duplicate_checkin_text", source)
+
+    def test_checkin_flow_lock_is_user_scoped_across_midnight(self):
+        source = inspect.getsource(GetPxPlugin._handle_checkin)
+
+        self.assertIn("lock_key = user_id", source)
+        self.assertNotIn("CheckinStore.today_key()", source)
+
+    def test_portrait_page_exhaustion_log_has_neutral_reason(self):
+        source = inspect.getsource(GetPxPlugin._download_checkin_pixiv_background)
+
+        self.assertIn("连续 {CHECKIN_BACKGROUND_PAGE_ATTEMPTS} 页无可用竖向作品", source)
+        self.assertNotIn(
+            "连续 {CHECKIN_BACKGROUND_PAGE_ATTEMPTS} 页候选均已使用", source
+        )
+
     async def test_handle_info_hides_pixiv_detail_exception(self):
         plugin = object.__new__(GetPxPlugin)
         plugin.client = _FailingClient()
@@ -60,6 +308,244 @@ class MainErrorHandlingTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(payload, {"success": False, "error": "服务内部错误，请稍后重试"})
         self.assertNotIn("pixiv.db", body)
         self.assertNotIn("secret", body)
+
+    async def test_duplicate_checkin_sends_cached_card_without_ai_or_artwork_selection(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            order = []
+            result = CheckinResult(_profile(), _record(), duplicate=True)
+            plugin = _plugin_for_checkin(tmp, result, order, cache_hit=True)
+            event = _FakeEvent(order)
+
+            output = await _collect(plugin._handle_checkin(event))
+
+            self.assertEqual(output, [])
+            self.assertEqual(len(event.sent), 1)
+            self.assertTrue(plugin.checkin_cache.cache_path.exists())
+            self.assertEqual(plugin.checkin_greeting.calls, [])
+            plugin._prepare_checkin_background.assert_not_awaited()
+            plugin._restore_checkin_background.assert_not_awaited()
+            plugin._render_checkin_card.assert_not_awaited()
+            self.assertEqual(plugin.checkin_store.background_updates, [])
+            self.assertEqual(order, ["checkin", "cache_get", "send"])
+
+    async def test_duplicate_cache_miss_restores_same_artwork_and_rerenders(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            order = []
+            record = _record()
+            result = CheckinResult(_profile(), record, duplicate=True)
+            plugin = _plugin_for_checkin(tmp, result, order)
+            source = Path(tmp) / "restored.png"
+            PILImage.new("RGB", (750, 1000), (40, 80, 160)).save(source)
+            restored = CardBackground(
+                image_path=str(source),
+                mode="pixiv_daily",
+                source=record.background_source,
+                illust_id=record.background_illust_id,
+                title=record.background_title,
+                author=record.background_author,
+            )
+            plugin._restore_checkin_background.return_value = restored
+            rendered = Path(tmp) / "rendered.jpg"
+
+            async def render(*_args, **_kwargs):
+                order.append("render")
+                return _make_card(rendered)
+
+            plugin._render_checkin_card.side_effect = render
+
+            output = await _collect(plugin._handle_checkin(_FakeEvent(order)))
+
+            self.assertEqual(output, [])
+            plugin._prepare_checkin_background.assert_not_awaited()
+            plugin._restore_checkin_background.assert_awaited_once()
+            self.assertEqual(
+                plugin._restore_checkin_background.await_args.args[1].background_illust_id,
+                "445566",
+            )
+            self.assertEqual(plugin.checkin_greeting.calls, [])
+            self.assertTrue(plugin.checkin_cache.cache_path.exists())
+            self.assertEqual(plugin.checkin_store.background_updates, [])
+            self.assertLess(order.index("cache_get"), order.index("render"))
+            self.assertLess(order.index("render"), order.index("send"))
+
+    async def test_first_checkin_persists_content_then_rendered_artwork_and_usage_after_send(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            order = []
+            record = _record(persisted=False, with_background=False)
+            result = CheckinResult(_profile(), record, duplicate=False)
+            plugin = _plugin_for_checkin(tmp, result, order)
+            source = Path(tmp) / "selected.png"
+            PILImage.new("RGB", (750, 1000), (40, 80, 160)).save(source)
+            selected = CardBackground(
+                image_path=str(source),
+                mode="pixiv_daily",
+                source="rank:week",
+                illust_id="445566",
+                title="Blue Sky",
+                author="Someone",
+                illust={"id": 445566, "width": 750, "height": 1000},
+            )
+
+            async def prepare(*_args, **_kwargs):
+                order.append("select_artwork")
+                return selected
+
+            plugin._prepare_checkin_background.side_effect = prepare
+            rendered = Path(tmp) / "rendered.jpg"
+
+            async def render(*_args, **_kwargs):
+                order.append("render")
+                return _make_card(rendered)
+
+            plugin._render_checkin_card.side_effect = render
+
+            output = await _collect(plugin._handle_checkin(_FakeEvent(order)))
+
+            self.assertEqual(output, [])
+            self.assertEqual(
+                [update["greeting_source"] for update in plugin.checkin_store.content_updates],
+                ["local", "ai"],
+            )
+            self.assertEqual(len(plugin.checkin_store.background_updates), 1)
+            self.assertEqual(plugin.checkin_store.background_updates[0]["illust_id"], "445566")
+            self.assertEqual(len(plugin.checkin_greeting.calls), 1)
+            self.assertLess(order.index("content:local"), order.index("ai"))
+            self.assertLess(order.index("ai"), order.index("content:ai"))
+            self.assertLess(order.index("render"), order.index("background_metadata"))
+            self.assertLess(order.index("background_metadata"), order.index("send"))
+            self.assertLess(order.index("send"), order.index("usage"))
+            self.assertTrue(plugin.checkin_cache.cache_path.exists())
+
+    async def test_render_failure_does_not_persist_artwork_or_usage(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            order = []
+            result = CheckinResult(
+                _profile(), _record(persisted=False, with_background=False), duplicate=False
+            )
+            plugin = _plugin_for_checkin(tmp, result, order)
+            source = Path(tmp) / "selected.png"
+            PILImage.new("RGB", (750, 1000), (40, 80, 160)).save(source)
+            background = CardBackground(
+                image_path=str(source),
+                mode="pixiv_daily",
+                source="rank:week",
+                illust_id="445566",
+                title="Blue Sky",
+                author="Someone",
+            )
+            plugin._prepare_checkin_background.return_value = background
+            plugin.checkin_cache.fail_store = True
+
+            output = await _collect(plugin._handle_checkin(_FakeEvent(order)))
+
+            self.assertEqual(len(output), 1)
+            self.assertEqual(plugin.checkin_store.background_updates, [])
+            plugin._record_checkin_background.assert_not_awaited()
+            plugin._release_checkin_background_claim.assert_awaited_once()
+
+    async def test_send_failure_keeps_cache_but_does_not_record_usage(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            order = []
+            result = CheckinResult(
+                _profile(), _record(persisted=False, with_background=False), duplicate=False
+            )
+            plugin = _plugin_for_checkin(tmp, result, order)
+            source = Path(tmp) / "selected.png"
+            PILImage.new("RGB", (750, 1000), (40, 80, 160)).save(source)
+            plugin._prepare_checkin_background.return_value = CardBackground(
+                image_path=str(source),
+                mode="pixiv_daily",
+                source="rank:week",
+                illust_id="445566",
+                title="Blue Sky",
+                author="Someone",
+            )
+            rendered = Path(tmp) / "rendered.jpg"
+            plugin._render_checkin_card.return_value = _make_card(rendered)
+
+            output = await _collect(
+                plugin._handle_checkin(_FakeEvent(order, fail_send=True))
+            )
+
+            self.assertEqual(len(output), 1)
+            self.assertEqual(len(plugin.checkin_store.background_updates), 1)
+            self.assertTrue(plugin.checkin_cache.cache_path.exists())
+            plugin._record_checkin_background.assert_not_awaited()
+            plugin._release_checkin_background_claim.assert_awaited_once()
+
+    async def test_same_user_concurrent_checkins_wait_for_the_first_full_flow(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            order = []
+            first_result = CheckinResult(
+                _profile(), _record(persisted=False, with_background=False), duplicate=False
+            )
+            plugin = _plugin_for_checkin(tmp, first_result, order)
+            store = _ConcurrentCheckinStore(first_result, order)
+            plugin.checkin_store = store
+            source = Path(tmp) / "selected.png"
+            PILImage.new("RGB", (750, 1000), (40, 80, 160)).save(source)
+            prepare_started = asyncio.Event()
+            finish_prepare = asyncio.Event()
+
+            async def prepare(*_args, **_kwargs):
+                prepare_started.set()
+                await finish_prepare.wait()
+                return CardBackground(
+                    image_path=str(source),
+                    mode="pixiv_daily",
+                    source="rank:week",
+                    illust_id="445566",
+                    title="Blue Sky",
+                    author="Someone",
+                )
+
+            plugin._prepare_checkin_background.side_effect = prepare
+            rendered = Path(tmp) / "rendered.jpg"
+            plugin._render_checkin_card.return_value = _make_card(rendered)
+
+            first = asyncio.create_task(_collect(plugin._handle_checkin(_FakeEvent(order))))
+            await prepare_started.wait()
+            second = asyncio.create_task(_collect(plugin._handle_checkin(_FakeEvent(order))))
+            await asyncio.sleep(0.02)
+            calls_before_first_finished = store.checkin_calls
+            finish_prepare.set()
+            await asyncio.gather(first, second)
+
+            self.assertEqual(calls_before_first_finished, 1)
+            self.assertEqual(store.checkin_calls, 2)
+
+    async def test_duplicate_cache_identity_uses_record_snapshot_not_current_profile(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            order = []
+            record = replace(_record(), boost_active=True, boost_multiplier=2.0)
+            current_profile = replace(
+                _profile(),
+                coins=9999,
+                affection=88.8,
+                total_days=99,
+                streak_days=20,
+                boost_start_date="2026-07-01",
+                boost_until_date="2026-07-31",
+            )
+            plugin = _plugin_for_checkin(
+                tmp,
+                CheckinResult(current_profile, record, duplicate=True),
+                order,
+                cache_hit=True,
+            )
+
+            output = await _collect(plugin._handle_checkin(_FakeEvent(order)))
+
+            self.assertEqual(output, [])
+            view_model = plugin.checkin_cache.key_inputs[0]["view_model"]
+            self.assertEqual(view_model["coins_total"], record.total_coins_after)
+            self.assertEqual(
+                view_model["affection_value_label"],
+                f"{record.total_affection_after:.2f}",
+            )
+            self.assertEqual(view_model["total_days"], record.total_days_after)
+            self.assertEqual(view_model["streak_days"], record.streak_days_after)
+            self.assertEqual(view_model["boost_status_text"], "好感度奖励 ×2")
 
 
 if __name__ == "__main__":

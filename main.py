@@ -22,6 +22,7 @@ from __future__ import annotations
 
 import asyncio
 import base64
+from dataclasses import replace
 import hashlib
 import os
 from pathlib import Path
@@ -53,12 +54,18 @@ from .checkin_background import (
     CHECKIN_ARTWORK_TOLERANCE,
     filter_illusts_by_aspect_ratio,
 )
+from .checkin_cache import CheckinCardCache
 from .checkin_card import (
     CHECKIN_CARD_HEIGHT,
     CHECKIN_CARD_TEMPLATE,
     CHECKIN_CARD_WIDTH,
     CardBackground,
     build_checkin_card_data,
+)
+from .checkin_content import resolve_checkin_content
+from .checkin_greeting import (
+    DEFAULT_CHECKIN_GREETING_PROMPT,
+    CheckinGreetingGenerator,
 )
 from .downloader import ImageDownloader, cleanup, pick_image_url, pick_image_url_exact
 from .image_index import ImageIndexStore, ordered_by_unused
@@ -124,6 +131,9 @@ class GetPxPlugin(Star):
         self.image_index: ImageIndexStore | None = None
         self.image_history: ImageAssetManager | None = None
         self.checkin_store: CheckinStore | None = None
+        self.checkin_cache: CheckinCardCache | None = None
+        self.checkin_greeting = CheckinGreetingGenerator(context)
+        self._checkin_flow_locks: dict[str, asyncio.Lock] = {}
 
     # ──────────────────────────────────────────────────────────────
     # 生命周期
@@ -138,6 +148,10 @@ class GetPxPlugin(Star):
         await self.image_index.cleanup_old_days()
         self.image_history = ImageAssetManager(data_dir)
         self.checkin_store = CheckinStore(data_dir)
+        self.checkin_cache = CheckinCardCache(
+            self.data_dir / "checkin_card_cache"
+        )
+        self.checkin_cache.cleanup_expired(force=True)
         self._register_image_history_web_apis()
         logger.info(f"{LOG_PREFIX} 插件已加载")
 
@@ -916,9 +930,13 @@ class GetPxPlugin(Star):
             logger.warning(f"{LOG_PREFIX} 写入当天发图索引失败: {e}")
 
     async def _handle_checkin(
-        self, event: AstrMessageEvent, *, silent_when_disabled: bool = False
+        self,
+        event: AstrMessageEvent,
+        *,
+        silent_when_disabled: bool = False,
+        _flow_locked: bool = False,
     ):
-        """Handle first check-in, duplicate penalty, and card rendering fallback."""
+        """Create or resend today's persisted check-in card."""
         if not self._cfg_bool("checkin_enabled", True):
             if not silent_when_disabled:
                 yield event.plain_result("签到功能已关闭")
@@ -934,6 +952,26 @@ class GetPxPlugin(Star):
         username = self._event_username(event, user_id)
         bot_name = self._cfg_str("checkin_bot_name", "neko") or "neko"
 
+        if not _flow_locked:
+            locks = getattr(self, "_checkin_flow_locks", None)
+            if locks is None:
+                locks = {}
+                self._checkin_flow_locks = locks
+            lock_key = user_id
+            lock = locks.setdefault(lock_key, asyncio.Lock())
+            async with lock:
+                outputs = [
+                    item
+                    async for item in self._handle_checkin(
+                        event,
+                        silent_when_disabled=silent_when_disabled,
+                        _flow_locked=True,
+                    )
+                ]
+            for output in outputs:
+                yield output
+            return
+
         try:
             result = await self.checkin_store.checkin(
                 user_id=user_id,
@@ -945,20 +983,71 @@ class GetPxPlugin(Star):
             yield event.plain_result(f"签到失败: {e}")
             return
 
-        if result.duplicate:
-            yield event.plain_result(self._format_duplicate_checkin_text(result))
-            return
-
         record = result.record
         if record is None:
             yield event.plain_result(self._format_checkin_plain_text(result))
             return
 
-        background: CardBackground | None = None
-        card_path = ""
         try:
-            background = await self._prepare_checkin_background(event, record)
-            if background is not None:
+            record = await self._prepare_checkin_record_content(
+                event,
+                record,
+                allow_ai=not result.duplicate,
+            )
+            result = replace(result, record=record)
+        except Exception as e:
+            logger.warning(f"{LOG_PREFIX} 签到内容持久化失败，回退纯文字: {e}")
+            yield event.plain_result(self._format_checkin_plain_text(result))
+            return
+
+        cache = getattr(self, "checkin_cache", None)
+        if cache is None:
+            yield event.plain_result(self._format_checkin_plain_text(result))
+            return
+
+        background: CardBackground | None = None
+        card_path: Path | None = None
+        claim_held = False
+        profile_snapshot = self._checkin_profile_from_record(record)
+        try:
+            if result.duplicate:
+                background = self._checkin_background_from_record(record)
+            else:
+                background = await self._prepare_checkin_background(event, record)
+                claim_held = bool(
+                    background is not None
+                    and background.mode == "pixiv_daily"
+                    and background.illust_id
+                )
+
+            cache_key = self._checkin_card_cache_key(
+                event,
+                profile=profile_snapshot,
+                record=record,
+                background=background,
+                bot_name=bot_name,
+            )
+            cached_path = cache.get(record.date_key, cache_key)
+            if cached_path is None and result.duplicate:
+                background = await self._restore_checkin_background(event, record)
+
+            async def render_card() -> str:
+                return await self._render_checkin_card(
+                    event,
+                    profile=profile_snapshot,
+                    record=record,
+                    background=background,
+                    bot_name=bot_name,
+                )
+
+            if cached_path is None:
+                cached_path = await cache.store(
+                    record.date_key,
+                    cache_key,
+                    render_card,
+                )
+
+            if not result.duplicate and background is not None:
                 await self.checkin_store.update_record_background(
                     user_id=user_id,
                     date_key=record.date_key,
@@ -968,39 +1057,221 @@ class GetPxPlugin(Star):
                     title=background.title,
                     author=background.author,
                 )
-            card_path = await self._render_checkin_card(
-                event,
-                profile=result.profile,
-                record=record,
-                background=background,
-                bot_name=bot_name,
-            )
+            card_path = cached_path
         except Exception as e:
             logger.warning(f"{LOG_PREFIX} 签到卡片渲染失败，回退纯文字: {e}")
 
         if card_path:
-            sent_card = False
             try:
-                content = [Image.fromFileSystem(card_path)]
+                content = [Image.fromFileSystem(str(card_path))]
                 if background and background.pixiv_caption:
                     content.append(Plain(background.pixiv_caption))
                 await event.send(event.chain_result(content))
                 await self._record_checkin_background(event, background)
-                sent_card = True
+                claim_held = False
+                if (
+                    background
+                    and background.image_path
+                    and background.mode == "pixiv_daily"
+                ):
+                    cleanup(background.image_path)
                 return
             except Exception as e:
                 logger.warning(f"{LOG_PREFIX} 签到卡片发送失败，回退纯文字: {e}")
-            finally:
-                cleanup(card_path)
-                if not sent_card:
-                    await self._release_checkin_background_claim(event, background)
-                if background and background.image_path and background.mode == "pixiv_daily":
-                    cleanup(background.image_path)
-
-        if background and background.image_path and background.mode == "pixiv_daily":
+        if claim_held:
             await self._release_checkin_background_claim(event, background)
+        if background and background.image_path and background.mode == "pixiv_daily":
             cleanup(background.image_path)
         yield event.plain_result(self._format_checkin_plain_text(result))
+
+    async def _prepare_checkin_record_content(
+        self,
+        event: AstrMessageEvent,
+        record: CheckinRecord,
+        *,
+        allow_ai: bool,
+    ) -> CheckinRecord:
+        if record.greeting:
+            return record
+
+        content = resolve_checkin_content(
+            record,
+            self._checkin_profile_from_record(record),
+        )
+        record = await self.checkin_store.update_record_content(
+            user_id=record.user_id,
+            date_key=record.date_key,
+            event_key=content.event_key,
+            event_label=content.event_label,
+            greeting=content.greeting,
+            greeting_source="local",
+            secondary_note=content.secondary_note,
+            template_version=record.template_version or "v2",
+        )
+        if not allow_ai:
+            return record
+
+        greeting, source = await self.checkin_greeting.generate(
+            event,
+            content.context,
+            enabled=self._cfg_bool("checkin_ai_greeting_enabled", False),
+            provider_id=self._cfg_str("checkin_ai_greeting_provider_id", ""),
+            prompt=self._cfg_str(
+                "checkin_ai_greeting_prompt",
+                DEFAULT_CHECKIN_GREETING_PROMPT,
+            ),
+            timeout=self._cfg_float(
+                "checkin_ai_greeting_timeout",
+                8.0,
+                1.0,
+                30.0,
+            ),
+        )
+        if source != "ai":
+            return record
+        return await self.checkin_store.update_record_content(
+            user_id=record.user_id,
+            date_key=record.date_key,
+            event_key=content.event_key,
+            event_label=content.event_label,
+            greeting=greeting,
+            greeting_source="ai",
+            secondary_note=content.secondary_note,
+            template_version=record.template_version or "v2",
+        )
+
+    @staticmethod
+    def _checkin_profile_from_record(record: CheckinRecord) -> CheckinProfile:
+        return CheckinProfile(
+            user_id=record.user_id,
+            coins=record.total_coins_after,
+            affection=record.total_affection_after,
+            total_days=record.total_days_after,
+            streak_days=record.streak_days_after,
+            last_checkin_date=record.date_key,
+            boost_start_date="",
+            boost_until_date="",
+            repeat_penalty_date="",
+            repeat_penalty_total=0.0,
+            created_at=record.created_at,
+            updated_at=record.updated_at,
+        )
+
+    @staticmethod
+    def _checkin_background_from_record(record: CheckinRecord) -> CardBackground:
+        return CardBackground(
+            mode=record.background_mode or "fallback",
+            source=record.background_source,
+            illust_id=record.background_illust_id,
+            title=record.background_title,
+            author=record.background_author,
+        )
+
+    def _checkin_card_cache_key(
+        self,
+        event: AstrMessageEvent,
+        *,
+        profile: CheckinProfile,
+        record: CheckinRecord,
+        background: CardBackground | None,
+        bot_name: str,
+    ) -> str:
+        background = background or self._checkin_background_from_record(record)
+        identity_background = CardBackground(
+            mode=background.mode,
+            source=background.source,
+            illust_id=background.illust_id,
+            title=background.title,
+            author=background.author,
+        )
+        avatar_url = (
+            self._checkin_avatar_url(event)
+            if self._cfg_bool("checkin_avatar_enabled", True)
+            else ""
+        )
+        view_model = build_checkin_card_data(
+            profile=profile,
+            record=record,
+            bot_name=bot_name,
+            avatar_url=avatar_url,
+            background=identity_background,
+        )
+        view_model["background_mode"] = identity_background.mode
+        view_model["background_source"] = identity_background.source
+        return self.checkin_cache.cache_key(
+            date_key=record.date_key,
+            user_id=record.user_id,
+            template_version=record.template_version or "v2",
+            view_model=view_model,
+        )
+
+    async def _restore_checkin_background(
+        self,
+        event: AstrMessageEvent,
+        record: CheckinRecord,
+    ) -> CardBackground:
+        saved = self._checkin_background_from_record(record)
+        if record.background_mode == "custom":
+            custom_path = self._resolve_custom_background_path(
+                self._cfg_str("checkin_custom_background", "")
+            )
+            if custom_path is not None:
+                return replace(saved, image_path=str(custom_path), mode="custom")
+            return replace(saved, mode="fallback")
+
+        if not record.background_illust_id:
+            return replace(saved, mode="fallback")
+        if self.client is None:
+            self._init_client()
+        if self.client is None:
+            return replace(saved, mode="fallback")
+
+        try:
+            illust = await self.client.illust_detail(int(record.background_illust_id))
+            if not illust:
+                return replace(saved, mode="fallback")
+            if not filter_illusts_by_aspect_ratio(
+                [illust],
+                CHECKIN_ARTWORK_TARGET_RATIO,
+                CHECKIN_ARTWORK_TOLERANCE,
+            ):
+                logger.warning(
+                    f"{LOG_PREFIX} 签到背景恢复拒绝非 3:4 作品 {record.background_illust_id}"
+                )
+                return replace(saved, mode="fallback")
+
+            quality = self._cfg_str("image_quality", "original")
+            timeout_sec = self._cfg_float("request_timeout", 30.0, 5.0, 120.0)
+            downgrade_limit_mb = self._cfg_float(
+                "auto_downgrade_original_mb",
+                DEFAULT_AUTO_DOWNGRADE_ORIGINAL_LIMIT_MB,
+                0.0,
+                100.0,
+            )
+            path, actual_quality, file_size = await self.downloader.download_for_send(
+                illust,
+                quality,
+                proxy=self._cfg_str("pixiv_proxy_url"),
+                timeout=timeout_sec,
+                downgrade_limit_bytes=int(downgrade_limit_mb * 1024 * 1024),
+                log_context=f"[签到背景恢复] 作品 {record.background_illust_id}",
+            )
+            return CardBackground(
+                image_path=path,
+                mode="pixiv_daily",
+                source=record.background_source,
+                illust_id=record.background_illust_id,
+                title=record.background_title,
+                author=record.background_author,
+                illust=illust,
+                quality=actual_quality,
+                file_size=file_size,
+            )
+        except Exception as e:
+            logger.warning(
+                f"{LOG_PREFIX} 签到背景 {record.background_illust_id} 恢复失败，使用占位图: {e}"
+            )
+            return replace(saved, mode="fallback")
 
     async def _handle_checkin_preview(self, event: AstrMessageEvent):
         user_id = str(event.get_sender_id() or "debug")
@@ -1180,35 +1451,25 @@ class GetPxPlugin(Star):
             lines.append(f"/购买加持 {days} - {days} 天，{cost} 金币")
         return "\n".join(lines)
 
-    def _format_duplicate_checkin_text(self, result) -> str:
-        level = affection_level(result.profile.affection)
-        if result.penalty_amount > 0:
-            penalty = f"本次好感度 -{result.penalty_amount:.2f}"
-        else:
-            penalty = "今天重复签到惩罚已到上限"
-        return "\n".join(
-            [
-                "今天已经签到过了喵，再戳会掉好感度哦。",
-                f"{penalty}，当前好感度 {result.profile.affection:.2f}（{level['name']}）。",
-                f"今日重复签到累计扣除 {result.penalty_total_today:.2f}/1.00。",
-            ]
-        )
-
     @staticmethod
     def _format_checkin_plain_text(result) -> str:
         record = result.record
-        profile = result.profile
         if record is None:
             return "签到成功"
-        level = affection_level(profile.affection)
+        level = affection_level(record.total_affection_after)
+        heading = (
+            f"{record.username} 今日签到记录"
+            if result.duplicate
+            else f"{record.username} 签到成功"
+        )
         return "\n".join(
             [
-                f"{record.username} 签到成功",
+                heading,
                 f"日期: {record.date_key}",
                 f"今日奖励: 金币 +{record.coins_reward}，好感度 +{record.affection_reward:.2f}",
-                f"累计签到: {profile.total_days} 天，连续签到: {profile.streak_days} 天",
-                f"金币: {profile.coins}，好感度: {profile.affection:.2f}（{level['name']}）",
-                record.note,
+                f"累计签到: {record.total_days_after} 天，连续签到: {record.streak_days_after} 天",
+                f"金币: {record.total_coins_after}，好感度: {record.total_affection_after:.2f}（{level['name']}）",
+                record.greeting or record.note,
             ]
         )
 
@@ -1392,7 +1653,7 @@ class GetPxPlugin(Star):
                 return None
         else:
             logger.info(
-                f"{LOG_PREFIX} 签到背景连续 {CHECKIN_BACKGROUND_PAGE_ATTEMPTS} 页候选均已使用"
+                f"{LOG_PREFIX} 签到背景连续 {CHECKIN_BACKGROUND_PAGE_ATTEMPTS} 页无可用竖向作品"
             )
             return None
 
