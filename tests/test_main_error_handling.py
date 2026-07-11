@@ -477,6 +477,66 @@ class MainErrorHandlingTest(unittest.IsolatedAsyncioTestCase):
             plugin._record_checkin_background.assert_not_awaited()
             plugin._release_checkin_background_claim.assert_awaited_once()
 
+    async def test_cache_store_cancellation_releases_claim_and_cleans_pixiv_source(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            order = []
+            result = CheckinResult(
+                _profile(), _record(persisted=False, with_background=False), duplicate=False
+            )
+            plugin = _plugin_for_checkin(tmp, result, order)
+            source = Path(tmp) / "selected.png"
+            PILImage.new("RGB", (750, 1000), (40, 80, 160)).save(source)
+            plugin._prepare_checkin_background.return_value = CardBackground(
+                image_path=str(source),
+                mode="pixiv_daily",
+                source="rank:week",
+                illust_id="445566",
+                title="Blue Sky",
+                author="Someone",
+            )
+            final_cache = plugin.checkin_cache.cache_path
+
+            async def cancel_after_cache_publish(*_args):
+                _make_card(final_cache)
+                raise asyncio.CancelledError()
+
+            plugin.checkin_cache.store = AsyncMock(side_effect=cancel_after_cache_publish)
+
+            with self.assertRaises(asyncio.CancelledError):
+                await _collect(plugin._handle_checkin(_FakeEvent(order)))
+
+            plugin._release_checkin_background_claim.assert_awaited_once()
+            self.assertFalse(source.exists())
+            self.assertTrue(final_cache.exists())
+
+    async def test_usage_cancellation_releases_claim_cleans_source_and_keeps_cache(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            order = []
+            result = CheckinResult(
+                _profile(), _record(persisted=False, with_background=False), duplicate=False
+            )
+            plugin = _plugin_for_checkin(tmp, result, order)
+            source = Path(tmp) / "selected.png"
+            PILImage.new("RGB", (750, 1000), (40, 80, 160)).save(source)
+            plugin._prepare_checkin_background.return_value = CardBackground(
+                image_path=str(source),
+                mode="pixiv_daily",
+                source="rank:week",
+                illust_id="445566",
+                title="Blue Sky",
+                author="Someone",
+            )
+            rendered = Path(tmp) / "rendered.jpg"
+            plugin._render_checkin_card.return_value = _make_card(rendered)
+            plugin._record_checkin_background.side_effect = asyncio.CancelledError()
+
+            with self.assertRaises(asyncio.CancelledError):
+                await _collect(plugin._handle_checkin(_FakeEvent(order)))
+
+            plugin._release_checkin_background_claim.assert_awaited_once()
+            self.assertFalse(source.exists())
+            self.assertTrue(plugin.checkin_cache.cache_path.exists())
+
     async def test_failed_first_send_then_cached_resend_records_metadata_usage_once(self):
         with tempfile.TemporaryDirectory() as tmp:
             order = []

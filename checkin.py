@@ -953,6 +953,27 @@ def _validate_checkin_snapshot(snapshot: dict[str, Any]) -> dict[str, Any]:
     normalized_records = [
         _normalize_record_snapshot_row(row, index) for index, row in enumerate(records)
     ]
+    profile_user_ids: set[str] = set()
+    for index, profile in enumerate(normalized_profiles):
+        user_id = profile["user_id"]
+        if user_id in profile_user_ids:
+            raise ValueError(f"profiles[{index}].user_id duplicate: {user_id}")
+        profile_user_ids.add(user_id)
+
+    record_keys: set[tuple[str, str]] = set()
+    for index, record in enumerate(normalized_records):
+        record_key = (record["date_key"], record["user_id"])
+        if record_key in record_keys:
+            raise ValueError(
+                f"records[{index}].date_key and user_id duplicate: "
+                f"{record_key[0]}, {record_key[1]}"
+            )
+        record_keys.add(record_key)
+        if record["user_id"] not in profile_user_ids:
+            raise ValueError(
+                f"records[{index}].user_id has no matching profile: "
+                f"{record['user_id']}"
+            )
     return {
         "schema_version": CHECKIN_SNAPSHOT_SCHEMA_VERSION,
         "plugin_name": CHECKIN_SNAPSHOT_PLUGIN_NAME,

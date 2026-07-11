@@ -633,6 +633,42 @@ class CheckinStoreTest(unittest.IsolatedAsyncioTestCase):
             after = await target.export_snapshot()
             self.assertEqual(after, before)
 
+    async def test_import_rejects_orphan_record_without_mutating_data(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            store = FrozenCheckinStore(tmp, date_key="2026-05-26")
+            await store.checkin(user_id="10001", username="target", bot_name="neko")
+            before = await store.export_snapshot()
+            invalid = {**before, "profiles": []}
+
+            with self.assertRaisesRegex(ValueError, "records\\[0\\].*user_id"):
+                await store.import_snapshot(invalid)
+
+            self.assertEqual(await store.export_snapshot(), before)
+
+    async def test_import_rejects_duplicate_profile_user_id_without_mutating_data(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            store = FrozenCheckinStore(tmp, date_key="2026-05-26")
+            await store.checkin(user_id="10001", username="target", bot_name="neko")
+            before = await store.export_snapshot()
+            invalid = {**before, "profiles": [*before["profiles"], dict(before["profiles"][0])]}
+
+            with self.assertRaisesRegex(ValueError, "profiles\\[1\\].*user_id"):
+                await store.import_snapshot(invalid)
+
+            self.assertEqual(await store.export_snapshot(), before)
+
+    async def test_import_rejects_duplicate_record_key_without_mutating_data(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            store = FrozenCheckinStore(tmp, date_key="2026-05-26")
+            await store.checkin(user_id="10001", username="target", bot_name="neko")
+            before = await store.export_snapshot()
+            invalid = {**before, "records": [*before["records"], dict(before["records"][0])]}
+
+            with self.assertRaisesRegex(ValueError, "records\\[1\\].*date_key.*user_id"):
+                await store.import_snapshot(invalid)
+
+            self.assertEqual(await store.export_snapshot(), before)
+
 
 class CheckinBackgroundTest(unittest.TestCase):
     def test_parse_aspect_ratio_accepts_common_formats(self):

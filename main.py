@@ -1070,30 +1070,29 @@ class GetPxPlugin(Star):
                     author=background.author,
                 )
             card_path = cached_path
-        except Exception as e:
-            logger.warning(f"{LOG_PREFIX} 签到卡片渲染失败，回退纯文字: {e}")
-
-        if card_path:
-            try:
+            if card_path:
                 content = [Image.fromFileSystem(str(card_path))]
                 if background and background.pixiv_caption:
                     content.append(Plain(background.pixiv_caption))
                 await event.send(event.chain_result(content))
                 await self._record_checkin_background(event, background)
                 claim_held = False
+                return
+        except Exception as e:
+            card_path = None
+            logger.warning(f"{LOG_PREFIX} 签到卡片渲染失败，回退纯文字: {e}")
+        finally:
+            try:
+                if claim_held:
+                    await self._release_checkin_background_claim(event, background)
+                    claim_held = False
+            finally:
                 if (
                     background
                     and background.image_path
                     and background.mode == "pixiv_daily"
                 ):
                     cleanup(background.image_path)
-                return
-            except Exception as e:
-                logger.warning(f"{LOG_PREFIX} 签到卡片发送失败，回退纯文字: {e}")
-        if claim_held:
-            await self._release_checkin_background_claim(event, background)
-        if background and background.image_path and background.mode == "pixiv_daily":
-            cleanup(background.image_path)
         yield event.plain_result(self._format_checkin_plain_text(result))
 
     async def _prepare_checkin_record_content(
