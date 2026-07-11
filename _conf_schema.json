@@ -125,7 +125,7 @@
     "description": "签到自定义背景",
     "type": "string",
     "default": "",
-    "hint": "管理员配置的本地背景图片路径。推荐比例 16:9，建议 1920x1080 或 960x540；支持 jpg/png/webp。"
+    "hint": "管理员配置的本地背景图片路径。推荐 3:4 竖向图片，如 1200x1600 或 750x1000；作品相框使用 object-fit: contain 完整显示，不裁切；支持 jpg/png/webp。"
   },
   "checkin_avatar_enabled": {
     "description": "签到头像显示",

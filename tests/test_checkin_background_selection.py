@@ -1,3 +1,4 @@
+import json
 import sys
 import tempfile
 import unittest
@@ -66,6 +67,18 @@ def _illust(illust_id: int, *, width: int = 750, height: int = 1000) -> dict:
 
 
 class CheckinBackgroundSelectionTest(unittest.IsolatedAsyncioTestCase):
+    def test_custom_background_schema_recommends_portrait_contain_display(self):
+        schema_path = Path(__file__).resolve().parents[1] / "_conf_schema.json"
+        schema = json.loads(schema_path.read_text(encoding="utf-8"))
+        hint = schema["checkin_custom_background"]["hint"]
+
+        for landscape_contract in ("16:9", "1920x1080", "960x540"):
+            with self.subTest(landscape_contract=landscape_contract):
+                self.assertNotIn(landscape_contract, hint)
+        for portrait_contract in ("3:4", "竖", "contain", "不裁切"):
+            with self.subTest(portrait_contract=portrait_contract):
+                self.assertIn(portrait_contract, hint)
+
     def test_checkin_artwork_ratio_uses_fixed_closed_portrait_range(self):
         self.assertEqual(
             getattr(checkin_background, "CHECKIN_ARTWORK_TARGET_RATIO", None), 0.75
