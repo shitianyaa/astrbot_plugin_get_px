@@ -1,28 +1,21 @@
-# 签到卡片 V2 初始模板
+# 签到卡片 V2 运行时模板
 
-直接打开 `index.html` 查看静态原型。本目录不参与插件运行。
+本目录是插件实际使用的 Jinja 模板。`checkin_card.py` 启动时读取 `index.html`，并将 `style.css` 注入 `/*__CHECKIN_CARD_CSS__*/`，因此渲染结果不依赖外部样式或网络资源。
 
-## 设计方向
+## 视觉方向
 
-- “暮色纪念明信片”，作品与每日问候优先于账户数字。
-- 固定输出 `960 × 540`，无外部字体、脚本或网络资源。
-- 当前背景使用 CSS 抽象占位图，接入时替换为实际 Pixiv 图片。
+- 固定 `960 × 540` 的“H · 丰富信息纸张画册”。
+- 左侧约 `48%` 为签到信息，右侧约 `45%` 为固定竖向作品相框。
+- 暖色纸张、轻微印刷纹理和克制的编辑排版；不使用全屏作品背景、紫色渐变或玻璃卡片。
+- 作品使用 `object-fit: contain`，无作品时保留同尺寸纸张占位图。
 
-## 区域映射
+## 数据区域
 
-- `.card-header`: `date_label`, `title`, `badges`
-- `.identity`: `username`, `avatar_url`, `user_title`
-- `.greeting`: `greeting`, `bot_name`, `secondary_note`
-- `.rewards`: `coins_reward`, `affection_reward`, `streak_days`
-- `.growth`: `affection_value`, `affection_level`, `affection_next_text`, `milestone_next_text`, `coins_total`
-- `.artwork-credit`: `artwork_title`, `artwork_author`, `artwork_id`
+- `.card-header`: 日期、标题、最多两个徽标。
+- `.identity` / `.greeting`: 用户身份、主次问候和角色署名。
+- `.rewards`: 今日金币、好感度和连续签到。
+- `.account-summary`: 累计签到、金币余额和关系等级。
+- `.affection-progress`: 好感度进度、下一等级、下一纪念和可选加持状态。
+- `.artwork-frame` / `.artwork-credit`: 竖向作品或占位图及 Pixiv 署名。
 
-## 限制
-
-- 当前使用静态示例数据。
-- 这里只验证信息层级和视觉方向。
-- 接入 Jinja 和签到数据前不得修改现有 `checkin_card.py`。
-
-## 预览
-
-![签到卡片 V2](../../docs/images/checkin-card-v2-template-preview.png)
+所有长文本都由 ViewModel 截断，并由 CSS 使用固定行数或省略号二次保护。

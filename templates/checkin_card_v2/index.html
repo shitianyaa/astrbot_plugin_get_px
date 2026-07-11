@@ -2,87 +2,86 @@
 <html lang="zh-CN">
 <head>
   <meta charset="utf-8" />
-  <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <title>签到卡片 V2 初始模板</title>
-  <link rel="stylesheet" href="./style.css" />
+  <meta name="viewport" content="width={{ width }}, initial-scale=1" />
+  <title>{{ title }}</title>
+  <style>/*__CHECKIN_CARD_CSS__*/</style>
 </head>
 <body>
   <main class="stage">
-    <article class="checkin-card" aria-label="签到卡片 V2 初始模板">
-      <div class="artwork-layer" aria-hidden="true">
-        <i class="sun-disc"></i>
-        <i class="paper-wing paper-wing-one"></i>
-        <i class="paper-wing paper-wing-two"></i>
-        <i class="grain"></i>
-      </div>
-      <div class="readability-layer" aria-hidden="true"></div>
-
-      <header class="card-header">
-        <div class="heading-copy">
-          <p class="date">2026-07-11 <span></span> 星期六</p>
-          <h1>今日签到</h1>
-        </div>
-        <div class="badges" aria-label="今日状态">
-          <span class="badge badge-event">夏日相遇</span>
-          <span class="badge">连续 5 天</span>
-        </div>
-      </header>
-
-      <section class="identity">
-        <div class="avatar" aria-hidden="true">S</div>
-        <div class="identity-copy">
-          <strong>Sham1k0</strong>
-          <span>称号 · 初次相遇</span>
-        </div>
-      </section>
-
-      <section class="greeting">
-        <p class="eyebrow">NEKO'S DAILY NOTE · 011</p>
-        <blockquote>
-          今天也有好好见面。<br />
-          这张画，就当作我们共同留下的回忆。
-        </blockquote>
-        <p class="signature">— neko</p>
-      </section>
-
-      <section class="rewards" aria-label="今日收获">
-        <div class="reward-item">
-          <span>金币</span>
-          <strong><small>+</small>100</strong>
-        </div>
-        <div class="reward-item">
-          <span>好感度</span>
-          <strong><small>+</small>1.00</strong>
-        </div>
-        <div class="reward-item">
-          <span>连续签到</span>
-          <strong>5<small> 天</small></strong>
-        </div>
-      </section>
-
-      <section class="growth">
-        <div class="growth-copy">
-          <div class="growth-row">
-            <span>好感度 66.60 · 亲近</span>
-            <strong>距离“信赖”还需 3.40</strong>
+    <article class="paper-sheet checkin-card" aria-label="{{ title }}">
+      <section class="information-column">
+        <header class="card-header">
+          <div class="heading-copy">
+            <p class="date-label">{{ date_label }}</p>
+            <h1>{{ title }}</h1>
           </div>
-          <div class="progress" aria-label="好感度进度 83%"><i style="width: 83%"></i></div>
-        </div>
-        <div class="milestone">
-          <span>下一纪念</span>
-          <strong>累计签到 30 天</strong>
-          <small>还差 18 天 · 金币 888</small>
-        </div>
+          {% if badges %}
+          <div class="badges" aria-label="今日状态">
+            {% for badge in badges %}<span class="badge">{{ badge }}</span>{% endfor %}
+          </div>
+          {% endif %}
+        </header>
+
+        <section class="identity">
+          <div class="avatar">
+            {% if avatar_url %}<img src="{{ avatar_url }}" alt="" />{% else %}{{ avatar_initial }}{% endif %}
+          </div>
+          <div class="identity-copy">
+            <strong>{{ username }}</strong>
+            {% if user_title %}<span>{{ user_title }}</span>{% endif %}
+          </div>
+        </section>
+
+        <section class="greeting">
+          {% if event_label %}<p class="event-label">{{ event_label }}</p>{% endif %}
+          <blockquote>{{ greeting }}</blockquote>
+          {% if secondary_note %}<p class="secondary-note">{{ secondary_note }}</p>{% endif %}
+          <p class="signature">— {{ bot_name }}</p>
+        </section>
+
+        <section class="rewards" aria-label="今日收获">
+          <div class="reward-item"><span>金币</span><strong>+{{ coins_reward }}</strong></div>
+          <div class="reward-item">
+            <span>好感度</span>
+            <strong>+{{ affection_reward_label }}{% if boost_multiplier > 1 %}<small> ×{{ boost_multiplier_label }}</small>{% endif %}</strong>
+          </div>
+          <div class="reward-item"><span>连续签到</span><strong>{{ streak_days }}<small> 天</small></strong></div>
+        </section>
+
+        <section class="account-summary" aria-label="账户摘要">
+          <div><span>累计签到</span><strong>{{ total_days }} 天</strong></div>
+          <div><span>金币余额</span><strong>{{ coins_total }}</strong></div>
+          <div><span>关系等级</span><strong>{{ affection_level }}</strong></div>
+        </section>
+
+        <section class="affection-progress">
+          <div class="progress-copy">
+            <span>好感度 {{ affection_value_label }} · {{ affection_level }}</span>
+            <strong>{{ affection_next_text }}</strong>
+          </div>
+          <div class="progress-track" aria-label="好感度进度 {{ affection_progress }}%">
+            <i style="width: {{ affection_progress }}%"></i>
+          </div>
+          <div class="milestone-line">
+            <span>下一纪念</span>
+            <strong>{{ milestone_next_text }}</strong>
+          </div>
+          {% if boost_status_text %}<p class="boost-status">{{ boost_status_text }}</p>{% endif %}
+        </section>
       </section>
 
-      <footer class="artwork-credit">
-        <span>今日作品</span>
-        <strong>Blue Sky</strong>
-        <i>/</i>
-        <span>Someone · Pixiv 445566</span>
-      </footer>
-
-      <div class="folio" aria-hidden="true">MEMORY<br />011</div>
+      <aside class="artwork-column">
+        <div class="artwork-frame">
+          {% if artwork_url %}
+          <img src="{{ artwork_url }}" alt="{{ artwork_title }}" />
+          {% else %}
+          <div class="artwork-placeholder" aria-label="暂无合适的竖向作品">
+            <span>今日画页</span><i></i><small>portrait memory</small>
+          </div>
+          {% endif %}
+        </div>
+        <footer class="artwork-credit" title="{{ artwork_credit }}">{{ artwork_credit }}</footer>
+      </aside>
     </article>
   </main>
 </body>
