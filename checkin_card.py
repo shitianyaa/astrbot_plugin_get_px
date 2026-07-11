@@ -257,6 +257,10 @@ def build_checkin_card_data(
     width: int = CHECKIN_CARD_WIDTH,
     height: int = CHECKIN_CARD_HEIGHT,
 ) -> dict[str, object]:
+    if (width, height) != (CHECKIN_CARD_WIDTH, CHECKIN_CARD_HEIGHT):
+        raise ValueError(
+            f"check-in card canvas must be {CHECKIN_CARD_WIDTH}x{CHECKIN_CARD_HEIGHT}"
+        )
     view_model = build_checkin_card_view_model(
         profile=profile,
         record=record,

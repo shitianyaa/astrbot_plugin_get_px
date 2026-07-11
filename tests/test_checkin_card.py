@@ -130,6 +130,18 @@ class CheckinCardViewModelTest(unittest.TestCase):
         self.assertNotIn("123456789", repr(data))
         self.assertIn("星期六", str(data["date_label"]))
 
+    def test_card_data_rejects_non_fixed_canvas_dimensions(self):
+        for width, height in ((959, 540), (960, 539), (1200, 675), (960.5, 540)):
+            with self.subTest(width=width, height=height):
+                with self.assertRaises(ValueError):
+                    checkin_card.build_checkin_card_data(
+                        profile=_profile(),
+                        record=_record(),
+                        bot_name="neko",
+                        width=width,
+                        height=height,
+                    )
+
 
 class FileToDataUrlTest(unittest.TestCase):
     def test_various_sizes_normalize_to_card_dimensions(self):
