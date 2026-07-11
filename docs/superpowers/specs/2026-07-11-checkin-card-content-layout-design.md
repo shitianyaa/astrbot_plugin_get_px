@@ -248,7 +248,7 @@ H 丰富版同时保留：
 签到问候采用“AI 个性化生成 + 本地固定文案兜底”的混合模式：
 
 - AI 文案开关默认关闭，由管理员明确开启，避免未预期的模型费用。
-- 开启后复用 AstrBot 的文本模型选择和 `llm_generate()` 能力，不调用视觉模型。
+- 开启后复用 AstrBot 的 `llm_generate()` 能力，不调用视觉模型；管理员可以为签到问候单独选择文本模型。
 - 首次签到先生成一条确定性的本地兜底文案，再尝试调用模型替换。
 - 模型未配置、返回空文本、超时、报错或输出不合规时，直接保留本地文案，不影响签到奖励和卡片发送。
 - AI 文案只在当天首次签到时生成一次；结果写入签到记录，重复签到和缓存重建均复用原文案。
@@ -290,9 +290,15 @@ H 丰富版同时保留：
 相关配置：
 
 - `checkin_ai_greeting_enabled`
-- `checkin_ai_greeting_provider_id`
+- `checkin_ai_greeting_provider_id`：使用 AstrBot 的 `select_provider` 下拉选择器；已选择时优先使用指定模型，留空时回退当前会话文本模型。
 - `checkin_ai_greeting_prompt`
 - `checkin_ai_greeting_timeout`
+
+模型选择优先级固定为：
+
+1. 签到配置中明确选择的 `checkin_ai_greeting_provider_id`。
+2. 当前会话正在使用的文本模型。
+3. 两者均不可用时不调用模型，直接使用本地兜底文案。
 
 ## 6. 内容数据模型
 
