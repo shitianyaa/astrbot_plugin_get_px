@@ -186,6 +186,8 @@ async def test_overlong_output_is_rejected() -> None:
     "response",
     (
         "[今天见](https://example.com)",
+        "[今天][ref]",
+        "![图片][ref]",
         "**今天也要开心。**",
         "> 今天也要开心。",
         "你好\n> 引用",
