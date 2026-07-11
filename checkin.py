@@ -704,9 +704,11 @@ class CheckinStore:
                         greeting_source = ?, secondary_note = ?,
                         template_version = ?, updated_at = ?
                     WHERE user_id = ? AND date_key = ?
+                      AND NOT (? = '' AND ? = '' AND ? = '' AND ? = '')
                       AND (
                         (
                             ? = 'local'
+                            AND greeting_source = 'local'
                             AND event_key = '' AND event_label = ''
                             AND greeting = '' AND secondary_note = ''
                         )
@@ -730,6 +732,10 @@ class CheckinStore:
                         now,
                         user_id,
                         date_key,
+                        event_key,
+                        event_label,
+                        greeting,
+                        secondary_note,
                         greeting_source,
                         greeting_source,
                     ),

@@ -343,6 +343,78 @@ class CheckinStoreTest(unittest.IsolatedAsyncioTestCase):
 
             self.assertEqual(await store.get_today_record("10001"), checked.record)
 
+    async def test_empty_ai_update_cannot_reopen_local_content_transition(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            store = FrozenCheckinStore(tmp)
+            await store.checkin(
+                user_id="10001", username="tester", bot_name="neko"
+            )
+            local = await store.update_record_content(
+                user_id="10001",
+                date_key="2026-05-26",
+                event_key="summer",
+                event_label="Summer Day",
+                greeting="Local greeting",
+                greeting_source="local",
+                secondary_note="Local note",
+                template_version="v2",
+            )
+
+            empty_ai = await store.update_record_content(
+                user_id="10001",
+                date_key="2026-05-26",
+                event_key="",
+                event_label="",
+                greeting="",
+                greeting_source="ai",
+                secondary_note="",
+                template_version="v2",
+            )
+            later_local = await store.update_record_content(
+                user_id="10001",
+                date_key="2026-05-26",
+                event_key="changed",
+                event_label="Changed",
+                greeting="Changed local greeting",
+                greeting_source="local",
+                secondary_note="Changed local note",
+                template_version="v2",
+            )
+
+            self.assertEqual(empty_ai, local)
+            self.assertEqual(later_local, local)
+
+    async def test_empty_ai_record_cannot_transition_back_to_local(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            store = FrozenCheckinStore(tmp)
+            await store.checkin(
+                user_id="10001", username="tester", bot_name="neko"
+            )
+            with closing(sqlite3.connect(Path(tmp) / "checkin.sqlite3")) as conn:
+                conn.execute(
+                    """
+                    UPDATE checkin_records
+                    SET greeting_source = 'ai'
+                    WHERE user_id = ? AND date_key = ?
+                    """,
+                    ("10001", "2026-05-26"),
+                )
+                conn.commit()
+
+            result = await store.update_record_content(
+                user_id="10001",
+                date_key="2026-05-26",
+                event_key="summer",
+                event_label="Summer Day",
+                greeting="Local greeting",
+                greeting_source="local",
+                secondary_note="Local note",
+                template_version="v2",
+            )
+
+            self.assertEqual(result.greeting_source, "ai")
+            self.assertEqual(result.greeting, "")
+
     async def test_streak_continues_by_beijing_date_and_resets_after_gap(self):
         with tempfile.TemporaryDirectory() as tmp:
             store = FrozenCheckinStore(tmp, date_key="2026-05-26")
