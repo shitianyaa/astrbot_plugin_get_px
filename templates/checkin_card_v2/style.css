@@ -1,3 +1,11 @@
+@font-face {
+  font-family: "LXGW WenKai Lite";
+  src: url("data:font/woff2;base64,__CHECKIN_CARD_FONT_DATA__") format("woff2");
+  font-style: normal;
+  font-weight: 400;
+  font-display: block;
+}
+
 :root {
   --paper: #f4ead6;
   --paper-deep: #e8d7ba;
@@ -7,6 +15,7 @@
   --rust: #a4543d;
   --sage: #607765;
   --gold: #b48643;
+  --font-cn: "LXGW WenKai Lite", "Noto Serif CJK SC", "Source Han Serif SC", "Songti SC", SimSun, serif;
 }
 
 * { box-sizing: border-box; }
@@ -22,7 +31,7 @@ body {
 body {
   color: var(--ink);
   background: #cbbda7;
-  font-family: "Noto Serif CJK SC", "Source Han Serif SC", "Songti SC", SimSun, serif;
+  font-family: var(--font-cn);
   font-size: 18px;
 }
 
@@ -109,7 +118,7 @@ body {
 
 .card-header h1 {
   margin: 0;
-  font-family: "STKaiti", "KaiTi", serif;
+  font-family: var(--font-cn);
   font-size: 31px;
   font-weight: 600;
   line-height: 1;
@@ -207,7 +216,7 @@ body {
   max-height: 70px;
   margin: 2px 0 1px;
   overflow: hidden;
-  font-family: "STKaiti", "KaiTi", serif;
+  font-family: var(--font-cn);
   font-size: 28px;
   font-weight: 500;
   letter-spacing: 0.015em;
@@ -375,7 +384,7 @@ body {
 }
 
 .artwork-placeholder span {
-  font-family: "STKaiti", "KaiTi", serif;
+  font-family: var(--font-cn);
   font-size: 28px;
   letter-spacing: 0.18em;
 }

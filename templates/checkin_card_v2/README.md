@@ -9,6 +9,7 @@
 - 固定 `960 × 540` 的“H · 丰富信息纸张画册”。
 - 左侧约 `48%` 为签到信息，右侧约 `45%` 为固定竖向作品相框。
 - 暖色纸张、轻微印刷纹理和克制的编辑排版；不使用全屏作品背景、紫色渐变或玻璃卡片。
+- 中文字体使用本地内嵌的霞鹜文楷轻便版 GB2312 子集，标题、寄语和信息区保持统一，不依赖系统字体或外网字体服务。
 - 作品使用 `object-fit: contain`，无作品时保留同尺寸纸张占位图。
 - 作品选择固定目标比例为 `3:4`，容差 `20%`，只接受宽高比 `0.60–0.90`；分页耗尽后保持占位图，不切换布局。
 
@@ -31,3 +32,7 @@
 - AI 问候默认关闭。启用后优先使用 `checkin_ai_greeting_provider_id` 指定的文本模型，留空时尝试当前会话文本模型；默认 `8` 秒超时，任何失败均回退本地文案。
 - 用户佩戴称号通过 ViewModel 的 `user_title` 注入；生日、全局事件、节假日、里程碑和连签按优先级生成主事件及单行次要备注。
 - 对应配置为 `checkin_ai_greeting_enabled`、`checkin_ai_greeting_provider_id`、`checkin_ai_greeting_prompt`、`checkin_ai_greeting_timeout`。
+
+## 字体授权
+
+模板内置字体由霞鹜文楷轻便版 `v1.522` 生成，仅保留 GB2312、ASCII 和常用标点字符，并转换为 WOFF2。原字体采用 SIL Open Font License 1.1，来源与许可文本见 [`fonts/README.md`](fonts/README.md) 和 [`fonts/OFL.txt`](fonts/OFL.txt)。未覆盖字符会回退到渲染环境中的思源宋体或系统宋体。

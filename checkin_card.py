@@ -23,6 +23,8 @@ CHECKIN_CARD_HEIGHT = 540
 
 _TEMPLATE_DIR = Path(__file__).with_name("templates") / "checkin_card_v2"
 _CSS_MARKER = "/*__CHECKIN_CARD_CSS__*/"
+_FONT_DATA_MARKER = "__CHECKIN_CARD_FONT_DATA__"
+_FONT_PATH = _TEMPLATE_DIR / "fonts" / "LXGWWenKaiLite-GB2312.woff2"
 
 
 def _load_checkin_card_template() -> str:
@@ -30,6 +32,10 @@ def _load_checkin_card_template() -> str:
     css = (_TEMPLATE_DIR / "style.css").read_text(encoding="utf-8")
     if _CSS_MARKER not in html:
         raise RuntimeError("check-in card template is missing its CSS marker")
+    if _FONT_DATA_MARKER not in css:
+        raise RuntimeError("check-in card stylesheet is missing its font marker")
+    font_data = base64.b64encode(_FONT_PATH.read_bytes()).decode("ascii")
+    css = css.replace(_FONT_DATA_MARKER, font_data)
     return html.replace(_CSS_MARKER, css)
 
 

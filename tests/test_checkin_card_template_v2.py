@@ -41,8 +41,21 @@ class CheckinCardTemplateV2Test(unittest.TestCase):
 
         self.assertNotIn("/*__CHECKIN_CARD_CSS__*/", CHECKIN_CARD_TEMPLATE)
         self.assertNotIn('href="./style.css"', CHECKIN_CARD_TEMPLATE)
+        self.assertNotIn("__CHECKIN_CARD_FONT_DATA__", CHECKIN_CARD_TEMPLATE)
         self.assertIn(".paper-sheet", CHECKIN_CARD_TEMPLATE)
+        self.assertIn('url("data:font/woff2;base64,', CHECKIN_CARD_TEMPLATE)
         self.assertIsNone(re.search(r"https?://", CHECKIN_CARD_TEMPLATE))
+
+    def test_local_font_asset_is_bundled_and_reasonably_sized(self):
+        css = (TEMPLATE_DIR / "style.css").read_text(encoding="utf-8")
+        font_path = TEMPLATE_DIR / "fonts" / "LXGWWenKaiLite-GB2312.woff2"
+
+        self.assertTrue(font_path.is_file())
+        self.assertLess(font_path.stat().st_size, 2 * 1024 * 1024)
+        self.assertIn("LXGW WenKai Lite", css)
+        self.assertIn("__CHECKIN_CARD_FONT_DATA__", css)
+        self.assertNotIn("STKaiti", css)
+        self.assertNotIn("KaiTi", css)
 
     def test_stage_contains_paper_inside_the_fixed_canvas(self):
         css = (TEMPLATE_DIR / "style.css").read_text(encoding="utf-8")
