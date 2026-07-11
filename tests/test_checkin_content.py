@@ -1,10 +1,14 @@
 from __future__ import annotations
 
 from dataclasses import replace
+import sys
+from pathlib import Path
 
-from checkin import CheckinProfile, CheckinRecord
-from checkin_content import resolve_checkin_content
-from holiday_calendar import OnlineHoliday
+sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
+
+from astrbot_plugin_get_px.checkin import CheckinProfile, CheckinRecord
+from astrbot_plugin_get_px.checkin_content import resolve_checkin_content
+from astrbot_plugin_get_px.holiday_calendar import OnlineHoliday
 
 
 def make_record(**overrides: object) -> CheckinRecord:

@@ -2,11 +2,15 @@ from __future__ import annotations
 
 import asyncio
 from dataclasses import dataclass
+import sys
+from pathlib import Path
 
 import pytest
 
-from checkin_content import GreetingContext
-from checkin_greeting import DEFAULT_CHECKIN_GREETING_PROMPT, CheckinGreetingGenerator
+sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
+
+from astrbot_plugin_get_px.checkin_content import GreetingContext
+from astrbot_plugin_get_px.checkin_greeting import DEFAULT_CHECKIN_GREETING_PROMPT, CheckinGreetingGenerator
 
 
 @dataclass

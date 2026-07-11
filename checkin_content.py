@@ -7,8 +7,8 @@ from datetime import date
 
 from lunar_python import Solar
 
-from checkin import CheckinProfile, CheckinRecord
-from holiday_calendar import OnlineHoliday
+from .checkin import CheckinProfile, CheckinRecord
+from .holiday_calendar import OnlineHoliday
 
 MAX_GREETING_LENGTH = 44
 MILESTONES = (7, 30, 100, 365, 1000)
