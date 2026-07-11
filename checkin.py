@@ -14,7 +14,7 @@ from zoneinfo import ZoneInfo
 
 
 SHANGHAI_TZ = ZoneInfo("Asia/Shanghai")
-CHECKIN_SNAPSHOT_SCHEMA_VERSION = 1
+CHECKIN_SNAPSHOT_SCHEMA_VERSION = 2
 CHECKIN_SNAPSHOT_SCOPE = "checkin"
 CHECKIN_SNAPSHOT_PLUGIN_NAME = "astrbot_plugin_get_px"
 
@@ -29,8 +29,6 @@ STREAK_AFFECTION_BONUS = 0.10
 STREAK_AFFECTION_BONUS_MAX = 0.50
 BOOST_MULTIPLIER = 2.0
 
-DUPLICATE_PENALTY = 0.20
-DUPLICATE_DAILY_MAX = 1.00
 MIN_AFFECTION = -10.0
 
 BOOST_PRODUCTS: dict[int, int] = {
@@ -82,6 +80,12 @@ class CheckinRecord:
     background_author: str
     created_at: str
     updated_at: str
+    event_key: str = ""
+    event_label: str = ""
+    greeting: str = ""
+    greeting_source: str = "local"
+    secondary_note: str = ""
+    template_version: str = "v2"
 
 
 @dataclass(frozen=True)
@@ -190,6 +194,33 @@ class CheckinStore:
                 self.now_iso(),
             )
 
+    async def update_record_content(
+        self,
+        *,
+        user_id: str,
+        date_key: str,
+        event_key: str,
+        event_label: str,
+        greeting: str,
+        greeting_source: str,
+        secondary_note: str,
+        template_version: str,
+    ) -> CheckinRecord:
+        """Persist local content once and permit only a local-to-AI upgrade."""
+        async with self._lock:
+            return await asyncio.to_thread(
+                self._update_record_content_sync,
+                str(user_id or ""),
+                str(date_key or ""),
+                str(event_key or ""),
+                str(event_label or ""),
+                str(greeting or ""),
+                str(greeting_source or "local"),
+                str(secondary_note or ""),
+                str(template_version or "v2"),
+                self.now_iso(),
+            )
+
     async def export_snapshot(self) -> dict[str, Any]:
         async with self._lock:
             return await asyncio.to_thread(self._export_snapshot_sync)
@@ -258,6 +289,12 @@ class CheckinStore:
                     total_days_after INTEGER NOT NULL DEFAULT 0,
                     streak_days_after INTEGER NOT NULL DEFAULT 0,
                     note TEXT NOT NULL DEFAULT '',
+                    event_key TEXT NOT NULL DEFAULT '',
+                    event_label TEXT NOT NULL DEFAULT '',
+                    greeting TEXT NOT NULL DEFAULT '',
+                    greeting_source TEXT NOT NULL DEFAULT 'local',
+                    secondary_note TEXT NOT NULL DEFAULT '',
+                    template_version TEXT NOT NULL DEFAULT 'v2',
                     background_mode TEXT NOT NULL DEFAULT '',
                     background_source TEXT NOT NULL DEFAULT '',
                     background_illust_id TEXT NOT NULL DEFAULT '',
@@ -274,6 +311,12 @@ class CheckinStore:
                 for row in conn.execute("PRAGMA table_info(checkin_records)")
             }
             for name, ddl in {
+                "event_key": "TEXT NOT NULL DEFAULT ''",
+                "event_label": "TEXT NOT NULL DEFAULT ''",
+                "greeting": "TEXT NOT NULL DEFAULT ''",
+                "greeting_source": "TEXT NOT NULL DEFAULT 'local'",
+                "secondary_note": "TEXT NOT NULL DEFAULT ''",
+                "template_version": "TEXT NOT NULL DEFAULT 'v2'",
                 "background_mode": "TEXT NOT NULL DEFAULT ''",
                 "background_source": "TEXT NOT NULL DEFAULT ''",
                 "background_illust_id": "TEXT NOT NULL DEFAULT ''",
@@ -345,7 +388,9 @@ class CheckinStore:
                             boost_active, boost_multiplier,
                             total_coins_after, total_affection_after,
                             total_days_after, streak_days_after,
-                            note, background_mode, background_source,
+                            note, event_key, event_label, greeting,
+                            greeting_source, secondary_note, template_version,
+                            background_mode, background_source,
                             background_illust_id, background_title,
                             background_author, created_at, updated_at
                         )
@@ -356,7 +401,9 @@ class CheckinStore:
                             :boost_active, :boost_multiplier,
                             :total_coins_after, :total_affection_after,
                             :total_days_after, :streak_days_after,
-                            :note, :background_mode, :background_source,
+                            :note, :event_key, :event_label, :greeting,
+                            :greeting_source, :secondary_note, :template_version,
+                            :background_mode, :background_source,
                             :background_illust_id, :background_title,
                             :background_author, :created_at, :updated_at
                         )
@@ -406,136 +453,139 @@ class CheckinStore:
     def _checkin_sync(
         self, date_key: str, now: str, user_id: str, username: str, bot_name: str
     ) -> CheckinResult:
-        profile = self._get_or_create_profile_sync(user_id)
-        if profile.last_checkin_date == date_key:
-            return self._apply_duplicate_penalty_sync(date_key, now, profile)
-
-        previous_date = _parse_date(profile.last_checkin_date)
-        today = date.fromisoformat(date_key)
-        if previous_date == today - timedelta(days=1):
-            streak_days = profile.streak_days + 1
-        else:
-            streak_days = 1
-
-        total_days = profile.total_days + 1
-        base_coins, base_affection = _daily_base_reward(user_id, date_key)
-        streak_steps = streak_days // STREAK_STEP_DAYS
-        bonus_coins = min(streak_steps * STREAK_COIN_BONUS, STREAK_COIN_BONUS_MAX)
-        bonus_affection = min(
-            streak_steps * STREAK_AFFECTION_BONUS, STREAK_AFFECTION_BONUS_MAX
-        )
-        boost_active = is_boost_active(profile, date_key)
-        affection_reward = round(base_affection + bonus_affection, 2)
-        if boost_active:
-            affection_reward = round(affection_reward * BOOST_MULTIPLIER, 2)
-        coins_reward = base_coins + bonus_coins
-
-        new_coins = profile.coins + coins_reward
-        new_affection = round(profile.affection + affection_reward, 2)
-        note = _daily_note(user_id, date_key, streak_days)
-
         with closing(self._connect()) as conn:
-            conn.execute(
-                """
-                UPDATE checkin_profiles
-                SET coins = ?, affection = ?, total_days = ?, streak_days = ?,
-                    last_checkin_date = ?, repeat_penalty_date = ?,
-                    repeat_penalty_total = 0, updated_at = ?
-                WHERE user_id = ?
-                """,
-                (
-                    new_coins,
-                    new_affection,
-                    total_days,
-                    streak_days,
-                    date_key,
-                    date_key,
-                    now,
-                    user_id,
-                ),
-            )
-            conn.execute(
-                """
-                INSERT INTO checkin_records (
-                    date_key, user_id, username, bot_name,
-                    base_coins, bonus_coins, coins_reward,
-                    base_affection, bonus_affection, affection_reward,
-                    boost_active, boost_multiplier,
-                    total_coins_after, total_affection_after,
-                    total_days_after, streak_days_after,
-                    note, created_at, updated_at
+            conn.execute("BEGIN IMMEDIATE")
+            try:
+                conn.execute(
+                    """
+                    INSERT OR IGNORE INTO checkin_profiles (
+                        user_id, coins, affection, total_days, streak_days,
+                        last_checkin_date, boost_start_date, boost_until_date,
+                        repeat_penalty_date, repeat_penalty_total,
+                        created_at, updated_at
+                    )
+                    VALUES (?, 0, 0, 0, 0, '', '', '', '', 0, ?, ?)
+                    """,
+                    (user_id, now, now),
                 )
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-                ON CONFLICT(date_key, user_id) DO NOTHING
-                """,
-                (
-                    date_key,
-                    user_id,
-                    username,
-                    bot_name,
-                    base_coins,
-                    bonus_coins,
-                    coins_reward,
-                    base_affection,
-                    bonus_affection,
-                    affection_reward,
-                    1 if boost_active else 0,
-                    BOOST_MULTIPLIER if boost_active else 1.0,
-                    new_coins,
-                    new_affection,
-                    total_days,
-                    streak_days,
-                    note,
-                    now,
-                    now,
-                ),
-            )
-            conn.commit()
+                profile_row = conn.execute(
+                    "SELECT * FROM checkin_profiles WHERE user_id = ?", (user_id,)
+                ).fetchone()
+                profile = self._row_to_profile(profile_row)
+                record_row = conn.execute(
+                    """
+                    SELECT * FROM checkin_records
+                    WHERE date_key = ? AND user_id = ?
+                    """,
+                    (date_key, user_id),
+                ).fetchone()
+                if record_row is not None:
+                    conn.commit()
+                    return CheckinResult(
+                        profile=profile,
+                        record=self._row_to_record(record_row),
+                        duplicate=True,
+                    )
 
-        updated = self._get_or_create_profile_sync(user_id)
-        record = self._get_record_sync(date_key=date_key, user_id=user_id)
-        return CheckinResult(profile=updated, record=record, duplicate=False)
+                previous_date = _parse_date(profile.last_checkin_date)
+                today = date.fromisoformat(date_key)
+                if previous_date == today - timedelta(days=1):
+                    streak_days = profile.streak_days + 1
+                else:
+                    streak_days = 1
 
-    def _apply_duplicate_penalty_sync(
-        self, date_key: str, now: str, profile: CheckinProfile
-    ) -> CheckinResult:
-        penalty_total = (
-            profile.repeat_penalty_total
-            if profile.repeat_penalty_date == date_key
-            else 0.0
-        )
-        remaining_daily = max(0.0, DUPLICATE_DAILY_MAX - penalty_total)
-        remaining_floor = max(0.0, profile.affection - MIN_AFFECTION)
-        penalty = round(min(DUPLICATE_PENALTY, remaining_daily, remaining_floor), 2)
-        new_penalty_total = round(penalty_total + penalty, 2)
-        new_affection = round(profile.affection - penalty, 2)
+                total_days = profile.total_days + 1
+                base_coins, base_affection = _daily_base_reward(user_id, date_key)
+                streak_steps = streak_days // STREAK_STEP_DAYS
+                bonus_coins = min(
+                    streak_steps * STREAK_COIN_BONUS, STREAK_COIN_BONUS_MAX
+                )
+                bonus_affection = min(
+                    streak_steps * STREAK_AFFECTION_BONUS,
+                    STREAK_AFFECTION_BONUS_MAX,
+                )
+                boost_active = is_boost_active(profile, date_key)
+                affection_reward = round(base_affection + bonus_affection, 2)
+                if boost_active:
+                    affection_reward = round(
+                        affection_reward * BOOST_MULTIPLIER, 2
+                    )
+                coins_reward = base_coins + bonus_coins
+                new_coins = profile.coins + coins_reward
+                new_affection = round(profile.affection + affection_reward, 2)
+                note = _daily_note(user_id, date_key, streak_days)
 
-        with closing(self._connect()) as conn:
-            conn.execute(
-                """
-                UPDATE checkin_profiles
-                SET affection = ?, repeat_penalty_date = ?,
-                    repeat_penalty_total = ?, updated_at = ?
-                WHERE user_id = ?
-                """,
-                (
-                    new_affection,
-                    date_key,
-                    new_penalty_total,
-                    now,
-                    profile.user_id,
-                ),
-            )
-            conn.commit()
+                conn.execute(
+                    """
+                    UPDATE checkin_profiles
+                    SET coins = ?, affection = ?, total_days = ?, streak_days = ?,
+                        last_checkin_date = ?, updated_at = ?
+                    WHERE user_id = ?
+                    """,
+                    (
+                        new_coins,
+                        new_affection,
+                        total_days,
+                        streak_days,
+                        date_key,
+                        now,
+                        user_id,
+                    ),
+                )
+                conn.execute(
+                    """
+                    INSERT INTO checkin_records (
+                        date_key, user_id, username, bot_name,
+                        base_coins, bonus_coins, coins_reward,
+                        base_affection, bonus_affection, affection_reward,
+                        boost_active, boost_multiplier,
+                        total_coins_after, total_affection_after,
+                        total_days_after, streak_days_after,
+                        note, created_at, updated_at
+                    )
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    """,
+                    (
+                        date_key,
+                        user_id,
+                        username,
+                        bot_name,
+                        base_coins,
+                        bonus_coins,
+                        coins_reward,
+                        base_affection,
+                        bonus_affection,
+                        affection_reward,
+                        1 if boost_active else 0,
+                        BOOST_MULTIPLIER if boost_active else 1.0,
+                        new_coins,
+                        new_affection,
+                        total_days,
+                        streak_days,
+                        note,
+                        now,
+                        now,
+                    ),
+                )
+                updated_row = conn.execute(
+                    "SELECT * FROM checkin_profiles WHERE user_id = ?", (user_id,)
+                ).fetchone()
+                record_row = conn.execute(
+                    """
+                    SELECT * FROM checkin_records
+                    WHERE date_key = ? AND user_id = ?
+                    """,
+                    (date_key, user_id),
+                ).fetchone()
+                conn.commit()
+            except Exception:
+                conn.rollback()
+                raise
 
-        updated = self._get_or_create_profile_sync(profile.user_id)
-        record = self._get_record_sync(date_key=date_key, user_id=profile.user_id)
         return CheckinResult(
-            profile=updated,
-            record=record,
-            duplicate=True,
-            penalty_amount=penalty,
-            penalty_total_today=new_penalty_total,
+            profile=self._row_to_profile(updated_row),
+            record=self._row_to_record(record_row),
+            duplicate=False,
         )
 
     def _purchase_boost_sync(
@@ -627,6 +677,80 @@ class CheckinStore:
             )
             conn.commit()
 
+    def _update_record_content_sync(
+        self,
+        user_id: str,
+        date_key: str,
+        event_key: str,
+        event_label: str,
+        greeting: str,
+        greeting_source: str,
+        secondary_note: str,
+        template_version: str,
+        now: str,
+    ) -> CheckinRecord:
+        if not user_id or not date_key:
+            raise ValueError("user_id and date_key are required")
+        incoming_source = greeting_source.strip().lower()
+        with closing(self._connect()) as conn:
+            row = conn.execute(
+                """
+                SELECT * FROM checkin_records
+                WHERE user_id = ? AND date_key = ?
+                """,
+                (user_id, date_key),
+            ).fetchone()
+            if row is None:
+                raise ValueError("check-in record not found")
+
+            record = self._row_to_record(row)
+            has_content = any(
+                (
+                    record.event_key,
+                    record.event_label,
+                    record.greeting,
+                    record.secondary_note,
+                )
+            )
+            can_write_local = not has_content and incoming_source == "local"
+            can_upgrade_to_ai = (
+                has_content
+                and record.greeting_source != "ai"
+                and incoming_source == "ai"
+            )
+            if not (can_write_local or can_upgrade_to_ai):
+                return record
+
+            conn.execute(
+                """
+                UPDATE checkin_records
+                SET event_key = ?, event_label = ?, greeting = ?,
+                    greeting_source = ?, secondary_note = ?,
+                    template_version = ?, updated_at = ?
+                WHERE user_id = ? AND date_key = ?
+                """,
+                (
+                    event_key,
+                    event_label,
+                    greeting,
+                    incoming_source,
+                    secondary_note,
+                    template_version,
+                    now,
+                    user_id,
+                    date_key,
+                ),
+            )
+            conn.commit()
+            updated_row = conn.execute(
+                """
+                SELECT * FROM checkin_records
+                WHERE user_id = ? AND date_key = ?
+                """,
+                (user_id, date_key),
+            ).fetchone()
+        return self._row_to_record(updated_row)
+
     @staticmethod
     def _row_to_profile(row: sqlite3.Row) -> CheckinProfile:
         return CheckinProfile(
@@ -671,6 +795,12 @@ class CheckinStore:
             background_author=str(row["background_author"] or ""),
             created_at=str(row["created_at"] or ""),
             updated_at=str(row["updated_at"] or ""),
+            event_key=str(row["event_key"] or ""),
+            event_label=str(row["event_label"] or ""),
+            greeting=str(row["greeting"] or ""),
+            greeting_source=str(row["greeting_source"] or "local"),
+            secondary_note=str(row["secondary_note"] or ""),
+            template_version=str(row["template_version"] or "v2"),
         )
 
 
@@ -788,9 +918,9 @@ def _validate_checkin_snapshot(snapshot: dict[str, Any]) -> dict[str, Any]:
         raise ValueError("签到备份数据必须是对象")
 
     schema_version = snapshot.get("schema_version")
-    if schema_version != CHECKIN_SNAPSHOT_SCHEMA_VERSION:
+    if schema_version not in (1, CHECKIN_SNAPSHOT_SCHEMA_VERSION):
         raise ValueError(
-            f"不支持的签到备份版本: {schema_version!r}，当前仅支持 {CHECKIN_SNAPSHOT_SCHEMA_VERSION}"
+            f"不支持的签到备份版本: {schema_version!r}，当前支持 1 和 {CHECKIN_SNAPSHOT_SCHEMA_VERSION}"
         )
 
     plugin_name = str(snapshot.get("plugin_name") or "").strip()
@@ -897,6 +1027,12 @@ def _normalize_record_snapshot_row(row: Any, index: int) -> dict[str, Any]:
             row, "streak_days_after", f"records[{index}]"
         ),
         "note": _require_text(row, "note", f"records[{index}]"),
+        "event_key": _optional_text(row, "event_key", ""),
+        "event_label": _optional_text(row, "event_label", ""),
+        "greeting": _optional_text(row, "greeting", ""),
+        "greeting_source": _optional_text(row, "greeting_source", "local"),
+        "secondary_note": _optional_text(row, "secondary_note", ""),
+        "template_version": _optional_text(row, "template_version", "v2"),
         "background_mode": _require_text(
             row, "background_mode", f"records[{index}]"
         ),
@@ -923,6 +1059,13 @@ def _require_text(row: dict[str, Any], key: str, location: str) -> str:
     value = row.get(key)
     if value is None:
         return ""
+    return str(value)
+
+
+def _optional_text(row: dict[str, Any], key: str, default: str) -> str:
+    value = row.get(key, default)
+    if value is None:
+        return default
     return str(value)
 
 
