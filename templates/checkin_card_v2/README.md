@@ -22,3 +22,7 @@
 - 当前使用静态示例数据。
 - 这里只验证信息层级和视觉方向。
 - 接入 Jinja 和签到数据前不得修改现有 `checkin_card.py`。
+
+## 预览
+
+![签到卡片 V2](../../docs/images/checkin-card-v2-template-preview.png)

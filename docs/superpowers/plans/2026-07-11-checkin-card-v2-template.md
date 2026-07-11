@@ -240,4 +240,3 @@ Expected: all tests pass.
 git add docs/images/checkin-card-v2-template-preview.png templates/checkin_card_v2/README.md
 git commit -m "Add check-in card v2 preview"
 ```
-
