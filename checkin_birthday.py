@@ -5,6 +5,23 @@ from datetime import date, datetime
 from typing import Any, Mapping
 
 
+_QQ_BIRTHDAY_DEBUG_KEYS = (
+    "birthday_year",
+    "birthday_month",
+    "birthday_day",
+    "birthday",
+    "birth",
+    "birthday_info",
+)
+
+
+def qq_birthday_debug_fields(payload: object) -> dict[str, object]:
+    """Return only birthday-related payload values for safe diagnostics."""
+    if not isinstance(payload, Mapping):
+        return {"payload_type": type(payload).__name__}
+    return {key: payload.get(key) for key in _QQ_BIRTHDAY_DEBUG_KEYS if key in payload}
+
+
 def parse_month_day(value: object) -> tuple[int, int] | None:
     if isinstance(value, Mapping):
         month = value.get("month") or value.get("birthday_month")

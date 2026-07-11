@@ -50,7 +50,12 @@ from .checkin import (
     dump_checkin_snapshot_json,
     load_checkin_snapshot_json,
 )
-from .checkin_birthday import birthday_matches, parse_month_day, parse_qq_birthday
+from .checkin_birthday import (
+    birthday_matches,
+    parse_month_day,
+    parse_qq_birthday,
+    qq_birthday_debug_fields,
+)
 from .checkin_background import (
     CHECKIN_ARTWORK_TARGET_RATIO,
     CHECKIN_ARTWORK_TOLERANCE,
@@ -1318,8 +1323,10 @@ class GetPxPlugin(Star):
             parsed = parse_qq_birthday(payload)
             if parsed is None:
                 keys = sorted(map(str, payload.keys())) if isinstance(payload, dict) else []
+                birthday_fields = qq_birthday_debug_fields(payload)
                 logger.warning(
-                    f"{LOG_PREFIX} QQ 生日读取失败: 返回资料不含可用生日字段, keys={keys}"
+                    f"{LOG_PREFIX} QQ 生日读取失败: 返回生日字段不可用, "
+                    f"birthday_fields={birthday_fields!r}, keys={keys}"
                 )
             else:
                 logger.info(f"{LOG_PREFIX} QQ 生日读取成功: user_id={user_id}")

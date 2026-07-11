@@ -7,7 +7,12 @@ from pathlib import Path
 import pytest
 
 from checkin import ACHIEVEMENTS, CheckinStore
-from checkin_birthday import birthday_matches, parse_month_day, parse_qq_birthday
+from checkin_birthday import (
+    birthday_matches,
+    parse_month_day,
+    parse_qq_birthday,
+    qq_birthday_debug_fields,
+)
 
 
 @pytest.mark.asyncio
@@ -41,6 +46,23 @@ def test_qq_birthday_parser_accepts_common_shapes_and_leap_day() -> None:
     assert parse_month_day(20000711) == (7, 11)
     assert birthday_matches("2028-02-29", 2, 29)
     assert not birthday_matches("2027-02-28", 2, 29)
+
+
+def test_qq_birthday_debug_fields_returns_real_birthday_values_only() -> None:
+    payload = {
+        "nickname": "should-not-be-logged",
+        "eMail": "private@example.com",
+        "birthday_year": 0,
+        "birthday_month": "7",
+        "birthday_day": None,
+    }
+
+    assert qq_birthday_debug_fields(payload) == {
+        "birthday_year": 0,
+        "birthday_month": "7",
+        "birthday_day": None,
+    }
+    assert qq_birthday_debug_fields(None) == {"payload_type": "NoneType"}
 
 
 @pytest.mark.asyncio
