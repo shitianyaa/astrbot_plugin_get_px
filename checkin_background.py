@@ -1,6 +1,10 @@
 from __future__ import annotations
 
 
+CHECKIN_ARTWORK_TARGET_RATIO = 0.75
+CHECKIN_ARTWORK_TOLERANCE = 0.20
+
+
 def parse_aspect_ratio(value: object) -> float:
     raw = str(value or "").strip().lower()
     if not raw:

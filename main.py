@@ -48,7 +48,11 @@ from .checkin import (
     dump_checkin_snapshot_json,
     load_checkin_snapshot_json,
 )
-from .checkin_background import filter_illusts_by_aspect_ratio, parse_aspect_ratio
+from .checkin_background import (
+    CHECKIN_ARTWORK_TARGET_RATIO,
+    CHECKIN_ARTWORK_TOLERANCE,
+    filter_illusts_by_aspect_ratio,
+)
 from .checkin_card import (
     CHECKIN_CARD_HEIGHT,
     CHECKIN_CARD_TEMPLATE,
@@ -1343,23 +1347,25 @@ class GetPxPlugin(Star):
             if self._cfg_bool("filter_manga", True) and not is_manga_ranking:
                 illusts = self._filter_manga(illusts)
             illusts = await self._filter_blacklisted_illusts(illusts)
-            aspect_config = self._cfg_str("checkin_background_aspect_ratio", "16:9")
-            aspect_ratio = parse_aspect_ratio(aspect_config)
-            if aspect_ratio > 0:
-                tolerance = self._cfg_float(
-                    "checkin_background_aspect_tolerance", 0.25, 0.0, 1.0
-                )
-                aspect_matched = filter_illusts_by_aspect_ratio(
-                    illusts, aspect_ratio, tolerance
-                )
-                if aspect_matched:
-                    illusts = aspect_matched
-                else:
-                    logger.info(
-                        f"{LOG_PREFIX} 签到背景无符合比例 {aspect_config} 的候选作品，回退未限制比例候选"
-                    )
+            illusts = filter_illusts_by_aspect_ratio(
+                illusts,
+                CHECKIN_ARTWORK_TARGET_RATIO,
+                CHECKIN_ARTWORK_TOLERANCE,
+            )
             if not illusts:
-                return None
+                if self.image_index is None:
+                    return None
+                try:
+                    await self.image_index.advance_page_offset(
+                        self._event_scope(event), source_key, raw_count
+                    )
+                    logger.info(
+                        f"{LOG_PREFIX} 签到背景第 {page_attempt} 页无符合 3:4 的竖向作品，切换下一页"
+                    )
+                except Exception as e:
+                    logger.warning(f"{LOG_PREFIX} 签到背景分页游标更新失败: {e}")
+                    return None
+                continue
 
             ordered = ordered_by_unused(illusts, used_ids)
             fresh = [

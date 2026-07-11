@@ -20,9 +20,6 @@ from .checkin_content import CheckinContent, MILESTONES
 
 CHECKIN_CARD_WIDTH = 960
 CHECKIN_CARD_HEIGHT = 540
-CHECKIN_CARD_JPEG_QUALITY = 85
-
-HEADSHOT_CROP_TOP_RATIO = 0.3  # Task 4 will replace legacy full-card normalization.
 
 _TEMPLATE_DIR = Path(__file__).with_name("templates") / "checkin_card_v2"
 _CSS_MARKER = "/*__CHECKIN_CARD_CSS__*/"
@@ -314,29 +311,15 @@ def _file_to_data_url(path: str) -> str:
 
         from PIL import Image as PILImage
 
-        target_width = CHECKIN_CARD_WIDTH
-        target_height = CHECKIN_CARD_HEIGHT
-        with PILImage.open(file_path) as img:
-            img = img.convert("RGB")
-            scale = max(target_width / img.width, target_height / img.height)
-            scaled = img.resize(
-                (
-                    max(target_width, round(img.width * scale)),
-                    max(target_height, round(img.height * scale)),
-                ),
-                PILImage.Resampling.LANCZOS,
-            )
-            left = (scaled.width - target_width) // 2
-            top = int((scaled.height - target_height) * HEADSHOT_CROP_TOP_RATIO)
-            cropped = scaled.crop(
-                (left, top, left + target_width, top + target_height)
-            )
-            buf = BytesIO()
-            cropped.save(
-                buf, format="JPEG", quality=CHECKIN_CARD_JPEG_QUALITY, optimize=True
-            )
-            data = base64.b64encode(buf.getvalue()).decode("ascii")
-            return f"data:image/jpeg;base64,{data}"
+        source_bytes = file_path.read_bytes()
+        with PILImage.open(BytesIO(source_bytes)) as img:
+            width, height = img.size
+            mime_type = PILImage.MIME.get(str(img.format or "").upper(), "")
+            if width <= 0 or height <= 0 or not mime_type.startswith("image/"):
+                return ""
+            img.verify()
+        data = base64.b64encode(source_bytes).decode("ascii")
+        return f"data:{mime_type};base64,{data}"
     except Exception as e:
         logger.warning(f"签到背景图片处理失败: {file_path} - {e}")
         return ""
