@@ -93,11 +93,31 @@ class CheckinCardCache:
             try:
                 rendered = renderer()
                 source = await rendered if inspect.isawaitable(rendered) else rendered
-                return await asyncio.to_thread(
-                    self._store_sync,
-                    Path(source),
-                    final_path,
+                worker = asyncio.create_task(
+                    asyncio.to_thread(
+                        self._store_sync,
+                        Path(source),
+                        final_path,
+                    )
                 )
+                cancelled = False
+                while not worker.done():
+                    try:
+                        result = await asyncio.shield(worker)
+                    except asyncio.CancelledError:
+                        cancelled = True
+                    else:
+                        break
+
+                if cancelled:
+                    try:
+                        worker.result()
+                    except Exception:
+                        pass
+                    raise asyncio.CancelledError
+                if worker.done():
+                    return worker.result()
+                return result
             finally:
                 self._end_store(date_key)
 
@@ -115,6 +135,13 @@ class CheckinCardCache:
         removed = 0
         cutoff = current - timedelta(days=self.retention_days - 1)
         with self._active_store_lock:
+            deferred_expired_store = any(
+                active_date is not None and active_date < cutoff
+                for active_date in (
+                    _directory_date(date_key)
+                    for date_key in self._active_store_dates
+                )
+            )
             self.root.mkdir(parents=True, exist_ok=True)
             for entry in tuple(self.root.iterdir()):
                 if entry.is_file() or entry.is_symlink():
@@ -134,6 +161,8 @@ class CheckinCardCache:
                 if entry_date is None:
                     continue
                 if entry.name in self._active_store_dates:
+                    if entry_date < cutoff:
+                        deferred_expired_store = True
                     continue
                 try:
                     resolved = _inside(entry, self.root)
@@ -148,7 +177,8 @@ class CheckinCardCache:
                         temporary.unlink(missing_ok=True)
                         removed += 1
 
-        self._last_cleanup_date = current
+        if not deferred_expired_store:
+            self._last_cleanup_date = current
         return removed
 
     def _begin_store(self, date_key: str) -> None:

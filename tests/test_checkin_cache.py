@@ -141,18 +141,163 @@ class CheckinCardCacheTest(unittest.IsolatedAsyncioTestCase):
                     force=True,
                 )
             )
-            await asyncio.sleep(0.02)
+            cleanup_result = await cleanup_task
             finish_copy.set()
-            cleanup_result, store_result = await asyncio.gather(
-                cleanup_task,
-                store_task,
-                return_exceptions=True,
-            )
+            store_result = await store_task
 
         self.assertIsInstance(cleanup_result, int)
         self.assertIsInstance(store_result, Path)
         self.assertTrue(store_result.exists())
         self.assertEqual(self.cache.get(self.date_key, self.key), store_result)
+
+    async def test_repeatedly_cancelled_store_waits_for_copy_before_cleanup_and_source_release(self):
+        renderer_output = Path(self._tmp.name) / "renderer-output.jpg"
+        _write_jpeg(renderer_output)
+        copy_started = threading.Event()
+        finish_copy = threading.Event()
+        copy_finished = threading.Event()
+        second_shield_started = asyncio.Event()
+        original_copyfileobj = shutil.copyfileobj
+        original_shield = asyncio.shield
+
+        def slow_copy(source, target, *args, **kwargs):
+            copy_started.set()
+            try:
+                if not finish_copy.wait(timeout=2):
+                    raise TimeoutError("test did not release cache copy")
+                return original_copyfileobj(source, target, *args, **kwargs)
+            finally:
+                copy_finished.set()
+
+        async def render() -> str:
+            return str(renderer_output)
+
+        shield_calls = 0
+
+        def observed_shield(awaitable):
+            nonlocal shield_calls
+            shield_calls += 1
+            if shield_calls == 2:
+                second_shield_started.set()
+            return original_shield(awaitable)
+
+        async def store_with_caller_cleanup() -> Path:
+            try:
+                return await self.cache.store(self.date_key, self.key, render)
+            finally:
+                try:
+                    renderer_output.unlink(missing_ok=True)
+                except OSError:
+                    pass
+
+        with patch(
+            "astrbot_plugin_get_px.checkin_cache.shutil.copyfileobj",
+            side_effect=slow_copy,
+        ), patch(
+            "astrbot_plugin_get_px.checkin_cache.asyncio.shield",
+            side_effect=observed_shield,
+        ):
+            store_task = asyncio.create_task(store_with_caller_cleanup())
+            self.assertTrue(await asyncio.to_thread(copy_started.wait, 2))
+            store_task.cancel()
+            await asyncio.wait_for(second_shield_started.wait(), timeout=2)
+            store_task.cancel()
+            finished_before_copy = store_task.done()
+            source_exists_during_copy = renderer_output.exists()
+            cleanup_task = asyncio.create_task(
+                asyncio.to_thread(
+                    self.cache.cleanup_expired,
+                    today=date(2026, 7, 12),
+                    force=True,
+                )
+            )
+            cleanup_result = await asyncio.gather(
+                cleanup_task,
+                return_exceptions=True,
+            )
+            finish_copy.set()
+            with self.assertRaises(asyncio.CancelledError):
+                await store_task
+            self.assertTrue(await asyncio.to_thread(copy_finished.wait, 2))
+            for _ in range(100):
+                if not list((self.root / self.date_key).glob("*.tmp")):
+                    break
+                await asyncio.sleep(0.01)
+
+        self.assertFalse(finished_before_copy)
+        self.assertTrue(source_exists_during_copy)
+        self.assertIsInstance(cleanup_result[0], int)
+        final_path = self.root / self.date_key / f"{self.key}.jpg"
+        self.assertTrue(final_path.exists())
+        self.assertFalse(renderer_output.exists())
+
+    async def test_cleanup_defers_active_expired_store_before_renderer_creates_directory(self):
+        renderer_output = Path(self._tmp.name) / "renderer-output.jpg"
+        _write_jpeg(renderer_output)
+        renderer_started = asyncio.Event()
+        finish_renderer = asyncio.Event()
+
+        async def render() -> str:
+            renderer_started.set()
+            await finish_renderer.wait()
+            return str(renderer_output)
+
+        store_task = asyncio.create_task(
+            self.cache.store(self.date_key, self.key, render)
+        )
+        await renderer_started.wait()
+        self.assertFalse((self.root / self.date_key).exists())
+
+        first_cleanup = await asyncio.to_thread(
+            self.cache.cleanup_expired,
+            today=date(2026, 7, 12),
+            force=True,
+        )
+        finish_renderer.set()
+        stored = await store_task
+        second_cleanup = self.cache.cleanup_expired(today=date(2026, 7, 12))
+
+        self.assertEqual(first_cleanup, 0)
+        self.assertEqual(second_cleanup, 1)
+        self.assertFalse(stored.parent.exists())
+
+    async def test_cleanup_retries_same_day_after_active_expired_store_finishes(self):
+        renderer_output = Path(self._tmp.name) / "renderer-output.jpg"
+        _write_jpeg(renderer_output)
+        copy_started = threading.Event()
+        finish_copy = threading.Event()
+        original_copyfileobj = shutil.copyfileobj
+
+        def slow_copy(source, target, *args, **kwargs):
+            copy_started.set()
+            if not finish_copy.wait(timeout=2):
+                raise TimeoutError("test did not release cache copy")
+            return original_copyfileobj(source, target, *args, **kwargs)
+
+        async def render() -> str:
+            return str(renderer_output)
+
+        with patch(
+            "astrbot_plugin_get_px.checkin_cache.shutil.copyfileobj",
+            side_effect=slow_copy,
+        ):
+            store_task = asyncio.create_task(
+                self.cache.store(self.date_key, self.key, render)
+            )
+            self.assertTrue(await asyncio.to_thread(copy_started.wait, 2))
+            first_cleanup = await asyncio.to_thread(
+                self.cache.cleanup_expired,
+                today=date(2026, 7, 12),
+                force=True,
+            )
+            finish_copy.set()
+            stored = await store_task
+
+        second_cleanup = self.cache.cleanup_expired(today=date(2026, 7, 12))
+
+        self.assertEqual(first_cleanup, 0)
+        self.assertEqual(second_cleanup, 1)
+        self.assertFalse(stored.parent.exists())
 
     def test_cleanup_removes_previous_days_and_stale_temps_but_preserves_today(self):
         yesterday = self.root / "2026-07-10"
