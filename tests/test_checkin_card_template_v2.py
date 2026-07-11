@@ -68,6 +68,21 @@ class CheckinCardTemplateV2Test(unittest.TestCase):
 
         self.assertEqual(undersized, [])
 
+    def test_maximum_state_reserves_vertical_safe_space(self):
+        css = (TEMPLATE_DIR / "style.css").read_text(encoding="utf-8")
+
+        information = _css_rule(css, ".information-column")
+        heading = _css_rule(css, ".heading-copy")
+        artwork_column = _css_rule(css, ".artwork-column")
+        artwork_frame = _css_rule(css, ".artwork-frame")
+
+        self.assertIn("gap: 4px", information)
+        self.assertIn("display: flex", heading)
+        self.assertIn("align-items: baseline", heading)
+        self.assertIn("padding-block: 10px", artwork_column)
+        self.assertIn("width: 306px", artwork_frame)
+        self.assertIn("height: 408px", artwork_frame)
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -70,8 +70,15 @@ body {
   display: flex;
   min-width: 0;
   flex-direction: column;
-  gap: 5px;
-  padding: 3px 0 1px;
+  gap: 4px;
+  padding: 0;
+}
+
+.heading-copy {
+  display: flex;
+  min-width: 0;
+  align-items: baseline;
+  gap: 12px;
 }
 
 .card-header {
@@ -81,7 +88,7 @@ body {
   justify-content: space-between;
   gap: 12px;
   border-bottom: 1px solid var(--rule);
-  padding-bottom: 7px;
+  padding-bottom: 4px;
 }
 
 .date-label,
@@ -96,10 +103,12 @@ body {
   color: var(--muted);
   font-size: 18px;
   letter-spacing: 0.08em;
+  line-height: 1;
+  white-space: nowrap;
 }
 
 .card-header h1 {
-  margin: 2px 0 0;
+  margin: 0;
   font-family: "STKaiti", "KaiTi", serif;
   font-size: 31px;
   font-weight: 600;
@@ -171,7 +180,7 @@ body {
 
 .greeting {
   min-height: 94px;
-  padding: 6px 12px 5px;
+  padding: 3px 12px 2px;
   border-left: 3px solid var(--rust);
   background: rgba(255, 251, 242, 0.34);
 }
@@ -181,18 +190,19 @@ body {
   font-size: 18px;
   font-weight: 700;
   letter-spacing: 0.12em;
+  line-height: 1.1;
 }
 
 .greeting blockquote {
   display: -webkit-box;
-  max-height: 76px;
+  max-height: 70px;
   margin: 2px 0 1px;
   overflow: hidden;
   font-family: "STKaiti", "KaiTi", serif;
   font-size: 28px;
   font-weight: 500;
   letter-spacing: 0.015em;
-  line-height: 1.34;
+  line-height: 1.25;
   -webkit-box-orient: vertical;
   -webkit-line-clamp: 2;
 }
@@ -201,6 +211,7 @@ body {
   overflow: hidden;
   color: var(--muted);
   font-size: 18px;
+  line-height: 1.1;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
@@ -210,6 +221,7 @@ body {
   font-family: Georgia, "Times New Roman", serif;
   font-size: 18px;
   font-style: italic;
+  line-height: 1;
   text-align: right;
 }
 
@@ -223,7 +235,7 @@ body {
   display: grid;
   min-width: 0;
   gap: 1px;
-  padding: 6px 8px;
+  padding: 4px 8px;
 }
 
 .reward-item + .reward-item { border-left: 1px solid var(--rule); }
@@ -250,7 +262,7 @@ body {
   display: grid;
   min-width: 0;
   gap: 1px;
-  padding: 5px 7px;
+  padding: 3px 7px;
   background: rgba(226, 210, 181, 0.42);
 }
 
@@ -266,7 +278,7 @@ body {
 .affection-progress {
   display: grid;
   min-width: 0;
-  gap: 5px;
+  gap: 4px;
   margin-top: auto;
 }
 
@@ -284,6 +296,7 @@ body {
 .milestone-line strong {
   overflow: hidden;
   font-size: 18px;
+  line-height: 1.1;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
@@ -304,14 +317,15 @@ body {
 }
 
 .milestone-line span { color: var(--rust); font-size: 18px; font-weight: 700; }
-.milestone-line strong { font-weight: 500; }
+.milestone-line strong { font-weight: 500; line-height: 1.1; }
 
 .boost-status {
   width: fit-content;
-  padding: 2px 7px;
+  padding: 1px 7px;
   border: 1px solid rgba(180, 134, 67, 0.35);
   color: #856128;
   font-size: 18px;
+  line-height: 1.1;
 }
 
 .artwork-column {
@@ -323,11 +337,12 @@ body {
   align-items: center;
   justify-content: center;
   gap: 8px;
+  padding-block: 10px;
 }
 
 .artwork-frame {
-  width: 324px;
-  height: 432px;
+  width: 306px;
+  height: 408px;
   padding: 10px;
   overflow: hidden;
   border: 1px solid rgba(87, 60, 39, 0.3);
