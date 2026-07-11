@@ -207,6 +207,9 @@ class CheckinStore:
         template_version: str,
     ) -> CheckinRecord:
         """Persist local content once and permit only a local-to-AI upgrade."""
+        validated_source = _validate_greeting_source(
+            greeting_source, "greeting_source"
+        )
         async with self._lock:
             return await asyncio.to_thread(
                 self._update_record_content_sync,
@@ -215,7 +218,7 @@ class CheckinStore:
                 str(event_key or ""),
                 str(event_label or ""),
                 str(greeting or ""),
-                str(greeting_source or "local"),
+                validated_source,
                 str(secondary_note or ""),
                 str(template_version or "v2"),
                 self.now_iso(),
@@ -691,64 +694,59 @@ class CheckinStore:
     ) -> CheckinRecord:
         if not user_id or not date_key:
             raise ValueError("user_id and date_key are required")
-        incoming_source = greeting_source.strip().lower()
         with closing(self._connect()) as conn:
-            row = conn.execute(
-                """
-                SELECT * FROM checkin_records
-                WHERE user_id = ? AND date_key = ?
-                """,
-                (user_id, date_key),
-            ).fetchone()
-            if row is None:
-                raise ValueError("check-in record not found")
-
-            record = self._row_to_record(row)
-            has_content = any(
-                (
-                    record.event_key,
-                    record.event_label,
-                    record.greeting,
-                    record.secondary_note,
+            conn.execute("BEGIN IMMEDIATE")
+            try:
+                conn.execute(
+                    """
+                    UPDATE checkin_records
+                    SET event_key = ?, event_label = ?, greeting = ?,
+                        greeting_source = ?, secondary_note = ?,
+                        template_version = ?, updated_at = ?
+                    WHERE user_id = ? AND date_key = ?
+                      AND (
+                        (
+                            ? = 'local'
+                            AND event_key = '' AND event_label = ''
+                            AND greeting = '' AND secondary_note = ''
+                        )
+                        OR
+                        (
+                            ? = 'ai' AND greeting_source = 'local'
+                            AND NOT (
+                                event_key = '' AND event_label = ''
+                                AND greeting = '' AND secondary_note = ''
+                            )
+                        )
+                      )
+                    """,
+                    (
+                        event_key,
+                        event_label,
+                        greeting,
+                        greeting_source,
+                        secondary_note,
+                        template_version,
+                        now,
+                        user_id,
+                        date_key,
+                        greeting_source,
+                        greeting_source,
+                    ),
                 )
-            )
-            can_write_local = not has_content and incoming_source == "local"
-            can_upgrade_to_ai = (
-                has_content
-                and record.greeting_source != "ai"
-                and incoming_source == "ai"
-            )
-            if not (can_write_local or can_upgrade_to_ai):
-                return record
-
-            conn.execute(
-                """
-                UPDATE checkin_records
-                SET event_key = ?, event_label = ?, greeting = ?,
-                    greeting_source = ?, secondary_note = ?,
-                    template_version = ?, updated_at = ?
-                WHERE user_id = ? AND date_key = ?
-                """,
-                (
-                    event_key,
-                    event_label,
-                    greeting,
-                    incoming_source,
-                    secondary_note,
-                    template_version,
-                    now,
-                    user_id,
-                    date_key,
-                ),
-            )
-            conn.commit()
-            updated_row = conn.execute(
-                """
-                SELECT * FROM checkin_records
-                WHERE user_id = ? AND date_key = ?
-                """,
-                (user_id, date_key),
-            ).fetchone()
+                updated_row = conn.execute(
+                    """
+                    SELECT * FROM checkin_records
+                    WHERE user_id = ? AND date_key = ?
+                    """,
+                    (user_id, date_key),
+                ).fetchone()
+                if updated_row is None:
+                    raise ValueError("check-in record not found")
+                conn.commit()
+            except Exception:
+                conn.rollback()
+                raise
         return self._row_to_record(updated_row)
 
     @staticmethod
@@ -1030,7 +1028,10 @@ def _normalize_record_snapshot_row(row: Any, index: int) -> dict[str, Any]:
         "event_key": _optional_text(row, "event_key", ""),
         "event_label": _optional_text(row, "event_label", ""),
         "greeting": _optional_text(row, "greeting", ""),
-        "greeting_source": _optional_text(row, "greeting_source", "local"),
+        "greeting_source": _validate_greeting_source(
+            _optional_text(row, "greeting_source", "local"),
+            f"records[{index}].greeting_source",
+        ),
         "secondary_note": _optional_text(row, "secondary_note", ""),
         "template_version": _optional_text(row, "template_version", "v2"),
         "background_mode": _require_text(
@@ -1067,6 +1068,13 @@ def _optional_text(row: dict[str, Any], key: str, default: str) -> str:
     if value is None:
         return default
     return str(value)
+
+
+def _validate_greeting_source(value: Any, location: str) -> str:
+    source = "" if value is None else str(value)
+    if source not in ("local", "ai"):
+        raise ValueError(f"{location} 仅允许 local/ai")
+    return source
 
 
 def _require_int(row: dict[str, Any], key: str, location: str) -> int:

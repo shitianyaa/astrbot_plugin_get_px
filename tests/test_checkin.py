@@ -1,6 +1,8 @@
+import asyncio
 from contextlib import closing
 import sqlite3
 import tempfile
+import threading
 import unittest
 from pathlib import Path
 
@@ -30,6 +32,22 @@ class FrozenCheckinStore(CheckinStore):
 
     def now_iso(self) -> str:
         return f"{self.date_key}T12:00:00+08:00"
+
+
+class RacingCheckinStore(FrozenCheckinStore):
+    def __init__(self, data_dir: Path | str, *, date_key: str = "2026-05-26"):
+        self.content_barrier: threading.Barrier | None = None
+        super().__init__(data_dir, date_key=date_key)
+
+    def _row_to_record(self, row):
+        record = CheckinStore._row_to_record(row)
+        if (
+            self.content_barrier is not None
+            and record.greeting_source == "local"
+            and record.greeting == "Local greeting"
+        ):
+            self.content_barrier.wait(timeout=5)
+        return record
 
 
 class CheckinStoreTest(unittest.IsolatedAsyncioTestCase):
@@ -228,6 +246,103 @@ class CheckinStoreTest(unittest.IsolatedAsyncioTestCase):
             )
             self.assertEqual(ignored_ai, ai)
 
+    async def test_competing_ai_upgrades_write_once_and_return_winning_record(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            first_store = RacingCheckinStore(tmp)
+            second_store = RacingCheckinStore(tmp)
+            await first_store.checkin(
+                user_id="10001", username="tester", bot_name="neko"
+            )
+            await first_store.update_record_content(
+                user_id="10001",
+                date_key="2026-05-26",
+                event_key="summer",
+                event_label="Summer Day",
+                greeting="Local greeting",
+                greeting_source="local",
+                secondary_note="Local note",
+                template_version="v2",
+            )
+            with closing(sqlite3.connect(Path(tmp) / "checkin.sqlite3")) as conn:
+                conn.execute(
+                    "CREATE TABLE content_update_audit (greeting TEXT NOT NULL)"
+                )
+                conn.execute(
+                    """
+                    CREATE TRIGGER audit_ai_content_update
+                    AFTER UPDATE OF greeting_source ON checkin_records
+                    WHEN NEW.greeting_source = 'ai'
+                    BEGIN
+                        INSERT INTO content_update_audit (greeting)
+                        VALUES (NEW.greeting);
+                    END
+                    """
+                )
+                conn.commit()
+
+            barrier = threading.Barrier(2)
+            first_store.content_barrier = barrier
+            second_store.content_barrier = barrier
+            first_result, second_result = await asyncio.gather(
+                first_store.update_record_content(
+                    user_id="10001",
+                    date_key="2026-05-26",
+                    event_key="summer",
+                    event_label="Summer Day",
+                    greeting="First AI greeting",
+                    greeting_source="ai",
+                    secondary_note="First AI note",
+                    template_version="v2",
+                ),
+                second_store.update_record_content(
+                    user_id="10001",
+                    date_key="2026-05-26",
+                    event_key="summer",
+                    event_label="Summer Day",
+                    greeting="Second AI greeting",
+                    greeting_source="ai",
+                    secondary_note="Second AI note",
+                    template_version="v2",
+                ),
+            )
+            first_store.content_barrier = None
+            second_store.content_barrier = None
+
+            final_record = await first_store.get_today_record("10001")
+            with closing(sqlite3.connect(Path(tmp) / "checkin.sqlite3")) as conn:
+                audit_count = conn.execute(
+                    "SELECT COUNT(*) FROM content_update_audit"
+                ).fetchone()[0]
+
+            self.assertEqual(audit_count, 1)
+            self.assertEqual(first_result, final_record)
+            self.assertEqual(second_result, final_record)
+            self.assertIn(
+                final_record.greeting,
+                {"First AI greeting", "Second AI greeting"},
+            )
+
+    async def test_record_content_rejects_invalid_greeting_source(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            store = FrozenCheckinStore(tmp)
+            checked = await store.checkin(
+                user_id="10001", username="tester", bot_name="neko"
+            )
+
+            with self.assertRaisesRegex(ValueError, "greeting_source"):
+                await store.update_record_content(
+                    user_id="10001",
+                    date_key="2026-05-26",
+                    event_key="summer",
+                    event_label="Summer Day",
+                    greeting="Remote greeting",
+                    greeting_source="remote",
+                    secondary_note="Remote note",
+                    template_version="v2",
+                )
+
+            self.assertEqual(await store.get_today_record("10001"), checked.record)
+
     async def test_streak_continues_by_beijing_date_and_resets_after_gap(self):
         with tempfile.TemporaryDirectory() as tmp:
             store = FrozenCheckinStore(tmp, date_key="2026-05-26")
@@ -382,6 +497,18 @@ class CheckinStoreTest(unittest.IsolatedAsyncioTestCase):
             self.assertIsNotNone(record)
             self.assertEqual(record.greeting_source, "local")
             self.assertEqual(record.template_version, "v2")
+
+    async def test_version_two_snapshot_rejects_invalid_greeting_source(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            store = FrozenCheckinStore(tmp, date_key="2026-05-26")
+            await store.checkin(user_id="20002", username="source", bot_name="neko")
+            snapshot = await store.export_snapshot()
+            snapshot["records"][0]["greeting_source"] = "remote"
+
+            with self.assertRaisesRegex(ValueError, "greeting_source"):
+                load_checkin_snapshot_json(
+                    dump_checkin_snapshot_json(snapshot).encode("utf-8")
+                )
 
     async def test_import_overwrites_existing_data(self):
         with tempfile.TemporaryDirectory() as src_tmp, tempfile.TemporaryDirectory() as dst_tmp:
