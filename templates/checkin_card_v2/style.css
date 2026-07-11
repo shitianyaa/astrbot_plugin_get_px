@@ -165,6 +165,7 @@ body {
 .identity-copy {
   display: flex;
   min-width: 0;
+  flex: 1 1 0;
   align-items: baseline;
   gap: 8px;
 }
@@ -183,6 +184,7 @@ body {
   text-overflow: ellipsis;
   white-space: nowrap;
 }
+.identity-copy strong:only-child { max-width: 100%; }
 .identity-copy span { min-width: 0; color: var(--muted); font-size: 18px; }
 
 .greeting {

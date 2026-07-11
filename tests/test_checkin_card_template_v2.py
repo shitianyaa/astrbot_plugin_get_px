@@ -94,10 +94,14 @@ class CheckinCardTemplateV2Test(unittest.TestCase):
 
         summary = _css_rule(css, ".account-summary")
         nickname = _css_rule(css, ".identity-copy strong")
+        nickname_only = _css_rule(css, ".identity-copy strong:only-child")
+        identity = _css_rule(css, ".identity-copy")
         signature = _css_rule(css, ".greeting .signature")
         self.assertIn("repeat(2", summary)
         self.assertIn("white-space: nowrap", nickname)
         self.assertIn("text-overflow: ellipsis", nickname)
+        self.assertIn("max-width: 100%", nickname_only)
+        self.assertIn("flex: 1 1 0", identity)
         self.assertIn("text-align: right", signature)
 
 
