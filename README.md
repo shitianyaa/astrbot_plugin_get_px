@@ -148,7 +148,7 @@
 
 法定节假日与调休数据来自 `holiday-cn` 年度数据，并保存在 AstrBot 插件数据目录。插件首次安装、插件版本变化时会在后台尝试更新一次；正常运行期间距上次成功更新满 `180` 天后再次更新。网络失败不会阻塞插件启动或签到，会继续使用旧缓存，并由内置公历日期和 `lunar-python` 农历节日规则兜底。每次更新会预取当前年份和下一年份的数据。
 
-签到问候可选择本地事件文案、AstrBot 文本模型或 [一言 API](https://developer.hitokoto.cn/sentence/)。AI 模式可单独选择文本模型；未指定时尝试当前会话文本模型。一言模式每位用户当日首次签到仅请求一次，句子和卡片会随当日签到记录复用；API 超时、报错、返回空文本或内容不合规时，均回退到对应事件的本地文案，不影响奖励和卡片发送。`auto` 模式会继续尊重原有的 AI 开关。
+签到问候可选择本地事件文案、[一言 API](https://developer.hitokoto.cn/sentence/) 或 AstrBot 文本模型，默认使用一言。AI 模式可单独选择文本模型；未指定时尝试当前会话文本模型。一言模式每位用户当日首次签到仅请求一次，句子和卡片会随当日签到记录复用；API 超时、报错、返回空文本或内容不合规时，均回退到对应事件的本地文案，不影响奖励和卡片发送。
 
 生日只保存月日，不保存出生年份。首次签到会在 OneBot QQ 平台尝试一次资料读取；直接使用 `/签到生日` 可查看生日，并在尚未保存时重新读取 QQ 资料。QQ 资料未公开时会给出提示，用户也可以手动设置或清除生日。管理员可以添加插件全局年度事件和单次事件。主事件按“生日、单次事件、年度事件、节假日、签到里程碑、连续签到”排序，其他同日事件进入次要备注。
 
@@ -208,8 +208,7 @@
 | `checkin_custom_background` | 本地图片路径；V2 仍按竖向作品相框完整显示 | 空 |
 | `checkin_avatar_enabled` | 签到卡片显示用户头像 | `true` |
 | `checkin_card_quality` | 签到卡片 JPEG 清晰度，范围 60–100；修改后自动生成新的当天缓存 | `95` |
-| `checkin_ai_greeting_enabled` | 旧 AI 开关兼容项；仅在 `checkin_greeting_mode=auto` 时决定使用 AI 或本地文案 | `false` |
-| `checkin_greeting_mode` | 签到问候来源：`auto` / `local` / `ai` / `hitokoto` | `auto` |
+| `checkin_greeting_mode` | 签到问候来源：`local` / `hitokoto` / `ai` | `hitokoto` |
 | `checkin_ai_greeting_provider_id` | 签到问候文本模型；留空时尝试当前会话文本模型 | 空 |
 | `checkin_ai_greeting_prompt` | 签到问候提示词，使用 `{checkin_data}` 注入受控数据 | 见配置页 |
 | `checkin_ai_greeting_timeout` | 单次问候模型调用超时秒数；失败后回退本地文案 | `8.0` |

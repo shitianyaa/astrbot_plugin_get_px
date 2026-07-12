@@ -337,16 +337,8 @@ class CheckinApplicationMixin:
 
 
     def _checkin_greeting_mode(self) -> str:
-        mode = self._cfg_str("checkin_greeting_mode", "auto").lower()
-        if mode not in ("auto", "local", "ai", "hitokoto"):
-            mode = "auto"
-        if mode == "auto":
-            return (
-                "ai"
-                if self._cfg_bool("checkin_ai_greeting_enabled", False)
-                else "local"
-            )
-        return mode
+        mode = self._cfg_str("checkin_greeting_mode", "hitokoto").lower()
+        return mode if mode in ("local", "hitokoto", "ai") else "hitokoto"
 
 
 

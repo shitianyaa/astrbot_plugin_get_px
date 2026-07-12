@@ -214,7 +214,7 @@ def _plugin_for_checkin(tmp: str, result: CheckinResult, order, *, cache_hit=Fal
         "checkin_enabled": True,
         "checkin_bot_name": "neko",
         "checkin_avatar_enabled": False,
-        "checkin_ai_greeting_enabled": True,
+        "checkin_greeting_mode": "ai",
         "checkin_ai_greeting_provider_id": "provider-1",
         "checkin_ai_greeting_prompt": "prompt",
         "checkin_ai_greeting_timeout": 8.0,
@@ -282,16 +282,17 @@ class MainErrorHandlingTest(unittest.IsolatedAsyncioTestCase):
         self.assertIn("lock_key = user_id", source)
         self.assertNotIn("CheckinStore.today_key()", source)
 
-    def test_greeting_mode_preserves_legacy_ai_switch(self):
+    def test_greeting_mode_defaults_to_hitokoto_and_accepts_explicit_sources(self):
         plugin = object.__new__(GetPxPlugin)
-        plugin.config = {
-            "checkin_greeting_mode": "auto",
-            "checkin_ai_greeting_enabled": True,
-        }
-        self.assertEqual(plugin._checkin_greeting_mode(), "ai")
-        plugin.config["checkin_ai_greeting_enabled"] = False
+        plugin.config = {}
+        self.assertEqual(plugin._checkin_greeting_mode(), "hitokoto")
+        plugin.config["checkin_greeting_mode"] = "local"
         self.assertEqual(plugin._checkin_greeting_mode(), "local")
+        plugin.config["checkin_greeting_mode"] = "ai"
+        self.assertEqual(plugin._checkin_greeting_mode(), "ai")
         plugin.config["checkin_greeting_mode"] = "hitokoto"
+        self.assertEqual(plugin._checkin_greeting_mode(), "hitokoto")
+        plugin.config["checkin_greeting_mode"] = "auto"
         self.assertEqual(plugin._checkin_greeting_mode(), "hitokoto")
 
     def test_portrait_page_exhaustion_log_has_neutral_reason(self):

@@ -30,9 +30,9 @@
 - 成品 JPEG 缓存保留一天，同一天重复签到优先重发缓存；缓存缺失、损坏或模板版本变化时按已保存记录重建。
 - JPEG 清晰度由 `checkin_card_quality` 控制，范围 `60–100`、默认 `95`；质量会进入缓存键，修改配置后不会继续复用旧质量缓存。
 - 法定节假日数据在首次安装、插件版本变化及距上次成功更新满 180 天时后台更新；网络失败使用旧缓存和内置公历/农历规则，不影响签到。
-- AI 问候默认关闭。启用后优先使用 `checkin_ai_greeting_provider_id` 指定的文本模型，留空时尝试当前会话文本模型；默认 `8` 秒超时，任何失败均回退本地文案。
+- 问候来源可选本地文案、一言或 AI，默认使用一言；一言和 AI 请求失败时均回退本地文案。AI 模式优先使用 `checkin_ai_greeting_provider_id` 指定的文本模型，留空时尝试当前会话文本模型。
 - 用户佩戴称号通过 ViewModel 的 `user_title` 注入；生日、全局事件、节假日、里程碑和连签按优先级生成主事件及单行次要备注。
-- 对应配置为 `checkin_ai_greeting_enabled`、`checkin_ai_greeting_provider_id`、`checkin_ai_greeting_prompt`、`checkin_ai_greeting_timeout`。
+- 对应配置为 `checkin_greeting_mode`、`checkin_hitokoto_timeout`、`checkin_ai_greeting_provider_id`、`checkin_ai_greeting_prompt`、`checkin_ai_greeting_timeout`。
 
 ## 字体授权
 

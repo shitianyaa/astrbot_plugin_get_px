@@ -67,6 +67,17 @@ def _illust(illust_id: int, *, width: int = 750, height: int = 1000) -> dict:
 
 
 class CheckinBackgroundSelectionTest(unittest.IsolatedAsyncioTestCase):
+    def test_greeting_schema_defaults_to_hitokoto_without_legacy_switch(self):
+        schema_path = Path(__file__).resolve().parents[1] / "_conf_schema.json"
+        schema = json.loads(schema_path.read_text(encoding="utf-8"))
+
+        self.assertNotIn("checkin_ai_greeting_enabled", schema)
+        self.assertEqual(schema["checkin_greeting_mode"]["default"], "hitokoto")
+        self.assertEqual(
+            schema["checkin_greeting_mode"]["options"],
+            ["local", "hitokoto", "ai"],
+        )
+
     def test_custom_background_schema_recommends_portrait_contain_display(self):
         schema_path = Path(__file__).resolve().parents[1] / "_conf_schema.json"
         schema = json.loads(schema_path.read_text(encoding="utf-8"))
