@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import random
+import re
 
 from astrbot.api.all import logger
 from astrbot.api.event import AstrMessageEvent
@@ -16,8 +17,14 @@ class FiltersMixin:
     """Pixiv content filters, blacklist checks and deduplicated selection."""
 
     @staticmethod
-    def _split_config_tags(value: str) -> list[str]:
-        return [tag.strip() for tag in value.split(",") if tag.strip()]
+    def _split_config_tags(value: object) -> list[str]:
+        if not isinstance(value, str):
+            return []
+        return [
+            tag.strip()
+            for tag in re.split(r"[,，、;；\r\n]+", value)
+            if tag.strip()
+        ]
 
     def _blacklist_tags(self) -> set[str]:
         configured = self._split_config_tags(self._cfg_str("blacklist_tags", ""))

@@ -4,6 +4,7 @@ import tempfile
 import unittest
 from pathlib import Path
 from types import SimpleNamespace
+from unittest.mock import patch
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 
@@ -22,16 +23,19 @@ class FakeEvent:
 
 
 class FakePixivClient:
-    def __init__(self, pages):
+    def __init__(self, pages, search_pages=None):
         self.pages = pages
+        self.search_pages = search_pages or {}
         self.ranking_offsets = []
+        self.search_calls = []
 
     async def ranking(self, mode: str = "week", offset: int = 0):
         self.ranking_offsets.append(offset)
         return list(self.pages.get(offset, []))
 
     async def search(self, tag: str, offset: int = 0):
-        return []
+        self.search_calls.append((tag, offset))
+        return list(self.search_pages.get((tag, offset), []))
 
 
 class FakeHistory:
@@ -71,6 +75,25 @@ def _illust(illust_id: int, *, width: int = 750, height: int = 1000) -> dict:
 
 
 class CheckinBackgroundSelectionTest(unittest.IsolatedAsyncioTestCase):
+    def test_split_config_tags_accepts_common_delimiters(self):
+        self.assertEqual(
+            GetPxPlugin._split_config_tags(
+                "alpha，beta、gamma;delta；epsilon\nzeta"
+            ),
+            ["alpha", "beta", "gamma", "delta", "epsilon", "zeta"],
+        )
+
+    def test_checkin_background_tag_candidates_are_randomized(self):
+        plugin = object.__new__(GetPxPlugin)
+        with patch(
+            "astrbot_plugin_get_px.checkin.artwork.random.shuffle",
+            side_effect=lambda tags: tags.reverse(),
+        ):
+            candidates = plugin._checkin_background_tag_candidates(
+                "alpha,beta,gamma"
+            )
+        self.assertEqual(candidates, ["gamma", "beta", "alpha"])
+
     def test_greeting_schema_defaults_to_hitokoto_without_legacy_switch(self):
         schema_path = Path(__file__).resolve().parents[1] / "_conf_schema.json"
         schema = json.loads(schema_path.read_text(encoding="utf-8"))
@@ -219,6 +242,45 @@ class CheckinBackgroundSelectionTest(unittest.IsolatedAsyncioTestCase):
                 self.assertEqual(plugin.client.ranking_offsets, [0, 0, 0])
                 self.assertEqual(plugin.downloader.qualities, ["medium"] * 3)
                 self.assertEqual(plugin.downloader.downgrade_limits, [0] * 3)
+            finally:
+                plugin.image_index.close()
+
+    async def test_checkin_background_tries_remaining_configured_tags(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            plugin = object.__new__(GetPxPlugin)
+            plugin.config = {
+                "pixiv_refresh_token": "token",
+                "pixiv_ranking_mode": "week",
+                "pixiv_r18": 0,
+                "filter_manga": True,
+                "blacklist_tags": "",
+                "checkin_background_tag": "empty，available",
+                "pixiv_proxy_url": "",
+                "request_timeout": 30.0,
+            }
+            plugin.image_index = ImageIndexStore(tmp)
+            plugin.image_history = FakeHistory([])
+            plugin.downloader = FakeDownloader()
+            plugin.client = FakePixivClient(
+                {}, search_pages={("available", 0): [_illust(72)]}
+            )
+            try:
+                with patch(
+                    "astrbot_plugin_get_px.checkin.artwork.random.shuffle",
+                    side_effect=lambda tags: None,
+                ):
+                    background = await plugin._download_checkin_pixiv_background(
+                        FakeEvent(),
+                        SimpleNamespace(date_key="2026-07-12", user_id="10001"),
+                        claim_usage=False,
+                        preview_nonce=1,
+                    )
+                self.assertIsNotNone(background)
+                self.assertEqual(background.source, "search:available")
+                self.assertEqual(
+                    plugin.client.search_calls,
+                    [("empty", 0), ("available", 0)],
+                )
             finally:
                 plugin.image_index.close()
 

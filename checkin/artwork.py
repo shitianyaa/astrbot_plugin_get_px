@@ -4,6 +4,7 @@ import asyncio
 from dataclasses import replace
 import hashlib
 from pathlib import Path
+import random
 import time
 
 from astrbot.api.all import logger
@@ -283,6 +284,7 @@ class CheckinArtworkMixin:
         claim_usage: bool = True,
         preview_nonce: int = 0,
         preview_excluded_ids: set[str] | None = None,
+        _selected_tag: str | None = None,
     ) -> CardBackground | None:
         token = self._cfg_str("pixiv_refresh_token")
         if not token:
@@ -293,20 +295,26 @@ class CheckinArtworkMixin:
         if self.client is None:
             return None
 
-        tag_config = self._cfg_str("checkin_background_tag", "")
-        tags = self._split_config_tags(tag_config)
-        selected_tag = ""
-        if tags:
-            seed = int.from_bytes(
-                hashlib.sha256(
-                    f"checkin-bg-tag|{record.date_key}|{tag_config}".encode("utf-8")
-                ).digest()[:8],
-                "big",
-            )
-            selected_tag = tags[seed % len(tags)]
         ranking_mode = self._cfg_str("pixiv_ranking_mode", "week")
         if ranking_mode not in RANKING_MODES:
             ranking_mode = "week"
+
+        if _selected_tag is None:
+            tag_config = self._cfg_str("checkin_background_tag", "")
+            for selected_tag in self._checkin_background_tag_candidates(tag_config):
+                background = await self._download_checkin_pixiv_background(
+                    event,
+                    record,
+                    claim_usage=claim_usage,
+                    preview_nonce=preview_nonce,
+                    preview_excluded_ids=preview_excluded_ids,
+                    _selected_tag=selected_tag,
+                )
+                if background is not None:
+                    return background
+            return None
+
+        selected_tag = _selected_tag
 
         source_key = self._source_key(selected_tag, ranking_mode)
         used_ids = await self._checkin_background_used_ids(event, source_key)
@@ -459,6 +467,14 @@ class CheckinArtworkMixin:
                     event, source_key, illust_id
                 )
         return None
+
+    def _checkin_background_tag_candidates(self, tag_config: object) -> list[str]:
+        tags = self._split_config_tags(tag_config)
+        if not tags:
+            return [""]
+        candidates = list(tags)
+        random.shuffle(candidates)
+        return candidates
 
 
 

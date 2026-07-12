@@ -190,7 +190,7 @@
 | `pixiv_proxy_url` | 代理地址，支持 `http://`、`socks5://` | 空 |
 | `pixiv_r18` | R18 模式：`0` 仅非 R18，`1` 仅 R18，`2` 混合 | `0` |
 | `filter_manga` | 过滤漫画作品；主动请求 `day_manga` 时保留后门 | `true` |
-| `blacklist_tags` | 拉黑标签，多个标签用英文逗号分隔；留空会回退默认拉黑标签 | `furry,裸体,全裸,触手,露出,nsfw` |
+| `blacklist_tags` | 拉黑标签，多个标签可用逗号、顿号、分号或换行分隔；留空会回退默认拉黑标签 | `furry,裸体,全裸,触手,露出,nsfw` |
 | `pixiv_ranking_mode` | 无标签时使用的默认排行榜类型 | `week` |
 | `max_count` | 单次最大发送数量，范围 1-20 | `5` |
 | `dedupe_ttl_hours` | 普通发图当天去重；设为 `0` 关闭普通发图去重；当前按自然日去重，不按小时滚动过期 | `24` |
@@ -202,7 +202,7 @@
 | `checkin_enabled` | 签到开关 | `true` |
 | `checkin_bot_name` | 签到卡片中的 bot 角色名 | `neko` |
 | `checkin_background_mode` | 签到背景模式：`pixiv_daily` 或 `custom`；自定义背景不可用时会继续尝试 Pixiv 背景 | `pixiv_daily` |
-| `checkin_background_tag` | 签到 Pixiv 背景标签，多个标签用英文逗号分隔 | 空 |
+| `checkin_background_tag` | 签到 Pixiv 背景标签，多个标签可用逗号、顿号、分号或换行分隔；每次随机确定尝试顺序，一个标签无可用候选时继续尝试下一个 | 空 |
 | `checkin_background_aspect_ratio` | V2 固定使用 `3:4` 竖向作品；该项仅保留用于配置兼容 | `3:4` |
 | `checkin_background_aspect_tolerance` | V2 固定容差 `0.20`，接受宽高比 `0.60–0.90`；不会放宽到其他比例 | `0.20` |
 | `checkin_custom_background` | 本地图片路径；V2 仍按竖向作品相框完整显示 | 空 |
