@@ -22,7 +22,7 @@ class FiltersMixin:
             return []
         return [
             tag.strip()
-            for tag in re.split(r"[,，、;；\r\n]+", value)
+            for tag in re.split(r"[,\uFF0C、;\uFF1B\r\n]+", value)
             if tag.strip()
         ]
 

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from datetime import date
 import json
+import math
 from typing import Any
 import unicodedata
 
@@ -173,16 +174,16 @@ def _normalize_profile_snapshot_row(row: Any, index: int) -> dict[str, Any]:
         "total_days": _require_int(row, "total_days", f"profiles[{index}]"),
         "streak_days": _require_int(row, "streak_days", f"profiles[{index}]"),
         "last_checkin_date": _require_text(
-            row, "last_checkin_date", f"profiles[{index}]"
+            row, "last_checkin_date", f"profiles[{index}]", allow_blank=True
         ),
         "boost_start_date": _require_text(
-            row, "boost_start_date", f"profiles[{index}]"
+            row, "boost_start_date", f"profiles[{index}]", allow_blank=True
         ),
         "boost_until_date": _require_text(
-            row, "boost_until_date", f"profiles[{index}]"
+            row, "boost_until_date", f"profiles[{index}]", allow_blank=True
         ),
         "repeat_penalty_date": _require_text(
-            row, "repeat_penalty_date", f"profiles[{index}]"
+            row, "repeat_penalty_date", f"profiles[{index}]", allow_blank=True
         ),
         "repeat_penalty_total": _require_float(
             row, "repeat_penalty_total", f"profiles[{index}]"
@@ -242,19 +243,19 @@ def _normalize_record_snapshot_row(row: Any, index: int) -> dict[str, Any]:
         "secondary_note": _optional_text(row, "secondary_note", ""),
         "template_version": _optional_text(row, "template_version", "v2"),
         "background_mode": _require_text(
-            row, "background_mode", f"records[{index}]"
+            row, "background_mode", f"records[{index}]", allow_blank=True
         ),
         "background_source": _require_text(
-            row, "background_source", f"records[{index}]"
+            row, "background_source", f"records[{index}]", allow_blank=True
         ),
         "background_illust_id": _require_text(
-            row, "background_illust_id", f"records[{index}]"
+            row, "background_illust_id", f"records[{index}]", allow_blank=True
         ),
         "background_title": _require_text(
-            row, "background_title", f"records[{index}]"
+            row, "background_title", f"records[{index}]", allow_blank=True
         ),
         "background_author": _require_text(
-            row, "background_author", f"records[{index}]"
+            row, "background_author", f"records[{index}]", allow_blank=True
         ),
         "created_at": _require_text(row, "created_at", f"records[{index}]"),
         "updated_at": _require_text(row, "updated_at", f"records[{index}]"),
@@ -325,13 +326,16 @@ def _normalize_achievement_snapshot_row(row: Any, index: int) -> dict[str, Any]:
     }
 
 
-def _require_text(row: dict[str, Any], key: str, location: str) -> str:
+def _require_text(
+    row: dict[str, Any], key: str, location: str, *, allow_blank: bool = False
+) -> str:
     if key not in row:
         raise ValueError(f"{location} 缺少字段 {key}")
     value = row.get(key)
-    if value is None:
-        return ""
-    return str(value)
+    text = "" if value is None else str(value).strip()
+    if not text and not allow_blank:
+        raise ValueError(f"{location}.{key} 不能为空")
+    return text
 
 
 def _optional_text(row: dict[str, Any], key: str, default: str) -> str:
@@ -395,6 +399,8 @@ def _require_int(row: dict[str, Any], key: str, location: str) -> int:
     value = row.get(key)
     if isinstance(value, bool):
         raise ValueError(f"{location}.{key} 必须是整数")
+    if isinstance(value, float) and not value.is_integer():
+        raise ValueError(f"{location}.{key} 必须是整数")
     try:
         return int(value)
     except (TypeError, ValueError) as exc:
@@ -408,7 +414,10 @@ def _require_float(row: dict[str, Any], key: str, location: str) -> float:
     if isinstance(value, bool):
         raise ValueError(f"{location}.{key} 必须是数字")
     try:
-        return float(value)
+        parsed = float(value)
+        if not math.isfinite(parsed):
+            raise ValueError
+        return parsed
     except (TypeError, ValueError) as exc:
         raise ValueError(f"{location}.{key} 必须是数字") from exc
 
@@ -419,6 +428,8 @@ def _require_boolish_int(row: dict[str, Any], key: str, location: str) -> int:
     value = row.get(key)
     if isinstance(value, bool):
         return 1 if value else 0
+    if isinstance(value, float) and not value.is_integer():
+        raise ValueError(f"{location}.{key} 必须是布尔值或 0/1")
     try:
         int_value = int(value)
     except (TypeError, ValueError) as exc:

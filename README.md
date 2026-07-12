@@ -5,7 +5,7 @@
 一个面向 AstrBot 的 Pixiv 发图插件：搜索插画、查看排行榜、下载作品、每日签到，并在 WebUI 管理图片历史与黑名单。
 
 ![AstrBot](https://img.shields.io/badge/AstrBot-plugin-5865f2?style=flat-square)
-![Version](https://img.shields.io/badge/version-2.6.1-22c55e?style=flat-square)
+![Version](https://img.shields.io/badge/version-2.7.0-22c55e?style=flat-square)
 ![Python](https://img.shields.io/badge/Python-3.10%2B-3776ab?style=flat-square)
 ![Platform](https://img.shields.io/badge/platform-OneBot%20%2F%20aiocqhttp-f97316?style=flat-square)
 
@@ -148,7 +148,7 @@
 
 法定节假日与调休数据来自 `holiday-cn` 年度数据，并保存在 AstrBot 插件数据目录。插件首次安装、插件版本变化时会在后台尝试更新一次；正常运行期间距上次成功更新满 `180` 天后再次更新。网络失败不会阻塞插件启动或签到，会继续使用旧缓存，并由内置公历日期和 `lunar-python` 农历节日规则兜底。每次更新会预取当前年份和下一年份的数据。
 
-签到问候可选择本地事件文案、[一言 API](https://developer.hitokoto.cn/sentence/) 或 AstrBot 文本模型，默认使用一言。AI 模式可单独选择文本模型；未指定时尝试当前会话文本模型。一言正文限制为最多 24 个字符，每位用户当日首次签到仅请求一次，句子和卡片会随当日签到记录复用；API 超时、报错、返回空文本、超长或内容不合规时，均回退到对应事件的本地文案，不影响奖励和卡片发送。
+签到问候可选择本地事件文案、[一言 API](https://developer.hitokoto.cn/sentence/) 或 AstrBot 文本模型，默认使用一言。AI 模式可单独选择文本模型；未指定时尝试当前会话文本模型。一言类型可在配置页使用中文多选，单次签到仍只会在所选类型范围内随机返回一句；选择“全部”或不选择时从全部分类随机。一言正文限制为最多 24 个字符，每位用户当日首次签到仅请求一次，句子和卡片会随当日签到记录复用；API 超时、报错、返回空文本、超长或内容不合规时，均回退到对应事件的本地文案，不影响奖励和卡片发送。
 
 生日只保存月日，不保存出生年份。首次签到会在 OneBot QQ 平台尝试一次资料读取；直接使用 `/签到生日` 可查看生日，并在尚未保存时重新读取 QQ 资料。QQ 资料未公开时会给出提示，用户也可以手动设置或清除生日。管理员可以添加插件全局年度事件和单次事件。主事件按“生日、单次事件、年度事件、节假日、签到里程碑、连续签到”排序，其他同日事件进入次要备注。
 
@@ -209,6 +209,7 @@
 | `checkin_avatar_enabled` | 签到卡片显示用户头像 | `true` |
 | `checkin_card_quality` | 签到卡片 JPEG 清晰度，范围 60–100；修改后自动生成新的当天缓存 | `95` |
 | `checkin_greeting_mode` | 签到问候来源：`local` / `hitokoto` / `ai` | `hitokoto` |
+| `checkin_hitokoto_categories` | 一言类型中文多选；选择“全部”或留空时从全部分类随机 | `全部` |
 | `checkin_ai_greeting_provider_id` | 签到问候文本模型；留空时尝试当前会话文本模型 | 空 |
 | `checkin_ai_greeting_prompt` | 签到问候提示词，使用 `{checkin_data}` 注入受控数据 | 见配置页 |
 | `checkin_ai_greeting_timeout` | 单次问候模型调用超时秒数；失败后回退本地文案 | `8.0` |

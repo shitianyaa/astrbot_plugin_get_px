@@ -12,6 +12,7 @@ def parse_month_day(value: object) -> tuple[int, int] | None:
         parsed = _valid_pair(month, day)
         if parsed:
             return parsed
+        return None
     numeric_text = ""
     if isinstance(value, (int, float)) and not isinstance(value, bool):
         numeric_text = str(int(value))

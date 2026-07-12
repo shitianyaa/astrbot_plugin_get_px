@@ -103,7 +103,9 @@ def test_next_year_failure_does_not_discard_current_year(tmp_path: Path) -> None
             if self.fail:
                 from aiohttp import ClientResponseError
 
-                raise ClientResponseError(None, (), status=404)
+                request_info = MagicMock()
+                request_info.real_url = "https://example.invalid/holiday.json"
+                raise ClientResponseError(request_info, (), status=404)
 
         async def json(self, **_kwargs):
             return self.payload
@@ -126,9 +128,14 @@ def test_next_year_failure_does_not_discard_current_year(tmp_path: Path) -> None
     context.__aenter__.return_value = session
 
     calendar = HolidayCalendar(tmp_path, plugin_version="2.6.1")
+    cached_next_year_date = f"{current_year + 1}-01-02"
+    calendar._state["days"] = {
+        cached_next_year_date: {"name": "缓存节日", "is_off_day": True}
+    }
     with patch("checkin.holiday.aiohttp.ClientSession", return_value=context):
         assert __import__("asyncio").run(calendar.refresh_if_due())
     assert calendar.lookup(f"{current_year}-01-01") is not None
+    assert calendar.lookup(cached_next_year_date) is not None
     assert calendar._state["years"] == [current_year]
     future = datetime(current_year + 1, 1, 1, tzinfo=timezone.utc)
     calendar._state["last_attempt_at"] = (future - timedelta(days=2)).isoformat()

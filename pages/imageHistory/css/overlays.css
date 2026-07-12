@@ -1,3 +1,5 @@
+/* =============================================
+   TOAST
    ============================================= */
 .toast {
   position: fixed;
@@ -283,10 +285,3 @@
   stroke-linejoin: round;
   transition: stroke var(--dur-fast) var(--ease-out);
 }
-
-/* =============================================
-   DARK MODE — Component Overrides
-   These components use fixed light surfaces (near-white cover chips,
-   tinted toasts) with hardcoded text colors that lose contrast once
-   the palette flips. Re-tint them for dark mode only — light mode is
-   left untouched. Placed after the base rules so source order wins.

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import copy
 import tempfile
 from dataclasses import replace
 
@@ -12,6 +13,7 @@ from checkin.birthday import (
     parse_month_day,
     parse_qq_birthday,
 )
+from checkin.snapshot import validate_checkin_snapshot
 
 
 def test_checkin_package_exports_public_models() -> None:
@@ -50,6 +52,10 @@ def test_qq_birthday_parser_accepts_common_shapes_and_leap_day() -> None:
     assert parse_month_day(20000711) == (7, 11)
     assert birthday_matches("2028-02-29", 2, 29)
     assert not birthday_matches("2027-02-28", 2, 29)
+
+
+def test_month_day_parser_does_not_fall_through_invalid_mappings() -> None:
+    assert parse_month_day({"month": 13, "day": 40, "note": "05-06"}) is None
 
 
 @pytest.mark.asyncio
@@ -136,6 +142,26 @@ async def test_v3_snapshot_requires_feature_arrays_and_rejects_bool_version() ->
         invalid["schema_version"] = True
         with pytest.raises(ValueError, match="不支持"):
             await store.import_snapshot(invalid)
+
+
+@pytest.mark.asyncio
+async def test_v3_snapshot_rejects_blank_fractional_and_nonfinite_values() -> None:
+    with tempfile.TemporaryDirectory() as tmp:
+        store = CheckinStore(tmp)
+        await store.checkin(user_id="10001", username="tester", bot_name="neko")
+        snapshot = await store.export_snapshot()
+
+        invalid_cases = (
+            ("不能为空", "profiles", 0, "user_id", "   "),
+            ("必须是整数", "profiles", 0, "coins", 1.5),
+            ("必须是数字", "profiles", 0, "affection", float("nan")),
+            ("必须是布尔值", "records", 0, "boost_active", 0.5),
+        )
+        for message, table, index, key, value in invalid_cases:
+            invalid = copy.deepcopy(snapshot)
+            invalid[table][index][key] = value
+            with pytest.raises(ValueError, match=message):
+                validate_checkin_snapshot(invalid)
 
 
 @pytest.mark.asyncio

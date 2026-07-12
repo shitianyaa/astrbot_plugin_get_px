@@ -320,6 +320,9 @@ class CheckinApplicationMixin:
                 timeout=self._cfg_float(
                     "checkin_hitokoto_timeout", 5.0, 1.0, 15.0
                 ),
+                categories=self.config.get(
+                    "checkin_hitokoto_categories", ["全部"]
+                ),
             )
         greeting, source = await self.checkin_greeting.generate(
             event,

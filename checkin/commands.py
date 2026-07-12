@@ -43,6 +43,7 @@ except ImportError:  # Direct imports used by the test suite.
 
 LOG_PREFIX = "[GetPx]"
 PLUGIN_NAME = "astrbot_plugin_get_px"
+MAX_CHECKIN_BACKUP_BYTES = 5 * 1024 * 1024
 
 
 class CheckinCommandMixin:
@@ -60,10 +61,6 @@ class CheckinCommandMixin:
         backup_dir.mkdir(parents=True, exist_ok=True)
         return backup_dir
 
-    @staticmethod
-    def _checkin_backup_name(prefix: str) -> str:
-        return f"{prefix}-{time.strftime('%Y%m%d-%H%M%S')}.json"
-
     async def _write_checkin_snapshot_backup(self, *, prefix: str) -> Path:
         if self.checkin_store is None:
             raise RuntimeError("签到数据尚未初始化")
@@ -74,21 +71,32 @@ class CheckinCommandMixin:
         self, snapshot: dict[str, object], *, prefix: str
     ) -> Path:
         backup_dir = self._checkin_backup_dir()
-        file_path = backup_dir / self._checkin_backup_name(prefix)
-        index = 1
-        while file_path.exists():
-            timestamp = time.strftime("%Y%m%d-%H%M%S")
-            file_path = backup_dir / f"{prefix}-{timestamp}-{index}.json"
-            index += 1
-        file_path.write_text(dump_checkin_snapshot_json(snapshot), encoding="utf-8")
-        return file_path
+        payload = dump_checkin_snapshot_json(snapshot)
+        for _ in range(100):
+            file_path = backup_dir / f"{prefix}-{time.time_ns()}.json"
+            try:
+                with file_path.open("x", encoding="utf-8") as handle:
+                    handle.write(payload)
+                return file_path
+            except FileExistsError:
+                continue
+        raise RuntimeError("无法创建唯一的签到备份文件")
 
     async def _read_uploaded_file_bytes(self, upload) -> bytes:
         filename = str(getattr(upload, "filename", "") or "").strip() or "upload.json"
         safe_name = re.sub(r"[^A-Za-z0-9._-]+", "_", Path(filename).name)
         temp_path = self._checkin_backup_dir() / f".upload-{time.time_ns()}-{safe_name}"
-        await upload.save(str(temp_path))
+        content_length = getattr(upload, "content_length", None)
+        if isinstance(content_length, int) and content_length > MAX_CHECKIN_BACKUP_BYTES:
+            raise ValueError("签到备份文件不能超过 5 MiB")
         try:
+            total = 0
+            with temp_path.open("xb") as handle:
+                while chunk := upload.stream.read(64 * 1024):
+                    total += len(chunk)
+                    if total > MAX_CHECKIN_BACKUP_BYTES:
+                        raise ValueError("签到备份文件不能超过 5 MiB")
+                    handle.write(chunk)
             return temp_path.read_bytes()
         finally:
             cleanup(str(temp_path))
@@ -281,7 +289,7 @@ class CheckinCommandMixin:
             )
         except Exception as e:
             logger.error(f"{LOG_PREFIX} 导出签到备份失败: {e}")
-            return event.plain_result(f"导出签到备份失败: {e}")
+            return event.plain_result("导出签到备份失败，请稍后再试")
         try:
             await event.send(
                 event.chain_result([File(name=export_path.name, file=str(export_path))])
@@ -289,7 +297,7 @@ class CheckinCommandMixin:
             return None
         except Exception as e:
             logger.error(f"{LOG_PREFIX} 发送签到备份文件失败: {e}")
-            return event.plain_result(f"发送签到备份文件失败: {e}")
+            return event.plain_result("发送签到备份文件失败，请稍后再试")
 
 
 
@@ -308,7 +316,7 @@ class CheckinCommandMixin:
             profile = await self.checkin_store.get_profile(user_id)
         except Exception as e:
             logger.warning(f"{LOG_PREFIX} 读取签到状态失败: {e}")
-            yield event.plain_result(f"读取签到状态失败: {e}")
+            yield event.plain_result("读取签到状态失败，请稍后再试")
             return
         level = affection_level(profile.affection)
         today = CheckinStore.today_key()
@@ -484,7 +492,7 @@ class CheckinCommandMixin:
             )
         except Exception as e:
             logger.warning(f"{LOG_PREFIX} 购买签到加持失败: {e}")
-            yield event.plain_result(f"购买失败: {e}")
+            yield event.plain_result("购买失败，请稍后再试")
             return
         lines = [purchase.message, f"当前金币: {purchase.profile.coins}"]
         if purchase.success:

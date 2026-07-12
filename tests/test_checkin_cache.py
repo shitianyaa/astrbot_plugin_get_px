@@ -301,14 +301,15 @@ class CheckinCardCacheTest(unittest.IsolatedAsyncioTestCase):
         self.assertFalse(stored.parent.exists())
 
     def test_cleanup_removes_previous_days_and_stale_temps_but_preserves_today(self):
-        yesterday = self.root / "2026-07-10"
-        today = self.root / self.date_key
+        cleanup_date = date.fromisoformat(self.date_key)
+        yesterday = self.root / (cleanup_date - timedelta(days=1)).isoformat()
+        today = self.root / cleanup_date.isoformat()
         _write_jpeg(yesterday / "old.jpg")
         _write_jpeg(today / "current.jpg")
         stale_tmp = today / ".partial.tmp"
         stale_tmp.write_bytes(b"partial")
 
-        removed = self.cache.cleanup_expired(today=date(2026, 7, 11), force=True)
+        removed = self.cache.cleanup_expired(today=cleanup_date, force=True)
 
         self.assertGreaterEqual(removed, 2)
         self.assertFalse(yesterday.exists())
@@ -316,12 +317,46 @@ class CheckinCardCacheTest(unittest.IsolatedAsyncioTestCase):
         self.assertFalse(stale_tmp.exists())
 
     def test_cleanup_runs_at_most_once_for_the_same_day(self):
-        self.cache.cleanup_expired(today=date(2026, 7, 11))
-        late_old_dir = self.root / "2026-07-10"
+        cleanup_date = date.fromisoformat(self.date_key)
+        self.cache.cleanup_expired(today=cleanup_date)
+        late_old_dir = self.root / (cleanup_date - timedelta(days=1)).isoformat()
         _write_jpeg(late_old_dir / "old.jpg")
 
-        self.assertEqual(self.cache.cleanup_expired(today=date(2026, 7, 11)), 0)
+        self.assertEqual(self.cache.cleanup_expired(today=cleanup_date), 0)
         self.assertTrue(late_old_dir.exists())
+
+    def test_cleanup_prunes_expired_unlocked_cache_locks(self):
+        cleanup_date = date.fromisoformat(self.date_key)
+        old_date = (cleanup_date - timedelta(days=1)).isoformat()
+        old_lock_key = f"{old_date}:{self.key}"
+        current_lock_key = f"{self.date_key}:{self.key}"
+        self.cache._locks[old_lock_key] = asyncio.Lock()
+        self.cache._locks[current_lock_key] = asyncio.Lock()
+
+        self.cache.cleanup_expired(today=cleanup_date, force=True)
+
+        self.assertNotIn(old_lock_key, self.cache._locks)
+        self.assertIn(current_lock_key, self.cache._locks)
+
+    async def test_cleanup_keeps_lock_for_store_waiting_to_enter_it(self):
+        cleanup_date = date.fromisoformat(self.date_key)
+        old_date = (cleanup_date - timedelta(days=1)).isoformat()
+        old_lock_key = f"{old_date}:{self.key}"
+        renderer_output = Path(self._tmp.name) / "waiting-render.jpg"
+        _write_jpeg(renderer_output)
+        lock = asyncio.Lock()
+        await lock.acquire()
+        self.cache._locks[old_lock_key] = lock
+
+        task = asyncio.create_task(
+            self.cache.store(old_date, self.key, lambda: renderer_output)
+        )
+        await asyncio.sleep(0)
+        self.cache.cleanup_expired(today=cleanup_date, force=True)
+
+        self.assertIs(self.cache._locks[old_lock_key], lock)
+        lock.release()
+        await task
 
     def test_invalid_date_or_key_cannot_escape_cache_root(self):
         for date_key, key in (

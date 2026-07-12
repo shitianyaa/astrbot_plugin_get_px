@@ -1,5 +1,5 @@
 import { state, els, isBlacklistMode } from "./core.js";
-import { findRecord, renderContent } from "./render.js";
+import { findRecord, renderContent, renderCheckinImportPanel } from "./render.js";
 import {
   copyPixivUrl,
   trapFocus,

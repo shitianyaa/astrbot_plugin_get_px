@@ -21,6 +21,20 @@ HARD_OUTPUT_CONSTRAINT = (
 )
 HITOKOTO_API_URL = "https://v1.hitokoto.cn/"
 HITOKOTO_MAX_LENGTH = 24
+HITOKOTO_CATEGORY_CODES = {
+    "动画": "a",
+    "漫画": "b",
+    "游戏": "c",
+    "文学": "d",
+    "原创": "e",
+    "网络": "f",
+    "其他": "g",
+    "影视": "h",
+    "诗词": "i",
+    "网易云": "j",
+    "哲学": "k",
+    "抖机灵": "l",
+}
 
 _CONTROL_RE = re.compile(r"[\x00-\x08\x0b\x0c\x0e-\x1f\x7f]")
 _TAG_RE = re.compile(r"<[^>]*>")
@@ -28,7 +42,11 @@ _UNSAFE_MARKDOWN_RE = re.compile(
     r"(?:"
     r"!?\[[^\]]*\]\([^)]*\)"
     r"|!?\[[^\]]*\]\[[^\]]*\]"
-    r"|[*_`#~]"
+    r"|\*\*[^*]+\*\*"
+    r"|__[^_]+__"
+    r"|~~[^~]+~~"
+    r"|`[^`]+`"
+    r"|^\s*#{1,6}\s"
     r"|^\s*>"
     r"|^\s*(?:[-+]\s|\d+[.)]\s)"
     r"|^\s*(?:-{3,}|\*{3,}|_{3,})\s*$"
@@ -93,17 +111,22 @@ class CheckinGreetingGenerator:
         context: GreetingContext,
         *,
         timeout: float,
+        categories: object = None,
     ) -> tuple[str, str, str]:
         fallback = (context.local_greeting, "local", "")
         request_timeout = aiohttp.ClientTimeout(total=max(float(timeout), 0.001))
+        params = [
+            ("encode", "json"),
+            ("max_length", str(HITOKOTO_MAX_LENGTH)),
+        ]
+        params.extend(
+            ("c", code) for code in self._hitokoto_category_codes(categories)
+        )
         try:
             async with aiohttp.ClientSession(timeout=request_timeout) as session:
                 async with session.get(
                     HITOKOTO_API_URL,
-                    params={
-                        "encode": "json",
-                        "max_length": str(HITOKOTO_MAX_LENGTH),
-                    },
+                    params=params,
                 ) as response:
                     response.raise_for_status()
                     payload = await response.json(content_type=None)
@@ -124,6 +147,27 @@ class CheckinGreetingGenerator:
             payload.get("from_who"), payload.get("from")
         )
         return text, "hitokoto", attribution
+
+    @staticmethod
+    def _hitokoto_category_codes(categories: object) -> tuple[str, ...]:
+        if isinstance(categories, str):
+            values = [
+                item.strip()
+                for item in re.split(r"[,\uFF0C、;\uFF1B\r\n]+", categories)
+                if item.strip()
+            ]
+        elif isinstance(categories, (list, tuple, set)):
+            values = [str(item or "").strip() for item in categories]
+        else:
+            values = []
+        if not values or "全部" in values:
+            return ()
+        codes: list[str] = []
+        for value in values:
+            code = HITOKOTO_CATEGORY_CODES.get(value)
+            if code and code not in codes:
+                codes.append(code)
+        return tuple(codes)
 
     @staticmethod
     def _hitokoto_attribution(author: object, source: object) -> str:

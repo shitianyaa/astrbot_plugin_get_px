@@ -57,6 +57,12 @@ def _downloader_with(resp) -> ImageDownloader:
 
 
 class ImageDownloaderSizeLimitTest(unittest.IsolatedAsyncioTestCase):
+    def test_square_medium_url_keeps_square_medium_quality_metadata(self):
+        self.assertEqual(
+            dl._quality_from_url("https://i.pximg.net/c/360x360_70/img-master/square_medium.jpg"),
+            "square_medium",
+        )
+
     async def test_rejects_when_declared_content_length_exceeds_limit(self):
         # 服务器声明的体积已超限：走快速路径，不读 body
         with mock.patch.object(dl, "MAX_DOWNLOAD_BYTES", 10):

@@ -37,6 +37,8 @@ def test_image_history_javascript_modules_and_bridge_paths() -> None:
     assert endpoints
     assert all(not endpoint.startswith("/") for endpoint in endpoints)
     assert all("?" not in endpoint and "#" not in endpoint for endpoint in endpoints)
+    app_source = (js_dir / "app.js").read_text(encoding="utf-8")
+    assert "findRecord, renderContent, renderCheckinImportPanel" in app_source
 
 
 def test_image_history_stylesheets_keep_responsive_and_dark_mode_rules() -> None:
@@ -55,3 +57,6 @@ def test_image_history_stylesheets_keep_responsive_and_dark_mode_rules() -> None
     assert "@media (prefers-color-scheme: dark)" in source
     assert "@media (max-width: 760px)" in source
     assert "@media (prefers-reduced-motion: reduce)" in source
+    for name in stylesheet_names:
+        stylesheet = (css_dir / name).read_text(encoding="utf-8")
+        assert stylesheet.count("/*") == stylesheet.count("*/"), name

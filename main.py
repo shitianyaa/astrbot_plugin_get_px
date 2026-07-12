@@ -50,7 +50,7 @@ from .plugin_api import PluginWebApi
 
 LOG_PREFIX = "[GetPx]"
 PLUGIN_NAME = "astrbot_plugin_get_px"
-PLUGIN_VERSION = "2.6.1"
+PLUGIN_VERSION = "2.7.0"
 WEB_INTERNAL_ERROR_MESSAGE = "服务内部错误，请稍后重试"
 
 AUTO_TRIGGER_PATTERN = r"^/?(来\s*(.*?)(份|个|张|点))(.*?)(福利|色|瑟|涩|塞)?图$"
@@ -107,7 +107,10 @@ class GetPxPlugin(
         self.image_index: ImageIndexStore | None = None
         self.image_history: ImageAssetManager | None = None
         self.image_history_web_api = PluginWebApi(
-            self, plugin_name=PLUGIN_NAME, log_prefix=LOG_PREFIX
+            self,
+            plugin_name=PLUGIN_NAME,
+            log_prefix=LOG_PREFIX,
+            internal_error_message=WEB_INTERNAL_ERROR_MESSAGE,
         )
         self.checkin_store: CheckinStore | None = None
         self.checkin_cache: CheckinCardCache | None = None
@@ -170,7 +173,10 @@ class GetPxPlugin(
         service = getattr(self, "image_history_web_api", None)
         if service is None:
             service = PluginWebApi(
-                self, plugin_name=PLUGIN_NAME, log_prefix=LOG_PREFIX
+                self,
+                plugin_name=PLUGIN_NAME,
+                log_prefix=LOG_PREFIX,
+                internal_error_message=WEB_INTERNAL_ERROR_MESSAGE,
             )
         return service
 

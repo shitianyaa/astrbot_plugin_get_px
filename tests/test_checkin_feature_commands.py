@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 from contextlib import closing
-import hashlib
 import sqlite3
 import sys
 import tempfile
@@ -141,6 +140,7 @@ async def test_preview_uses_real_data_and_remote_greeting_without_writes(
         plugin.config = {
             "checkin_bot_name": "neko",
             "checkin_greeting_mode": greeting_mode,
+            "checkin_hitokoto_categories": ["动画", "诗词"],
             "checkin_avatar_enabled": False,
         }
         plugin.holiday_calendar = None
@@ -163,14 +163,13 @@ async def test_preview_uses_real_data_and_remote_greeting_without_writes(
         preview_path.write_bytes(b"preview")
         plugin._prepare_checkin_background = AsyncMock(return_value=None)
         plugin._render_checkin_card = AsyncMock(return_value=str(preview_path))
-        database_path = plugin.checkin_store._db_path
-        before_hash = hashlib.sha256(database_path.read_bytes()).hexdigest()
+        before_snapshot = await plugin.checkin_store.export_snapshot()
 
         outputs = [item async for item in plugin._handle_checkin_preview(event)]
 
-        after_hash = hashlib.sha256(database_path.read_bytes()).hexdigest()
+        after_snapshot = await plugin.checkin_store.export_snapshot()
         assert outputs == []
-        assert before_hash == after_hash
+        assert before_snapshot == after_snapshot
         event.send.assert_awaited_once()
         render_kwargs = plugin._render_checkin_card.await_args.kwargs
         plugin._prepare_checkin_background.assert_awaited_once_with(
@@ -185,6 +184,12 @@ async def test_preview_uses_real_data_and_remote_greeting_without_writes(
         if greeting_mode == "hitokoto":
             assert render_kwargs["record"].greeting == "一言测试问候"
             plugin.checkin_greeting.generate_hitokoto.assert_awaited_once()
+            assert (
+                plugin.checkin_greeting.generate_hitokoto.await_args.kwargs[
+                    "categories"
+                ]
+                == ["动画", "诗词"]
+            )
             plugin.checkin_greeting.generate.assert_not_awaited()
         else:
             assert render_kwargs["record"].greeting == "AI 测试问候"

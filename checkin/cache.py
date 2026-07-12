@@ -83,14 +83,17 @@ class CheckinCardCache:
     async def store(self, date_key: str, key: str, renderer: Renderer) -> Path:
         """Render at most once for a key and atomically publish the result."""
         final_path = self._cache_path(date_key, key)
-        lock = self._locks.setdefault(f"{date_key}:{key}", asyncio.Lock())
-        async with lock:
-            cached = self.get(date_key, key)
-            if cached is not None:
-                return cached
+        with self._active_store_lock:
+            lock = self._locks.setdefault(f"{date_key}:{key}", asyncio.Lock())
+            self._active_store_dates[date_key] = (
+                self._active_store_dates.get(date_key, 0) + 1
+            )
+        try:
+            async with lock:
+                cached = self.get(date_key, key)
+                if cached is not None:
+                    return cached
 
-            self._begin_store(date_key)
-            try:
                 rendered = renderer()
                 source = await rendered if inspect.isawaitable(rendered) else rendered
                 worker = asyncio.create_task(
@@ -118,8 +121,8 @@ class CheckinCardCache:
                 if worker.done():
                     return worker.result()
                 return result
-            finally:
-                self._end_store(date_key)
+        finally:
+            self._end_store(date_key)
 
     def cleanup_expired(
         self,
@@ -176,6 +179,14 @@ class CheckinCardCache:
                     if temporary.is_file() or temporary.is_symlink():
                         temporary.unlink(missing_ok=True)
                         removed += 1
+
+            self._locks = {
+                lock_key: lock
+                for lock_key, lock in self._locks.items()
+                if lock.locked()
+                or (lock_date := _directory_date(lock_key.split(":", 1)[0])) is None
+                or lock_date >= cutoff
+            }
 
         if not deferred_expired_store:
             self._last_cleanup_date = current

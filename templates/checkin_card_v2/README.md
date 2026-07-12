@@ -1,12 +1,12 @@
 # 签到卡片 V2 运行时模板
 
-本目录是插件实际使用的 Jinja 模板。`checkin_card.py` 启动时读取 `index.html`，并将 `style.css` 注入 `/*__CHECKIN_CARD_CSS__*/`，因此渲染结果不依赖外部样式或网络资源。
+本目录是插件实际使用的 Jinja 模板。`checkin/card.py` 启动时读取 `index.html`，并将 `style.css` 注入 `/*__CHECKIN_CARD_CSS__*/`，因此渲染结果不依赖外部样式或网络资源。
 
 ![签到卡片 V2](../../docs/images/checkin-card-v2-template-preview.png)
 
 ## 视觉方向
 
-- 固定 `960 × 540` 的“H · 丰富信息纸张画册”。
+- 固定 `960 × 540` 的“H · 丰富信息签到卡片”。
 - 左侧约 `48%` 为签到信息，右侧约 `45%` 为固定竖向作品相框。
 - 暖色纸张、轻微印刷纹理和克制的编辑排版；不使用全屏作品背景、紫色渐变或玻璃卡片。
 - 中文字体使用本地内嵌的霞鹜文楷轻便版 GB2312 子集，标题、寄语和信息区保持统一，不依赖系统字体或外网字体服务。
@@ -31,9 +31,9 @@
 - JPEG 清晰度由 `checkin_card_quality` 控制，范围 `60–100`、默认 `95`；质量会进入缓存键，修改配置后不会继续复用旧质量缓存。
 - Pixiv 签到背景固定下载 `medium` 画质，不读取普通发图的 `image_quality`，避免为 `960 × 540` 卡片先下载数 MB 原图再降级。
 - 法定节假日数据在首次安装、插件版本变化及距上次成功更新满 180 天时后台更新；网络失败使用旧缓存和内置公历/农历规则，不影响签到。
-- 问候来源可选本地文案、一言或 AI，默认使用一言；一言正文最多 24 个字符，一言和 AI 请求失败时均回退本地文案。AI 模式优先使用 `checkin_ai_greeting_provider_id` 指定的文本模型，留空时尝试当前会话文本模型。
+- 问候来源可选本地文案、一言或 AI，默认使用一言；一言类型可通过中文多选限制，单次只随机返回一句，正文最多 24 个字符。一言和 AI 请求失败时均回退本地文案。AI 模式优先使用 `checkin_ai_greeting_provider_id` 指定的文本模型，留空时尝试当前会话文本模型。
 - 用户佩戴称号通过 ViewModel 的 `user_title` 注入；生日、全局事件、节假日、里程碑和连签按优先级生成主事件及单行次要备注。
-- 对应配置为 `checkin_greeting_mode`、`checkin_hitokoto_timeout`、`checkin_ai_greeting_provider_id`、`checkin_ai_greeting_prompt`、`checkin_ai_greeting_timeout`。
+- 对应配置为 `checkin_greeting_mode`、`checkin_hitokoto_categories`、`checkin_hitokoto_timeout`、`checkin_ai_greeting_provider_id`、`checkin_ai_greeting_prompt`、`checkin_ai_greeting_timeout`。
 
 ## 字体授权
 

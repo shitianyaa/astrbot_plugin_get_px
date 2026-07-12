@@ -661,7 +661,7 @@ class CheckinStoreTest(unittest.IsolatedAsyncioTestCase):
             await target.checkin(user_id="10001", username="target", bot_name="neko")
             before = await target.export_snapshot()
 
-            with self.assertRaises(Exception):
+            with self.assertRaises(ValueError):
                 await target.import_snapshot(snapshot)
 
             after = await target.export_snapshot()

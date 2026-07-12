@@ -13,6 +13,9 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 from astrbot.api.message_components import File  # noqa: E402
 from astrbot_plugin_get_px.checkin import CheckinStore  # noqa: E402
 from astrbot_plugin_get_px.checkin import dump_checkin_snapshot_json  # noqa: E402
+from astrbot_plugin_get_px.checkin.commands import (  # noqa: E402
+    MAX_CHECKIN_BACKUP_BYTES,
+)
 from astrbot_plugin_get_px.main import GetPxPlugin  # noqa: E402
 
 
@@ -43,6 +46,24 @@ class _FakeEvent:
 
 
 class CheckinBackupWebTest(unittest.IsolatedAsyncioTestCase):
+    async def test_uploaded_snapshot_stops_reading_after_size_limit(self):
+        class OversizedStream(io.BytesIO):
+            pass
+
+        with tempfile.TemporaryDirectory() as tmp:
+            plugin = object.__new__(GetPxPlugin)
+            plugin.data_dir = Path(tmp)
+            stream = OversizedStream(b"x" * (MAX_CHECKIN_BACKUP_BYTES * 2))
+            upload = FileStorage(stream=stream, filename="large.json")
+
+            with self.assertRaisesRegex(ValueError, "不能超过 5 MiB"):
+                await plugin._read_uploaded_file_bytes(upload)
+
+            self.assertLess(stream.tell(), MAX_CHECKIN_BACKUP_BYTES * 2)
+            self.assertFalse(
+                list((Path(tmp) / "checkin_backups").glob(".upload-*"))
+            )
+
     async def test_handle_checkin_export_sends_only_file_component(self):
         with tempfile.TemporaryDirectory() as tmp:
             plugin = object.__new__(GetPxPlugin)
@@ -191,3 +212,36 @@ class CheckinBackupWebTest(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(response.status_code, 400)
             self.assertFalse(payload["success"])
             self.assertIn("不支持的签到备份版本", payload["error"])
+
+    async def test_web_checkin_import_rejects_oversized_snapshot(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            plugin = object.__new__(GetPxPlugin)
+            plugin.data_dir = Path(tmp)
+            plugin.checkin_store = FrozenCheckinStore(tmp, date_key="2026-05-26")
+            app = Quart(__name__)
+            app.add_url_rule(
+                "/checkin-import-large",
+                view_func=plugin._web_checkin_import,
+                methods=["POST"],
+            )
+
+            async with app.test_app():
+                client = app.test_client()
+                response = await client.post(
+                    "/checkin-import-large",
+                    files={
+                        "file": FileStorage(
+                            stream=io.BytesIO(b"x" * (MAX_CHECKIN_BACKUP_BYTES + 1)),
+                            filename="large.json",
+                            name="file",
+                            content_type="application/json",
+                        )
+                    },
+                )
+                payload = await response.get_json()
+
+            self.assertEqual(response.status_code, 400)
+            self.assertEqual(payload["error"], "签到备份文件不能超过 5 MiB")
+            self.assertFalse(
+                list((Path(tmp) / "checkin_backups").glob(".upload-*"))
+            )

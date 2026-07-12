@@ -15,7 +15,7 @@
   --rust: #a4543d;
   --sage: #607765;
   --gold: #b48643;
-  --font-cn: "LXGW WenKai Lite", "Noto Serif CJK SC", "Source Han Serif SC", "Songti SC", SimSun, serif;
+  --font-cn: "LXGW WenKai Lite", "Noto Serif CJK SC", "Source Han Serif SC", "Songti SC", simsun, serif;
 }
 
 * { box-sizing: border-box; }

@@ -285,6 +285,7 @@ class DeliveryMixin:
             if "path" in locals() and path:
                 cleanup(path)
 
+    @staticmethod
     def _friendly_send_error(error: Exception) -> str:
         """生成友善的发送错误提示。"""
         error_str = str(error).lower()

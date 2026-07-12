@@ -138,7 +138,7 @@ class CheckinArtworkMixin:
             )
         except Exception as e:
             logger.warning(
-                f"{LOG_PREFIX} 签到背景 {record.background_illust_id} 恢复失败，使用占位图: {e}"
+                f"{LOG_PREFIX} 签到背景 {record.background_illust_id} 恢复失败\uFF0C使用占位图: {e}"
             )
             return replace(saved, mode="fallback")
 
@@ -203,7 +203,7 @@ class CheckinArtworkMixin:
                     mode="custom",
                     source="custom",
                 )
-            logger.warning(f"{LOG_PREFIX} 签到自定义背景不可用，回退 Pixiv 背景")
+            logger.warning(f"{LOG_PREFIX} 签到自定义背景不可用\uFF0C回退 Pixiv 背景")
         elif mode != "pixiv_daily":
             mode = "pixiv_daily"
         preview_nonce = 0
@@ -262,7 +262,7 @@ class CheckinArtworkMixin:
         try:
             from PIL import Image as PILImage
         except ImportError:
-            logger.warning(f"{LOG_PREFIX} 未安装 Pillow，跳过背景完整性校验")
+            logger.warning(f"{LOG_PREFIX} 未安装 Pillow\uFF0C跳过背景完整性校验")
             return resolved
         try:
             with PILImage.open(resolved) as img:
@@ -288,7 +288,7 @@ class CheckinArtworkMixin:
     ) -> CardBackground | None:
         token = self._cfg_str("pixiv_refresh_token")
         if not token:
-            logger.info(f"{LOG_PREFIX} 签到背景跳过 Pixiv：未配置 refresh_token")
+            logger.info(f"{LOG_PREFIX} 签到背景跳过 Pixiv\uFF1A未配置 refresh_token")
             return None
         if self.client is None:
             self._init_client()
@@ -369,7 +369,7 @@ class CheckinArtworkMixin:
                         self._event_scope(event), source_key, raw_count
                     )
                     logger.info(
-                        f"{LOG_PREFIX} 签到背景第 {page_attempt} 页无符合 3:4 的竖向作品，切换下一页"
+                        f"{LOG_PREFIX} 签到背景第 {page_attempt} 页无符合 3:4 的竖向作品\uFF0C切换下一页"
                     )
                 except Exception as e:
                     logger.warning(f"{LOG_PREFIX} 签到背景分页游标更新失败: {e}")
@@ -388,7 +388,7 @@ class CheckinArtworkMixin:
             if preview_nonce:
                 continue
             if self.image_index is None:
-                logger.info(f"{LOG_PREFIX} 签到背景候选均已在图片历史中，跳过 Pixiv 背景")
+                logger.info(f"{LOG_PREFIX} 签到背景候选均已在图片历史中\uFF0C跳过 Pixiv 背景")
                 return None
 
             try:
@@ -396,7 +396,7 @@ class CheckinArtworkMixin:
                     self._event_scope(event), source_key, raw_count
                 )
                 logger.info(
-                    f"{LOG_PREFIX} 签到背景第 {page_attempt} 页候选均已使用，切换下一页"
+                    f"{LOG_PREFIX} 签到背景第 {page_attempt} 页候选均已使用\uFF0C切换下一页"
                 )
             except Exception as e:
                 logger.warning(f"{LOG_PREFIX} 签到背景分页游标更新失败: {e}")
@@ -422,7 +422,7 @@ class CheckinArtworkMixin:
                 continue
             reason = await self._blacklist_reason_for_illust(illust, illust_id)
             if reason:
-                logger.info(f"{LOG_PREFIX} 签到背景跳过：{reason}")
+                logger.info(f"{LOG_PREFIX} 签到背景跳过\uFF1A{reason}")
                 continue
             claimed = False
             if claim_usage:
@@ -431,10 +431,11 @@ class CheckinArtworkMixin:
                 )
                 if not claimed:
                     logger.info(
-                        f"{LOG_PREFIX} 签到背景跳过：作品 {illust_id} 已被其他签到占用"
+                        f"{LOG_PREFIX} 签到背景跳过\uFF1A作品 {illust_id} 已被其他签到占用"
                     )
                     continue
             title = illust.get("title", "无标题")
+            background_ready = False
             try:
                 path, actual_q, file_size = await self.downloader.download_for_send(
                     illust,
@@ -445,7 +446,7 @@ class CheckinArtworkMixin:
                     log_context=f"[签到背景 {idx}] 作品 {illust_id} 「{title}」",
                 )
                 author = str((illust.get("user") or {}).get("name") or "")
-                return CardBackground(
+                background = CardBackground(
                     image_path=path,
                     mode="pixiv_daily",
                     source=source_key,
@@ -456,16 +457,19 @@ class CheckinArtworkMixin:
                     quality=actual_q,
                     file_size=file_size,
                 )
+                background_ready = True
+                return background
             except asyncio.TimeoutError:
                 logger.warning(
                     f"{LOG_PREFIX} 签到背景 {illust_id} 下载超时 ({timeout_sec}s)"
                 )
             except Exception as e:
                 logger.warning(f"{LOG_PREFIX} 签到背景 {illust_id} 下载失败: {e}")
-            if claimed:
-                await self._release_checkin_background_usage(
-                    event, source_key, illust_id
-                )
+            finally:
+                if claimed and not background_ready:
+                    await self._release_checkin_background_usage(
+                        event, source_key, illust_id
+                    )
         return None
 
     def _checkin_background_tag_candidates(self, tag_config: object) -> list[str]:

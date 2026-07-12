@@ -271,6 +271,14 @@ class _ConcurrentCheckinStore(_FakeCheckinStore):
 
 
 class MainErrorHandlingTest(unittest.IsolatedAsyncioTestCase):
+    def test_friendly_send_error_is_callable_through_plugin_instance(self):
+        plugin = object.__new__(GetPxPlugin)
+
+        self.assertIn(
+            "上传超时",
+            plugin._friendly_send_error(asyncio.TimeoutError()),
+        )
+
     def test_duplicate_penalty_formatter_is_removed(self):
         source = inspect.getsource(GetPxPlugin)
 
@@ -454,6 +462,7 @@ class MainErrorHandlingTest(unittest.IsolatedAsyncioTestCase):
                 tmp, CheckinResult(_profile(), record, duplicate=False), order
             )
             plugin.config["checkin_greeting_mode"] = "hitokoto"
+            plugin.config["checkin_hitokoto_categories"] = ["动画", "诗词"]
 
             updated = await plugin._prepare_checkin_record_content(
                 _FakeEvent(order), record, allow_ai=True
@@ -467,6 +476,10 @@ class MainErrorHandlingTest(unittest.IsolatedAsyncioTestCase):
                 ["local", "hitokoto"],
             )
             self.assertIn("hitokoto", order)
+            self.assertEqual(
+                plugin.checkin_greeting.calls[-1][1]["categories"],
+                ["动画", "诗词"],
+            )
 
     async def test_render_failure_does_not_persist_artwork_or_usage(self):
         with tempfile.TemporaryDirectory() as tmp:

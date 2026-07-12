@@ -147,6 +147,27 @@
     "options": ["local", "hitokoto", "ai"],
     "hint": "local=本地事件文案；hitokoto=一言 API；ai=AstrBot 文本模型。远程请求失败时自动回退本地文案。"
   },
+  "checkin_hitokoto_categories": {
+    "description": "签到一言类型",
+    "type": "list",
+    "options": [
+      "全部",
+      "动画",
+      "漫画",
+      "游戏",
+      "文学",
+      "原创",
+      "网络",
+      "影视",
+      "诗词",
+      "网易云",
+      "哲学",
+      "抖机灵",
+      "其他"
+    ],
+    "default": ["全部"],
+    "hint": "可多选；每次签到只随机返回一句，类型在勾选范围内随机。选择“全部”或不选择时从所有类型随机。"
+  },
   "checkin_ai_greeting_provider_id": {
     "description": "签到问候模型",
     "type": "string",

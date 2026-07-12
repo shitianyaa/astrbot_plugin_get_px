@@ -1,4 +1,5 @@
 import json
+import asyncio
 import sys
 import tempfile
 import unittest
@@ -78,7 +79,7 @@ class CheckinBackgroundSelectionTest(unittest.IsolatedAsyncioTestCase):
     def test_split_config_tags_accepts_common_delimiters(self):
         self.assertEqual(
             GetPxPlugin._split_config_tags(
-                "alpha，beta、gamma;delta；epsilon\nzeta"
+                "alpha\uFF0Cbeta、gamma;delta\uFF1Bepsilon\nzeta"
             ),
             ["alpha", "beta", "gamma", "delta", "epsilon", "zeta"],
         )
@@ -104,6 +105,11 @@ class CheckinBackgroundSelectionTest(unittest.IsolatedAsyncioTestCase):
             schema["checkin_greeting_mode"]["options"],
             ["local", "hitokoto", "ai"],
         )
+        categories = schema["checkin_hitokoto_categories"]
+        self.assertEqual(categories["type"], "list")
+        self.assertEqual(categories["default"], ["全部"])
+        self.assertIn("动画", categories["options"])
+        self.assertIn("诗词", categories["options"])
 
     def test_custom_background_schema_recommends_portrait_contain_display(self):
         schema_path = Path(__file__).resolve().parents[1] / "_conf_schema.json"
@@ -254,7 +260,7 @@ class CheckinBackgroundSelectionTest(unittest.IsolatedAsyncioTestCase):
                 "pixiv_r18": 0,
                 "filter_manga": True,
                 "blacklist_tags": "",
-                "checkin_background_tag": "empty，available",
+                "checkin_background_tag": "empty\uFF0Cavailable",
                 "pixiv_proxy_url": "",
                 "request_timeout": 30.0,
             }
@@ -367,6 +373,42 @@ class CheckinBackgroundSelectionTest(unittest.IsolatedAsyncioTestCase):
 
                 await plugin._release_checkin_background_claim(FakeEvent(), background)
 
+                self.assertEqual(
+                    await plugin.image_index.get_used_illust_ids(
+                        "group:20001", "rank:week"
+                    ),
+                    set(),
+                )
+            finally:
+                plugin.image_index.close()
+
+    async def test_cancelled_background_download_releases_claim(self):
+        class CancelledDownloader(FakeDownloader):
+            async def download_for_send(self, *args, **kwargs):
+                raise asyncio.CancelledError
+
+        with tempfile.TemporaryDirectory() as tmp:
+            plugin = object.__new__(GetPxPlugin)
+            plugin.config = {
+                "pixiv_refresh_token": "token",
+                "pixiv_ranking_mode": "week",
+                "pixiv_r18": 0,
+                "filter_manga": True,
+                "blacklist_tags": "",
+                "pixiv_proxy_url": "",
+                "request_timeout": 30.0,
+            }
+            plugin.image_index = ImageIndexStore(tmp)
+            plugin.image_history = FakeHistory([])
+            plugin.downloader = CancelledDownloader()
+            plugin.client = FakePixivClient({0: [_illust(31)]})
+
+            try:
+                with self.assertRaises(asyncio.CancelledError):
+                    await plugin._download_checkin_pixiv_background(
+                        FakeEvent(),
+                        SimpleNamespace(date_key="2026-05-26", user_id="10001"),
+                    )
                 self.assertEqual(
                     await plugin.image_index.get_used_illust_ids(
                         "group:20001", "rank:week"

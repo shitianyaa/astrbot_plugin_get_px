@@ -62,7 +62,16 @@ class HolidayCalendar:
 
         years = (date.today().year, date.today().year + 1)
         try:
-            days: dict[str, dict[str, Any]] = {}
+            cached_days = self._state.get("days", {})
+            days: dict[str, dict[str, Any]] = {
+                key: value
+                for key, value in (
+                    cached_days.items() if isinstance(cached_days, dict) else ()
+                )
+                if isinstance(key, str)
+                and isinstance(value, dict)
+                and any(key.startswith(f"{year}-") for year in years)
+            }
             successful_years: list[int] = []
             timeout = aiohttp.ClientTimeout(total=8)
             async with aiohttp.ClientSession(timeout=timeout) as session:

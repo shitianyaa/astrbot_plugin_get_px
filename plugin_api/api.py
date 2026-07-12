@@ -18,10 +18,18 @@ except ImportError:  # Direct imports used by the test suite.
 class PluginWebApi:
     """Register and serve plugin management endpoints."""
 
-    def __init__(self, plugin: Any, *, plugin_name: str, log_prefix: str) -> None:
+    def __init__(
+        self,
+        plugin: Any,
+        *,
+        plugin_name: str,
+        log_prefix: str,
+        internal_error_message: str,
+    ) -> None:
         self.plugin = plugin
         self.plugin_name = plugin_name
         self.log_prefix = log_prefix
+        self.internal_error_message = internal_error_message
 
     def __getattr__(self, name: str) -> Any:
         return getattr(self.plugin, name)
@@ -49,7 +57,7 @@ class PluginWebApi:
 
     def internal_error(self, action: str, exc: Exception):
         logger.error(f"{self.log_prefix} Web API {action} 失败: {exc}")
-        return jsonify({"success": False, "error": self.plugin.WEB_INTERNAL_ERROR_MESSAGE if hasattr(self.plugin, "WEB_INTERNAL_ERROR_MESSAGE") else "服务内部错误，请稍后重试"}), 500
+        return jsonify({"success": False, "error": self.internal_error_message}), 500
 
     async def image_history(self):
         if self.plugin.image_history is None:

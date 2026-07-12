@@ -1,3 +1,7 @@
+/* =============================================
+   DARK MODE - Component Overrides
+   These components use fixed light surfaces with hardcoded text colors.
+   Re-tint them for dark mode; source order keeps light mode unchanged.
    ============================================= */
 @media (prefers-color-scheme: dark) {
   /* Cover chips sit on a near-white surface in light mode; give them a
