@@ -157,6 +157,8 @@ def _quality_from_url(url: str) -> str:
         if "original" in url
         else "large"
         if "large" in url
+        else "square_medium"
+        if "square_medium" in url
         else "medium"
         if "medium" in url
         else "square_medium"

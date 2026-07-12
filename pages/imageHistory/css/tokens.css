@@ -1,0 +1,141 @@
+/* =============================================
+   Blue Archive — Cerulean Claymorphism Theme
+   ============================================= */
+
+/* ——— Design Tokens ——— */
+:root {
+  color-scheme: light dark;
+
+  /* Surfaces */
+  --bg: #F0F9FF;
+  --paper: #FFFFFF;
+  --paper-2: #E0F2FE;
+
+  /* Text */
+  --ink: #0F172A;
+  --muted: #64748B;
+
+  /* Borders */
+  --line: #BAE6FD;
+  --line-strong: #7DD3FC;
+
+  /* Accents */
+  --accent: #F59E0B;         /* sun gold — primary CTA */
+  --accent-2: #0284C7;       /* sky blue — interactive */
+  --accent-3: #0EA5E9;       /* lighter sky */
+  --danger: #DC2626;
+  --danger-light: #FEE2E2;
+  --success: #10B981;
+  --success-light: #D1FAE5;
+
+  /* Claymorphism shadows */
+  --shadow-sm: 0 2px 8px rgba(2, 132, 199, 0.06);
+  --shadow: 0 8px 30px rgba(2, 132, 199, 0.08);
+  --shadow-lg: 0 16px 48px rgba(2, 132, 199, 0.10);
+  --shadow-inner: inset 0 2px 4px rgba(2, 132, 199, 0.04);
+  --focus: 0 0 0 3px rgba(2, 132, 199, 0.25);
+
+  /* Radii */
+  --radius-sm: 8px;
+  --radius-md: 12px;
+  --radius-lg: 16px;
+  --radius-xl: 24px;
+
+  /* Motion */
+  --dur-fast: 0.15s;
+  --dur: 0.25s;
+  --ease-out: cubic-bezier(0.2, 0.8, 0.2, 1);
+  --ease-spring: cubic-bezier(0.34, 1.56, 0.64, 1);
+
+  /* Typography — system fonts as default, Google Fonts loaded dynamically */
+  --font-serif: "Noto Serif SC", "Source Han Serif SC", "simsun", Georgia, serif;
+  --font-sans: "Noto Sans SC", "Source Han Sans SC", "Microsoft YaHei", -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+}
+
+/* ——— Dark Mode ——— */
+@media (prefers-color-scheme: dark) {
+  :root {
+    --bg: #0B1424;
+    --paper: #162032;
+    --paper-2: #1E2E3E;
+    --ink: #E2E8F0;
+    --muted: #94A3B8;
+    --line: #1E4D6E;
+    --line-strong: #2563EB;
+    --accent: #FBBF24;
+    --accent-2: #38BDF8;
+    --accent-3: #7DD3FC;
+    --danger: #F87171;
+    --danger-light: #3B1515;
+    --success: #34D399;
+    --success-light: #0F2F24;
+    --shadow-sm: 0 2px 8px rgba(0, 0, 0, 0.20);
+    --shadow: 0 8px 30px rgba(0, 0, 0, 0.30);
+    --shadow-lg: 0 16px 48px rgba(0, 0, 0, 0.40);
+    --shadow-inner: inset 0 2px 4px rgba(0, 0, 0, 0.15);
+    --focus: 0 0 0 3px rgba(56, 189, 248, 0.30);
+  }
+}
+
+/* =============================================
+   GLOBAL RESET
+   ============================================= */
+*,
+*::before,
+*::after {
+  box-sizing: border-box;
+  margin: 0;
+  padding: 0;
+}
+
+html {
+  -webkit-text-size-adjust: 100%;
+  scroll-behavior: smooth;
+}
+
+body {
+  background:
+    linear-gradient(90deg, color-mix(in srgb, var(--line) 30%, transparent) 1px, transparent 1px),
+    linear-gradient(180deg, color-mix(in srgb, var(--line) 30%, transparent) 1px, transparent 1px),
+    var(--bg);
+  background-size: 32px 32px, 32px 32px, auto;
+  color: var(--ink);
+  font-family: var(--font-sans);
+  font-size: 14px;
+  line-height: 1.6;
+  min-height: 100vh;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+}
+
+img, svg {
+  display: block;
+  max-width: 100%;
+}
+
+button, input, select, textarea {
+  font: inherit;
+  color: inherit;
+}
+
+button {
+  min-height: 44px;
+  touch-action: manipulation;
+}
+
+a {
+  color: var(--accent-2);
+  text-decoration: none;
+}
+
+a:hover {
+  text-decoration: underline;
+}
+
+button:focus-visible,
+a:focus-visible,
+input:focus-visible,
+select:focus-visible {
+  outline: 2px solid var(--accent-2);
+  outline-offset: 2px;
+}

@@ -1,5 +1,24 @@
 # 更新日志
 
+## v2.7.0 (2026-07-12)
+
+### 新增
+- 签到卡片升级为固定 `960 × 540` 的“H · 丰富信息签到卡片”，左侧展示完整签到信息，右侧使用固定竖向作品相框。
+- 新增本地文案、一言和 AI 三种签到问候来源；默认使用一言，远程请求失败时保留本地文案。
+- 一言请求和本地响应校验统一限制正文最多 24 个字符。
+- 一言类型支持在配置页使用中文多选，每次只在所选分类范围内随机返回一句。
+- 新增一天期签到卡片 JPEG 缓存；同一天重复签到优先重发同一张卡片，缓存缺失或损坏时根据当天记录重建。
+
+### 改进
+- Pixiv 签到背景固定使用 `medium` 画质，避免先下载原图再降级；普通发图画质配置不受影响。
+- Pixiv 签到作品固定按 `3:4 ± 20%` 筛选，只接受宽高比 `0.60–0.90`；无匹配作品时使用内置纸张占位图，不再放宽到横图或方图。
+- 作品以 `object-fit: contain` 完整显示，原始图片仅以 Data URL 只读注入，不裁切、不缩放写回。
+- 重复签到不再发放奖励，也不再扣除好感度；已保存的问候和作品保持不变，且不会再次调用模型。
+
+### 配置
+- 新增 `checkin_greeting_mode`、`checkin_hitokoto_categories`、`checkin_hitokoto_timeout`、`checkin_ai_greeting_provider_id`、`checkin_ai_greeting_prompt`、`checkin_ai_greeting_timeout`。
+- `checkin_background_aspect_ratio` 与 `checkin_background_aspect_tolerance` 默认值更新为 `3:4` 和 `0.20`，仅保留配置兼容，不再控制 V2 的固定竖向契约。
+
 ## v2.6.1 (2026-06-04)
 
 ### 改进

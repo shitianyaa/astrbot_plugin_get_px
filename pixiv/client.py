@@ -1,0 +1,132 @@
+from __future__ import annotations
+
+import asyncio
+import time
+from dataclasses import dataclass, field
+
+from astrbot.api import logger
+
+LOG_PREFIX = "[GetPx]"
+
+
+def _is_missing_illust_error(exc: Exception) -> bool:
+    for attr in ("status", "status_code", "code"):
+        value = getattr(exc, attr, None)
+        if value == 404 or str(value) == "404":
+            return True
+    message = str(exc).casefold()
+    return "404" in message or "not found" in message or "not_found" in message
+
+
+@dataclass
+class PixivClient:
+    refresh_token: str
+    proxy: str = ""
+
+    _api: object = field(default=None, repr=False)
+    _cached_token: str = field(default="", repr=False)
+    _expires_at: float = field(default=0.0, repr=False)
+    _lock: asyncio.Lock = field(default_factory=asyncio.Lock, repr=False)
+    _idle: asyncio.Condition = field(init=False, repr=False)
+    _active_calls: int = field(default=0, repr=False)
+    _closed: bool = field(default=False, repr=False)
+
+    def __post_init__(self) -> None:
+        self._idle = asyncio.Condition(self._lock)
+
+    async def ensure_logged_in(self):
+        async with self._lock:
+            await self._ensure_logged_in_locked()
+
+    async def _ensure_logged_in_locked(self) -> None:
+        if self._closed:
+            raise RuntimeError("Pixiv 客户端已关闭")
+        now = time.monotonic()
+        if (
+            self._api is not None
+            and self._cached_token == self.refresh_token
+            and now < self._expires_at
+        ):
+            return
+
+        try:
+            from pixivpy_async import AppPixivAPI
+        except ImportError:
+            raise RuntimeError(
+                "未安装 pixivpy-async，请运行: pip install pixivpy-async"
+            )
+
+        api = AppPixivAPI(proxy=self.proxy) if self.proxy else AppPixivAPI()
+        await api.login(refresh_token=self.refresh_token)
+
+        self._api = api
+        self._cached_token = self.refresh_token
+        self._expires_at = now + 3000
+        logger.info(f"{LOG_PREFIX} Pixiv 登录成功")
+
+    async def _acquire_api(self):
+        async with self._lock:
+            await self._ensure_logged_in_locked()
+            self._active_calls += 1
+            return self._api
+
+    async def _release_api(self) -> None:
+        async with self._lock:
+            self._active_calls -= 1
+            if self._active_calls == 0:
+                self._idle.notify_all()
+
+    @property
+    def api(self):
+        return self._api
+
+    async def search(self, tag: str, offset: int = 0) -> list[dict]:
+        api = await self._acquire_api()
+        try:
+            resp = await api.search_illust(
+                tag,
+                search_target="partial_match_for_tags",
+                sort="date_desc",
+                offset=offset,
+            )
+        finally:
+            await self._release_api()
+        return list(resp.get("illusts") or [])
+
+    async def ranking(self, mode: str = "week", offset: int = 0) -> list[dict]:
+        api = await self._acquire_api()
+        try:
+            resp = await api.illust_ranking(mode=mode, offset=offset)
+        finally:
+            await self._release_api()
+        return list(resp.get("illusts") or [])
+
+    async def illust_detail(self, illust_id: int) -> dict | None:
+        api = await self._acquire_api()
+        try:
+            resp = await api.illust_detail(illust_id)
+            return resp.get("illust")
+        except Exception as e:
+            if _is_missing_illust_error(e):
+                return None
+            raise
+        finally:
+            await self._release_api()
+
+    async def close(self):
+        async with self._lock:
+            self._closed = True
+            while self._active_calls:
+                await self._idle.wait()
+            api = self._api
+            self._api = None
+        if api is None:
+            return
+        close = getattr(api, "close", None)
+        if callable(close):
+            try:
+                result = close()
+                if asyncio.iscoroutine(result):
+                    await result
+            except Exception:
+                pass

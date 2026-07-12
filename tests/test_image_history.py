@@ -4,7 +4,7 @@ from pathlib import Path
 
 from PIL import Image
 
-from image_history import ImageAssetManager
+from pixiv.history import ImageAssetManager
 
 
 class FakeEvent:

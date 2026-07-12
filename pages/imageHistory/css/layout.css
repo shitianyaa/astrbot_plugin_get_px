@@ -1,0 +1,467 @@
+/* =============================================
+   LAYOUT — .page
+   ============================================= */
+.page {
+  max-width: 1280px;
+  margin: 0 auto;
+  padding: 24px 24px 80px;
+}
+
+/* =============================================
+   HERO HEADER
+   ============================================= */
+.hero {
+  position: relative;
+  margin-bottom: 24px;
+  padding: 8px 4px 22px;
+  overflow: hidden;
+}
+
+/* Soft cerulean glow, top-right — sets the Blue Archive mood. */
+.hero::before {
+  content: "";
+  position: absolute;
+  top: -70px;
+  right: -50px;
+  width: 300px;
+  height: 220px;
+  background: radial-gradient(
+    circle at 70% 30%,
+    color-mix(in srgb, var(--accent-3) 32%, transparent) 0,
+    transparent 70%
+  );
+  pointer-events: none;
+  z-index: 0;
+}
+
+/* Hairline divider grounding the hero. */
+.hero::after {
+  content: "";
+  position: absolute;
+  left: 4px;
+  right: 4px;
+  bottom: 0;
+  height: 1px;
+  background: linear-gradient(
+    90deg,
+    var(--line-strong),
+    color-mix(in srgb, var(--line) 40%, transparent) 60%,
+    transparent
+  );
+}
+
+.hero-copy {
+  position: relative;
+  z-index: 1;
+  min-width: 0;
+}
+
+.eyebrow {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  font-family: var(--font-sans);
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  color: var(--accent-2);
+  margin-bottom: 6px;
+}
+
+/* Gold→sky accent tick — the signature Blue Archive color pairing. */
+.eyebrow::before {
+  content: "";
+  width: 22px;
+  height: 2px;
+  border-radius: 999px;
+  background: linear-gradient(90deg, var(--accent), var(--accent-2));
+}
+
+.hero h1 {
+  font-family: var(--font-serif);
+  font-size: 30px;
+  font-weight: 700;
+  line-height: 1.18;
+  color: var(--ink);
+  letter-spacing: -0.01em;
+}
+
+.summary {
+  margin-top: 7px;
+  font-size: 13px;
+  color: var(--muted);
+}
+
+/* ——— Mode Tabs ——— */
+.mode-tabs {
+  --tab-active-bg: linear-gradient(180deg, color-mix(in srgb, var(--paper) 94%, var(--accent-3) 6%), var(--paper));
+  display: inline-flex;
+  gap: 4px;
+  min-width: min(100%, 320px);
+  background: color-mix(in srgb, var(--paper-2) 72%, var(--paper) 28%);
+  border-radius: var(--radius-lg);
+  padding: 5px;
+  border: 1px solid var(--line);
+  box-shadow: var(--shadow-inner), var(--shadow-sm);
+}
+
+.mode-tabs button {
+  position: relative;
+  flex: 1 1 0;
+  padding: 10px 22px;
+  border: 1px solid transparent;
+  border-radius: var(--radius-md);
+  background: transparent;
+  color: var(--muted);
+  font-size: 13px;
+  font-weight: 700;
+  letter-spacing: 0.02em;
+  cursor: pointer;
+  transition: color var(--dur-fast) var(--ease-out),
+              background var(--dur-fast) var(--ease-out),
+              border-color var(--dur-fast) var(--ease-out),
+              box-shadow var(--dur-fast) var(--ease-out),
+              transform var(--dur-fast) var(--ease-out);
+  white-space: nowrap;
+}
+
+.mode-tabs button:hover {
+  color: var(--ink);
+  background: color-mix(in srgb, var(--paper) 72%, transparent);
+}
+
+.mode-tabs button.active {
+  background: var(--tab-active-bg);
+  border-color: color-mix(in srgb, var(--line-strong) 36%, var(--line));
+  color: var(--accent-2);
+  box-shadow: var(--shadow-sm);
+}
+
+.mode-tabs button.active::after {
+  content: "";
+  position: absolute;
+  left: 18px;
+  right: 18px;
+  bottom: 5px;
+  height: 2px;
+  border-radius: 999px;
+  background: var(--accent-2);
+  opacity: 0.8;
+}
+
+/* =============================================
+   CONTROL PANEL — Insights
+   ============================================= */
+.control-panel {
+  margin-bottom: 16px;
+  padding: 16px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-lg);
+  background:
+    radial-gradient(circle at 8% 0%, color-mix(in srgb, var(--accent-3) 12%, transparent) 0, transparent 34%),
+    linear-gradient(180deg, color-mix(in srgb, var(--paper) 92%, var(--paper-2) 8%), var(--paper));
+  box-shadow: var(--shadow-sm);
+}
+
+.control-bar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 14px;
+  padding-bottom: 14px;
+  border-bottom: 1px solid color-mix(in srgb, var(--line) 72%, transparent);
+}
+
+.insights {
+  display: grid;
+  grid-template-columns: repeat(4, 1fr);
+  gap: 12px;
+}
+
+.metric {
+  position: relative;
+  overflow: hidden;
+  background: linear-gradient(180deg, color-mix(in srgb, var(--paper) 94%, var(--accent-3) 6%), var(--paper));
+  border: 1px solid var(--line);
+  border-radius: var(--radius-md);
+  padding: 14px 18px;
+  box-shadow: var(--shadow-sm);
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  transition: transform var(--dur) var(--ease-out),
+              box-shadow var(--dur) var(--ease-out),
+              border-color var(--dur) var(--ease-out);
+}
+
+/* Cerulean top accent — subtle Blue Archive cue. */
+.metric::before {
+  content: "";
+  position: absolute;
+  inset: 0 0 auto 0;
+  height: 2px;
+  background: linear-gradient(90deg, var(--accent-2), var(--accent-3));
+  opacity: 0.5;
+}
+
+.metric:hover {
+  transform: translateY(-2px);
+  border-color: var(--line-strong);
+  box-shadow: var(--shadow);
+}
+
+.metric span {
+  font-size: 11px;
+  font-weight: 500;
+  color: var(--muted);
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+}
+
+.metric strong {
+  font-size: 22px;
+  font-weight: 700;
+  color: var(--ink);
+  font-family: var(--font-serif);
+}
+
+/* =============================================
+   CHECKIN BACKUP
+   ============================================= */
+.checkin-transfer {
+  display: grid;
+  grid-template-columns: minmax(0, 1.1fr) minmax(320px, 0.9fr);
+  gap: 18px;
+  margin-bottom: 20px;
+  padding: 18px;
+  border: 1px solid color-mix(in srgb, var(--danger) 20%, var(--line));
+  border-radius: var(--radius-lg);
+  background:
+    radial-gradient(circle at 100% 0%, color-mix(in srgb, var(--danger) 8%, transparent) 0, transparent 32%),
+    linear-gradient(180deg, color-mix(in srgb, var(--paper) 94%, var(--paper-2) 6%), var(--paper));
+  box-shadow: var(--shadow-sm);
+}
+
+.checkin-transfer-copy {
+  min-width: 0;
+}
+
+.checkin-transfer-copy h2 {
+  font-family: var(--font-serif);
+  font-size: 24px;
+  line-height: 1.2;
+  margin-bottom: 8px;
+}
+
+.checkin-transfer-copy p {
+  color: var(--muted);
+}
+
+.checkin-transfer-copy code {
+  padding: 2px 6px;
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--paper-2) 72%, var(--paper) 28%);
+  border: 1px solid var(--line);
+  font-size: 12px;
+}
+
+.checkin-transfer-actions {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  min-width: 0;
+}
+
+.upload-button {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 44px;
+  padding: 10px 16px;
+  border-radius: var(--radius-md);
+  border: 1px solid var(--line-strong);
+  background: color-mix(in srgb, var(--paper) 92%, var(--accent-3) 8%);
+  color: var(--accent-2);
+  font-weight: 700;
+  cursor: pointer;
+  transition: transform var(--dur) var(--ease-out),
+              box-shadow var(--dur) var(--ease-out),
+              border-color var(--dur) var(--ease-out);
+}
+
+.upload-button:hover {
+  transform: translateY(-1px);
+  border-color: var(--accent-2);
+  box-shadow: var(--shadow-sm);
+}
+
+.upload-button input {
+  position: absolute;
+  inset: 0;
+  opacity: 0;
+  cursor: pointer;
+}
+
+.checkin-transfer-meta {
+  min-height: 20px;
+  color: var(--ink);
+  font-size: 13px;
+  word-break: break-word;
+}
+
+.danger-note {
+  padding: 10px 12px;
+  border-radius: var(--radius-md);
+  border: 1px solid color-mix(in srgb, var(--danger) 22%, var(--line));
+  background: color-mix(in srgb, var(--danger-light) 70%, var(--paper) 30%);
+  color: var(--danger);
+  font-size: 13px;
+}
+
+.checkin-transfer-result {
+  padding: 12px 14px;
+  border-radius: var(--radius-md);
+  border: 1px solid var(--line);
+  background: color-mix(in srgb, var(--paper-2) 70%, var(--paper) 30%);
+  font-size: 13px;
+}
+
+.checkin-transfer-result[hidden] {
+  display: none;
+}
+
+.checkin-transfer-result.success {
+  border-color: color-mix(in srgb, var(--success) 26%, var(--line));
+  color: var(--success);
+}
+
+.checkin-transfer-result.error {
+  border-color: color-mix(in srgb, var(--danger) 26%, var(--line));
+  color: var(--danger);
+}
+
+.checkin-transfer-result strong {
+  display: block;
+  margin-bottom: 4px;
+}
+
+/* =============================================
+   FILTERS
+   ============================================= */
+.filters {
+  margin-bottom: 20px;
+}
+
+.filters-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 12px;
+  align-items: flex-end;
+  background:
+    linear-gradient(180deg, color-mix(in srgb, var(--paper) 88%, var(--paper-2) 12%), var(--paper));
+  border: 1px solid var(--line);
+  border-radius: var(--radius-lg);
+  padding: 16px;
+  box-shadow: var(--shadow-sm);
+}
+
+.field {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  min-width: 0;
+}
+
+.field[hidden] {
+  display: none;
+}
+
+.field span {
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--muted);
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+}
+
+.field-search {
+  flex: 1 1 200px;
+}
+
+.field input,
+.field select {
+  padding: 8px 12px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-sm);
+  background: var(--paper-2);
+  color: var(--ink);
+  font-size: 13px;
+  transition: border-color var(--dur-fast) var(--ease-out),
+              box-shadow var(--dur-fast) var(--ease-out);
+  outline: none;
+}
+
+.field input:focus,
+.field select:focus {
+  border-color: var(--accent-2);
+  box-shadow: var(--focus);
+  background: var(--paper);
+}
+
+.field input:focus-visible,
+.field select:focus-visible {
+  outline: 2px solid var(--accent-2);
+  outline-offset: 1px;
+}
+
+.field input::placeholder {
+  color: var(--muted);
+  opacity: 0.7;
+}
+
+/* ——— View Toggle ——— */
+.view-toggle {
+  align-self: end;
+  display: flex;
+  gap: 3px;
+  background: color-mix(in srgb, var(--paper-2) 72%, var(--paper) 28%);
+  border-radius: var(--radius-md);
+  padding: 4px;
+  border: 1px solid var(--line);
+  box-shadow: var(--shadow-inner);
+}
+
+.view-toggle button {
+  padding: 7px 15px;
+  border: 1px solid transparent;
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 700;
+  cursor: pointer;
+  transition: color var(--dur-fast) var(--ease-out),
+              background var(--dur-fast) var(--ease-out),
+              border-color var(--dur-fast) var(--ease-out),
+              box-shadow var(--dur-fast) var(--ease-out);
+  white-space: nowrap;
+}
+
+.view-toggle button:hover {
+  color: var(--ink);
+  background: color-mix(in srgb, var(--paper) 68%, transparent);
+}
+
+.view-toggle button.active {
+  background: var(--paper);
+  border-color: color-mix(in srgb, var(--line-strong) 28%, var(--line));
+  color: var(--accent-2);
+  box-shadow: var(--shadow-sm);
+}
+
+.view-toggle[hidden] {
+  display: none;
+}

@@ -9,7 +9,10 @@ import sqlite3
 from typing import Any, Iterable
 from zoneinfo import ZoneInfo
 
+from astrbot.api import logger
 
+
+LOG_PREFIX = "[GetPx]"
 SHANGHAI_TZ = ZoneInfo("Asia/Shanghai")
 PAGE_CURSOR_TTL_DAYS = 3
 MIN_RESULTS_FOR_NEXT_PAGE = 20
@@ -303,8 +306,15 @@ class ImageIndexStore:
 
     def _cleanup_old_days_sync(self, date_key: str) -> None:
         conn = self._get_conn()
-        conn.execute("DELETE FROM image_usage WHERE date_key != ?", (date_key,))
+        cursor = conn.execute(
+            "DELETE FROM image_usage WHERE date_key != ?", (date_key,)
+        )
         conn.commit()
+        if cursor.rowcount > 0:
+            logger.info(
+                f"{LOG_PREFIX} 已清理过期图片去重索引: "
+                f"removed={cursor.rowcount}, keep_date={date_key}"
+            )
 
     def _maybe_cleanup_old_days_sync(self, date_key: str) -> None:
         """每小时最多清理一次，避免写操作频繁触发 DELETE。"""
