@@ -33,14 +33,25 @@ def make_plugin(data_dir: str) -> GetPxPlugin:
 
 
 @pytest.mark.asyncio
-async def test_birthday_command_manual_clear_and_sync() -> None:
+async def test_birthday_command_manual_clear_and_direct_fetch() -> None:
     with tempfile.TemporaryDirectory() as tmp:
         plugin = make_plugin(tmp)
         event = FakeEvent({"birthday_year": 2000, "birthday_month": 7, "birthday_day": 11})
         assert "07-11" in await plugin._handle_checkin_birthday(event, "设置", "07-11")
-        assert "手动生日" in await plugin._handle_checkin_birthday(event, "同步", "")
+        assert "手动" in await plugin._handle_checkin_birthday(event, "", "")
         assert "已清除" in await plugin._handle_checkin_birthday(event, "清除", "")
-        assert "07-11" in await plugin._handle_checkin_birthday(event, "同步", "")
+        assert "07-11" in await plugin._handle_checkin_birthday(event, "", "")
+
+
+@pytest.mark.asyncio
+async def test_birthday_direct_lookup_reports_private_profile() -> None:
+    with tempfile.TemporaryDirectory() as tmp:
+        plugin = make_plugin(tmp)
+        event = FakeEvent(
+            {"birthday_year": 0, "birthday_month": 0, "birthday_day": 0}
+        )
+
+        assert await plugin._handle_checkin_birthday(event, "", "") == "用户未公开生日"
 
 
 @pytest.mark.asyncio

@@ -5,6 +5,8 @@ import tempfile
 import unittest
 from io import BytesIO
 from pathlib import Path
+from types import SimpleNamespace
+from unittest.mock import AsyncMock
 
 from PIL import Image
 
@@ -16,6 +18,8 @@ from astrbot_plugin_get_px.checkin_card import (  # noqa: E402
     CardBackground,
     _file_to_data_url,
 )
+from astrbot_plugin_get_px.checkin_cache import CheckinCardCache  # noqa: E402
+from astrbot_plugin_get_px.main import GetPxPlugin  # noqa: E402
 
 def _profile() -> CheckinProfile:
     return CheckinProfile(
@@ -157,6 +161,50 @@ class FileToDataUrlTest(unittest.TestCase):
             broken = Path(tmp) / "broken.jpg"
             broken.write_bytes(b"not an image")
             self.assertEqual(_file_to_data_url(str(broken)), "")
+
+
+class CheckinCardRenderQualityTest(unittest.IsolatedAsyncioTestCase):
+    async def test_configured_jpeg_quality_is_passed_to_renderer(self):
+        plugin = object.__new__(GetPxPlugin)
+        plugin.config = {
+            "checkin_avatar_enabled": False,
+            "checkin_card_quality": 97,
+        }
+        plugin.html_render = AsyncMock(return_value="card.jpg")
+
+        result = await plugin._render_checkin_card(
+            SimpleNamespace(),
+            profile=_profile(),
+            record=_record(),
+            background=None,
+            bot_name="neko",
+        )
+
+        self.assertEqual(result, "card.jpg")
+        options = plugin.html_render.await_args.kwargs["options"]
+        self.assertEqual(options["type"], "jpeg")
+        self.assertEqual(options["quality"], 97)
+
+    def test_quality_changes_the_daily_cache_key(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            plugin = object.__new__(GetPxPlugin)
+            plugin.config = {
+                "checkin_avatar_enabled": False,
+                "checkin_card_quality": 80,
+            }
+            plugin.checkin_cache = CheckinCardCache(Path(tmp) / "cache")
+            kwargs = {
+                "profile": _profile(),
+                "record": _record(),
+                "background": None,
+                "bot_name": "neko",
+            }
+
+            quality_80 = plugin._checkin_card_cache_key(SimpleNamespace(), **kwargs)
+            plugin.config["checkin_card_quality"] = 98
+            quality_98 = plugin._checkin_card_cache_key(SimpleNamespace(), **kwargs)
+
+            self.assertNotEqual(quality_80, quality_98)
 
 
 if __name__ == "__main__":

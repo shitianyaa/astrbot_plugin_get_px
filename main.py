@@ -54,7 +54,6 @@ from .checkin_birthday import (
     birthday_matches,
     parse_month_day,
     parse_qq_birthday,
-    qq_birthday_debug_fields,
 )
 from .checkin_background import (
     CHECKIN_ARTWORK_TARGET_RATIO,
@@ -730,7 +729,7 @@ class GetPxPlugin(Star):
 
     @filter.command("签到生日")
     async def cmd_checkin_birthday(self, event: AstrMessageEvent, action: str = "", value: str = ""):
-        """查看、设置、清除或同步签到生日。"""
+        """查看或自动读取签到生日，也可手动设置或清除。"""
         event.stop_event()
         yield event.plain_result(await self._handle_checkin_birthday(event, action, value))
 
@@ -1322,12 +1321,7 @@ class GetPxPlugin(Star):
             )
             parsed = parse_qq_birthday(payload)
             if parsed is None:
-                keys = sorted(map(str, payload.keys())) if isinstance(payload, dict) else []
-                birthday_fields = qq_birthday_debug_fields(payload)
-                logger.warning(
-                    f"{LOG_PREFIX} QQ 生日读取失败: 返回生日字段不可用, "
-                    f"birthday_fields={birthday_fields!r}, keys={keys}"
-                )
+                logger.info(f"{LOG_PREFIX} QQ 生日未读取: 用户未公开生日")
             else:
                 logger.info(f"{LOG_PREFIX} QQ 生日读取成功: user_id={user_id}")
             return parsed
@@ -1401,6 +1395,9 @@ class GetPxPlugin(Star):
         )
         view_model["background_mode"] = identity_background.mode
         view_model["background_source"] = identity_background.source
+        view_model["render_quality"] = self._cfg_int(
+            "checkin_card_quality", 95, 60, 100
+        )
         return self.checkin_cache.cache_key(
             date_key=record.date_key,
             user_id=record.user_id,
@@ -1634,27 +1631,21 @@ class GetPxPlugin(Star):
                 return f"生日已设置为 {preference.birthday_label}（手动）"
             if action == "清除":
                 await self.checkin_store.clear_birthday(user_id)
-                return "生日已清除，下次签到会重新尝试读取 QQ 资料"
-            if action == "同步":
-                preference = await self.checkin_store.get_user_preference(user_id)
-                if preference.birthday_source == "manual":
-                    return "当前使用手动生日；如需采用 QQ 资料，请先清除生日"
-                parsed = await self._fetch_qq_birthday(event, user_id)
-                await self.checkin_store.mark_qq_birthday_checked(user_id)
-                if parsed is None:
-                    return "未能从当前 QQ 平台资料中读取生日"
-                preference = await self.checkin_store.set_qq_birthday_if_not_manual(
-                    user_id=user_id, month=parsed[0], day=parsed[1]
-                )
-                if preference.birthday_source == "manual":
-                    return "同步期间生日已被手动设置，已保留手动生日"
-                return f"已从 QQ 资料同步生日 {preference.birthday_label}"
+                return "生日已清除，再次使用 /签到生日 会重新读取 QQ 资料"
+            if action:
+                return "用法: /签到生日 或 /签到生日 设置 MM-DD 或 /签到生日 清除"
             preference = await self.checkin_store.get_user_preference(user_id)
             if preference.birthday_label:
                 source = "手动" if preference.birthday_source == "manual" else "QQ资料"
                 return f"当前签到生日: {preference.birthday_label}（{source}）"
-            status = "已尝试自动读取" if preference.qq_birthday_checked else "尚未尝试自动读取"
-            return f"尚未设置签到生日（{status}）\n用法: /签到生日 设置 MM-DD"
+            parsed = await self._fetch_qq_birthday(event, user_id)
+            await self.checkin_store.mark_qq_birthday_checked(user_id)
+            if parsed is None:
+                return "用户未公开生日"
+            preference = await self.checkin_store.set_qq_birthday_if_not_manual(
+                user_id=user_id, month=parsed[0], day=parsed[1]
+            )
+            return f"当前签到生日: {preference.birthday_label}（QQ资料）"
         except ValueError as exc:
             return str(exc)
 
@@ -1812,6 +1803,7 @@ class GetPxPlugin(Star):
         avatar_url = self._checkin_avatar_url(event) if self._cfg_bool("checkin_avatar_enabled", True) else ""
         width = CHECKIN_CARD_WIDTH
         height = CHECKIN_CARD_HEIGHT
+        quality = self._cfg_int("checkin_card_quality", 95, 60, 100)
         data = build_checkin_card_data(
             profile=profile,
             record=record,
@@ -1829,7 +1821,7 @@ class GetPxPlugin(Star):
             options={
                 "full_page": False,
                 "type": "jpeg",
-                "quality": 88,
+                "quality": quality,
                 "clip": {"x": 0, "y": 0, "width": width, "height": height},
                 "viewport": {"width": width, "height": height},
                 "animations": "disabled",
@@ -2974,7 +2966,7 @@ class GetPxPlugin(Star):
             "　　查看并购买好感度双倍加持",
             "",
             "签到生日 / 签到成就 / 签到称号 / 佩戴称号",
-            "　　管理生日，查看成就并切换卡片称号",
+            "　　查看或自动读取生日，查看成就并切换卡片称号",
             "",
             "签到事件（管理员）",
             "　　添加、查看或删除全局年度/单次纪念日",

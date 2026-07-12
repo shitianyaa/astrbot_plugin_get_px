@@ -133,6 +133,13 @@
     "default": true,
     "hint": "开启后 QQ 平台会尝试在签到卡片中显示用户头像；获取失败时自动使用默认头像。"
   },
+  "checkin_card_quality": {
+    "description": "签到卡片清晰度",
+    "type": "int",
+    "default": 95,
+    "slider": {"min": 60, "max": 100, "step": 1},
+    "hint": "签到卡片 JPEG 输出质量。数值越高文字和插画越清晰，但文件也会更大；推荐 92–97。修改后会自动使用新的缓存。"
+  },
   "checkin_ai_greeting_enabled": {
     "description": "签到 AI 问候",
     "type": "bool",
