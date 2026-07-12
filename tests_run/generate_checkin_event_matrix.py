@@ -15,14 +15,14 @@ PROJECT_ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(PROJECT_ROOT))
 sys.path.insert(0, str(PROJECT_ROOT.parent))
 
-from astrbot_plugin_get_px.checkin import CheckinProfile, CheckinRecord
-from astrbot_plugin_get_px.checkin_card import (
+from astrbot_plugin_get_px.checkin import CheckinProfile, CheckinRecord  # noqa: E402
+from astrbot_plugin_get_px.checkin.card import (  # noqa: E402
     CHECKIN_CARD_TEMPLATE,
     CardBackground,
     build_checkin_card_data,
 )
-from astrbot_plugin_get_px.checkin_content import resolve_checkin_content
-from astrbot_plugin_get_px.holiday_calendar import OnlineHoliday
+from astrbot_plugin_get_px.checkin.content import resolve_checkin_content  # noqa: E402
+from astrbot_plugin_get_px.checkin.holiday import OnlineHoliday  # noqa: E402
 
 
 OUTPUT_DIR = PROJECT_ROOT / "docs" / "images" / "checkin-event-matrix"
