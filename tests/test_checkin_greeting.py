@@ -212,11 +212,11 @@ async def test_hitokoto_source_returns_valid_short_sentence(monkeypatch) -> None
         "毛不易 · 芬芳一生",
     )
     assert calls[0]["url"] == checkin_greeting.HITOKOTO_API_URL
-    assert calls[0]["params"] == {"encode": "json", "max_length": "44"}
+    assert calls[0]["params"] == {"encode": "json", "max_length": "24"}
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("payload", ({}, [], {"hitokoto": "很" * 45}))
+@pytest.mark.parametrize("payload", ({}, [], {"hitokoto": "很" * 25}))
 async def test_invalid_hitokoto_payload_uses_local_fallback(
     monkeypatch, payload: object
 ) -> None:

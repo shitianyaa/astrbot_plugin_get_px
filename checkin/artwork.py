@@ -33,7 +33,7 @@ LOG_PREFIX = "[GetPx]"
 PLUGIN_NAME = "astrbot_plugin_get_px"
 CHECKIN_BACKGROUND_PAGE_ATTEMPTS = 5
 CHECKIN_PREVIEW_BACKGROUND_TTL_SECONDS = 300.0
-DEFAULT_AUTO_DOWNGRADE_ORIGINAL_LIMIT_MB = 3.0
+CHECKIN_BACKGROUND_QUALITY = "medium"
 RANKING_MODES = {
     "day": "今日",
     "week": "本周",
@@ -115,20 +115,13 @@ class CheckinArtworkMixin:
                 )
                 return replace(saved, mode="fallback")
 
-            quality = self._cfg_str("image_quality", "original")
             timeout_sec = self._cfg_float("request_timeout", 30.0, 5.0, 120.0)
-            downgrade_limit_mb = self._cfg_float(
-                "auto_downgrade_original_mb",
-                DEFAULT_AUTO_DOWNGRADE_ORIGINAL_LIMIT_MB,
-                0.0,
-                100.0,
-            )
             path, actual_quality, file_size = await self.downloader.download_for_send(
                 illust,
-                quality,
+                CHECKIN_BACKGROUND_QUALITY,
                 proxy=self._cfg_str("pixiv_proxy_url"),
                 timeout=timeout_sec,
-                downgrade_limit_bytes=int(downgrade_limit_mb * 1024 * 1024),
+                downgrade_limit_bytes=0,
                 log_context=f"[签到背景恢复] 作品 {record.background_illust_id}",
             )
             return CardBackground(
@@ -414,15 +407,7 @@ class CheckinArtworkMixin:
         )
         start = seed % len(illusts)
         ordered = illusts[start:] + illusts[:start]
-        quality = self._cfg_str("image_quality", "original")
         timeout_sec = self._cfg_float("request_timeout", 30.0, 5.0, 120.0)
-        downgrade_limit_mb = self._cfg_float(
-            "auto_downgrade_original_mb",
-            DEFAULT_AUTO_DOWNGRADE_ORIGINAL_LIMIT_MB,
-            0.0,
-            100.0,
-        )
-        downgrade_limit_bytes = int(downgrade_limit_mb * 1024 * 1024)
         for idx, illust in enumerate(ordered[:8], 1):
             illust_id = str(illust.get("id") or "")
             if not illust_id:
@@ -445,10 +430,10 @@ class CheckinArtworkMixin:
             try:
                 path, actual_q, file_size = await self.downloader.download_for_send(
                     illust,
-                    quality,
+                    CHECKIN_BACKGROUND_QUALITY,
                     proxy=self._cfg_str("pixiv_proxy_url"),
                     timeout=timeout_sec,
-                    downgrade_limit_bytes=downgrade_limit_bytes,
+                    downgrade_limit_bytes=0,
                     log_context=f"[签到背景 {idx}] 作品 {illust_id} 「{title}」",
                 )
                 author = str((illust.get("user") or {}).get("name") or "")

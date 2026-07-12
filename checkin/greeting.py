@@ -20,6 +20,7 @@ HARD_OUTPUT_CONSTRAINT = (
     "只输出正文；最多44个中文字符、最多两句话、不换行，不输出标题、引号、解释、Markdown或标签。"
 )
 HITOKOTO_API_URL = "https://v1.hitokoto.cn/"
+HITOKOTO_MAX_LENGTH = 24
 
 _CONTROL_RE = re.compile(r"[\x00-\x08\x0b\x0c\x0e-\x1f\x7f]")
 _TAG_RE = re.compile(r"<[^>]*>")
@@ -101,7 +102,7 @@ class CheckinGreetingGenerator:
                     HITOKOTO_API_URL,
                     params={
                         "encode": "json",
-                        "max_length": str(MAX_GREETING_LENGTH),
+                        "max_length": str(HITOKOTO_MAX_LENGTH),
                     },
                 ) as response:
                     response.raise_for_status()
@@ -117,7 +118,7 @@ class CheckinGreetingGenerator:
         if not isinstance(payload, dict):
             return fallback
         text = self._normalize_response(payload.get("hitokoto", ""))
-        if not text or len(text) > MAX_GREETING_LENGTH:
+        if not text or len(text) > HITOKOTO_MAX_LENGTH:
             return fallback
         attribution = self._hitokoto_attribution(
             payload.get("from_who"), payload.get("from")

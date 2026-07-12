@@ -45,11 +45,15 @@ class FakeHistory:
 class FakeDownloader:
     def __init__(self):
         self.illust_ids = []
+        self.qualities = []
+        self.downgrade_limits = []
 
     async def download_for_send(
         self, illust, quality, proxy, timeout, downgrade_limit_bytes, log_context
     ):
         self.illust_ids.append(str(illust["id"]))
+        self.qualities.append(quality)
+        self.downgrade_limits.append(downgrade_limit_bytes)
         return f"picked_{illust['id']}.jpg", quality, 123
 
 
@@ -213,6 +217,8 @@ class CheckinBackgroundSelectionTest(unittest.IsolatedAsyncioTestCase):
                     set(),
                 )
                 self.assertEqual(plugin.client.ranking_offsets, [0, 0, 0])
+                self.assertEqual(plugin.downloader.qualities, ["medium"] * 3)
+                self.assertEqual(plugin.downloader.downgrade_limits, [0] * 3)
             finally:
                 plugin.image_index.close()
 
