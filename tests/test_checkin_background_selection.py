@@ -115,7 +115,14 @@ class CheckinBackgroundSelectionTest(unittest.IsolatedAsyncioTestCase):
                 "checkin_custom_background": str(Path(tmp) / "missing.jpg"),
             }
 
-            async def fake_download(event, record, *, claim_usage=True):
+            async def fake_download(
+                event,
+                record,
+                *,
+                claim_usage=True,
+                preview_nonce=0,
+                preview_excluded_ids=None,
+            ):
                 self.assertTrue(claim_usage)
                 return CardBackground(
                     image_path="picked.jpg",
@@ -133,6 +140,70 @@ class CheckinBackgroundSelectionTest(unittest.IsolatedAsyncioTestCase):
 
             self.assertEqual(background.mode, "pixiv_daily")
             self.assertEqual(background.illust_id, "42")
+
+    async def test_preview_background_refreshes_for_five_minutes_without_index_writes(
+        self,
+    ):
+        with tempfile.TemporaryDirectory() as tmp:
+            plugin = object.__new__(GetPxPlugin)
+            plugin.config = {
+                "checkin_background_mode": "pixiv_daily",
+                "pixiv_refresh_token": "token",
+                "pixiv_ranking_mode": "week",
+                "pixiv_r18": 0,
+                "filter_manga": True,
+                "blacklist_tags": "",
+                "image_quality": "large",
+                "pixiv_proxy_url": "",
+                "request_timeout": 30.0,
+                "auto_downgrade_original_mb": 3.0,
+            }
+            plugin.image_index = ImageIndexStore(tmp)
+            plugin.image_history = FakeHistory([])
+            plugin.downloader = FakeDownloader()
+            plugin.client = FakePixivClient({0: [_illust(70), _illust(71)]})
+            record = SimpleNamespace(date_key="2026-07-12", user_id="10001")
+
+            try:
+                first = await plugin._prepare_checkin_background(
+                    FakeEvent(),
+                    record,
+                    claim_usage=False,
+                    refresh_preview=True,
+                )
+                second = await plugin._prepare_checkin_background(
+                    FakeEvent(),
+                    record,
+                    claim_usage=False,
+                    refresh_preview=True,
+                )
+                plugin._checkin_preview_background_ids["10001"] = [
+                    (illust_id, created_at - 301.0)
+                    for illust_id, created_at in plugin._checkin_preview_background_ids[
+                        "10001"
+                    ]
+                ]
+                third = await plugin._prepare_checkin_background(
+                    FakeEvent(),
+                    record,
+                    claim_usage=False,
+                    refresh_preview=True,
+                )
+
+                self.assertNotEqual(first.illust_id, second.illust_id)
+                self.assertIn(third.illust_id, {"70", "71"})
+                self.assertEqual(
+                    len(plugin._checkin_preview_background_ids["10001"]), 1
+                )
+                self.assertEqual(
+                    await plugin.image_index.get_used_illust_ids(
+                        "group:20001", "rank:week"
+                    ),
+                    set(),
+                )
+                self.assertEqual(plugin.client.ranking_offsets, [0, 0, 0])
+            finally:
+                plugin.image_index.close()
 
     async def test_checkin_background_skips_page_used_by_index_and_history(self):
         with tempfile.TemporaryDirectory() as tmp:

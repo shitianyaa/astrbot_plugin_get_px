@@ -10,7 +10,7 @@ from astrbot.api.event import AstrMessageEvent
 from .models import ACHIEVEMENTS, CheckinProfile, CheckinRecord
 from .birthday import birthday_matches, parse_qq_birthday
 from .card import CardBackground, build_checkin_card_data
-from .content import resolve_checkin_content
+from .content import CheckinContent, resolve_checkin_content
 from .greeting import DEFAULT_CHECKIN_GREETING_PROMPT
 try:
     from ..pixiv.downloader import cleanup
@@ -217,52 +217,11 @@ class CheckinApplicationMixin:
     ) -> CheckinRecord:
         if record.greeting:
             return record
-
-        feature_store_available = all(
-            hasattr(self.checkin_store, name)
-            for name in ("get_user_preference", "unlock_achievements", "events_for_date")
-        )
-        preference = None
-        unlocked_ids: tuple[str, ...] = ()
-        title = ""
-        if feature_store_available:
-            preference = await self._ensure_checkin_birthday(event, record.user_id)
-            unlocked_ids = await self.checkin_store.unlock_achievements(
-                self._checkin_profile_from_record(record)
-            )
-            preference = await self.checkin_store.get_user_preference(record.user_id)
-            title = (
-                str(ACHIEVEMENTS[preference.selected_title_id]["title"])
-                if preference.selected_title_id in ACHIEVEMENTS
-                else ""
-            )
-        birthday_label = ""
-        if preference is not None and preference.birthday_label and birthday_matches(
-            record.date_key, preference.birthday_month, preference.birthday_day
-        ):
-            birthday_label = "生日"
-        global_events = (
-            await self.checkin_store.events_for_date(record.date_key)
-            if feature_store_available else ()
-        )
-        custom_event_label = global_events[0].name if global_events else ""
-        extra_global_labels = tuple(item.name for item in global_events[1:])
-
-        content = resolve_checkin_content(
+        content, _title = await self._compose_checkin_content(
+            event,
             record,
             self._checkin_profile_from_record(record),
-            birthday_label=birthday_label,
-            custom_event_label=custom_event_label,
-            online_holiday=(
-                calendar.lookup(record.date_key)
-                if (calendar := getattr(self, "holiday_calendar", None)) is not None
-                else None
-            ),
-            secondary_event_labels=extra_global_labels,
-            current_title=title,
-            unlocked_achievements=tuple(
-                str(ACHIEVEMENTS[item]["title"]) for item in unlocked_ids
-            ),
+            mutate_features=True,
         )
         record = await self.checkin_store.update_record_content(
             user_id=record.user_id,
@@ -276,40 +235,9 @@ class CheckinApplicationMixin:
         )
         if not allow_ai:
             return record
-
-        greeting_mode = self._checkin_greeting_mode()
-        if greeting_mode == "local":
-            return record
-        greeting_attribution = ""
-        if greeting_mode == "hitokoto":
-            greeting, source, greeting_attribution = (
-                await self.checkin_greeting.generate_hitokoto(
-                    content.context,
-                    timeout=self._cfg_float(
-                        "checkin_hitokoto_timeout",
-                        5.0,
-                        1.0,
-                        15.0,
-                    ),
-                )
-            )
-        else:
-            greeting, source = await self.checkin_greeting.generate(
-                event,
-                content.context,
-                enabled=True,
-                provider_id=self._cfg_str("checkin_ai_greeting_provider_id", ""),
-                prompt=self._cfg_str(
-                    "checkin_ai_greeting_prompt",
-                    DEFAULT_CHECKIN_GREETING_PROMPT,
-                ),
-                timeout=self._cfg_float(
-                    "checkin_ai_greeting_timeout",
-                    8.0,
-                    1.0,
-                    30.0,
-                ),
-            )
+        greeting, source, greeting_attribution = await self._generate_checkin_greeting(
+            event, content
+        )
         if source not in ("ai", "hitokoto"):
             return record
         return await self.checkin_store.update_record_content(
@@ -323,6 +251,89 @@ class CheckinApplicationMixin:
             secondary_note=content.secondary_note,
             template_version=record.template_version or "v2",
         )
+
+    async def _compose_checkin_content(
+        self,
+        event: AstrMessageEvent,
+        record: CheckinRecord,
+        profile: CheckinProfile,
+        *,
+        mutate_features: bool,
+    ) -> tuple[CheckinContent, str]:
+        store = self.checkin_store
+        preference = None
+        unlocked_ids: tuple[str, ...] = ()
+        if store is not None and mutate_features and all(
+            hasattr(store, name)
+            for name in ("get_user_preference", "unlock_achievements")
+        ):
+            preference = await self._ensure_checkin_birthday(event, record.user_id)
+            unlocked_ids = await store.unlock_achievements(profile)
+            preference = await store.get_user_preference(record.user_id)
+        elif store is not None and hasattr(store, "find_user_preference"):
+            preference = await store.find_user_preference(record.user_id)
+
+        title = (
+            str(ACHIEVEMENTS[preference.selected_title_id]["title"])
+            if preference is not None
+            and preference.selected_title_id in ACHIEVEMENTS
+            else ""
+        )
+        birthday_label = ""
+        if preference is not None and preference.birthday_label and birthday_matches(
+            record.date_key, preference.birthday_month, preference.birthday_day
+        ):
+            birthday_label = "生日"
+
+        global_events = (
+            await store.events_for_date(record.date_key)
+            if store is not None and hasattr(store, "events_for_date")
+            else ()
+        )
+        content = resolve_checkin_content(
+            record,
+            profile,
+            birthday_label=birthday_label,
+            custom_event_label=global_events[0].name if global_events else "",
+            online_holiday=(
+                calendar.lookup(record.date_key)
+                if (calendar := getattr(self, "holiday_calendar", None)) is not None
+                else None
+            ),
+            secondary_event_labels=tuple(item.name for item in global_events[1:]),
+            current_title=title,
+            unlocked_achievements=tuple(
+                str(ACHIEVEMENTS[item]["title"]) for item in unlocked_ids
+            ),
+        )
+        return content, title
+
+    async def _generate_checkin_greeting(
+        self, event: AstrMessageEvent, content: CheckinContent
+    ) -> tuple[str, str, str]:
+        greeting_mode = self._checkin_greeting_mode()
+        if greeting_mode == "local":
+            return content.greeting, "local", ""
+        if greeting_mode == "hitokoto":
+            return await self.checkin_greeting.generate_hitokoto(
+                content.context,
+                timeout=self._cfg_float(
+                    "checkin_hitokoto_timeout", 5.0, 1.0, 15.0
+                ),
+            )
+        greeting, source = await self.checkin_greeting.generate(
+            event,
+            content.context,
+            enabled=True,
+            provider_id=self._cfg_str("checkin_ai_greeting_provider_id", ""),
+            prompt=self._cfg_str(
+                "checkin_ai_greeting_prompt", DEFAULT_CHECKIN_GREETING_PROMPT
+            ),
+            timeout=self._cfg_float(
+                "checkin_ai_greeting_timeout", 8.0, 1.0, 30.0
+            ),
+        )
+        return greeting, source, ""
 
 
     def _checkin_greeting_mode(self) -> str:

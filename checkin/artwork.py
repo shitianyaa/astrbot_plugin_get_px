@@ -4,6 +4,7 @@ import asyncio
 from dataclasses import replace
 import hashlib
 from pathlib import Path
+import time
 
 from astrbot.api.all import logger
 from astrbot.api.event import AstrMessageEvent
@@ -31,6 +32,7 @@ except ImportError:  # Direct imports used by the test suite.
 LOG_PREFIX = "[GetPx]"
 PLUGIN_NAME = "astrbot_plugin_get_px"
 CHECKIN_BACKGROUND_PAGE_ATTEMPTS = 5
+CHECKIN_PREVIEW_BACKGROUND_TTL_SECONDS = 300.0
 DEFAULT_AUTO_DOWNGRADE_ORIGINAL_LIMIT_MB = 3.0
 RANKING_MODES = {
     "day": "今日",
@@ -189,7 +191,12 @@ class CheckinArtworkMixin:
 
 
     async def _prepare_checkin_background(
-        self, event: AstrMessageEvent, record, *, claim_usage: bool = True
+        self,
+        event: AstrMessageEvent,
+        record,
+        *,
+        claim_usage: bool = True,
+        refresh_preview: bool = False,
     ) -> CardBackground | None:
         mode = self._cfg_str("checkin_background_mode", "pixiv_daily") or "pixiv_daily"
         if mode == "custom":
@@ -205,10 +212,39 @@ class CheckinArtworkMixin:
             logger.warning(f"{LOG_PREFIX} 签到自定义背景不可用，回退 Pixiv 背景")
         elif mode != "pixiv_daily":
             mode = "pixiv_daily"
+        preview_nonce = 0
+        preview_excluded_ids: set[str] = set()
+        if refresh_preview:
+            preview_nonce = int(getattr(self, "_checkin_preview_sequence", 0)) + 1
+            self._checkin_preview_sequence = preview_nonce
+            recent_map = getattr(self, "_checkin_preview_background_ids", None)
+            if recent_map is None:
+                recent_map = {}
+                self._checkin_preview_background_ids = recent_map
+            now_monotonic = time.monotonic()
+            active_recent = [
+                (illust_id, created_at)
+                for illust_id, created_at in recent_map.get(record.user_id, ())
+                if now_monotonic - created_at
+                < CHECKIN_PREVIEW_BACKGROUND_TTL_SECONDS
+            ]
+            recent_map[record.user_id] = active_recent
+            preview_excluded_ids.update(item[0] for item in active_recent)
+
         pixiv_bg = await self._download_checkin_pixiv_background(
-            event, record, claim_usage=claim_usage
+            event,
+            record,
+            claim_usage=claim_usage,
+            preview_nonce=preview_nonce,
+            preview_excluded_ids=preview_excluded_ids,
         )
         if pixiv_bg is not None:
+            if refresh_preview and pixiv_bg.illust_id:
+                recent = list(
+                    self._checkin_preview_background_ids.get(record.user_id, ())
+                )
+                recent.append((pixiv_bg.illust_id, time.monotonic()))
+                self._checkin_preview_background_ids[record.user_id] = recent[-20:]
             return pixiv_bg
         return CardBackground(mode="fallback", source="fallback")
 
@@ -247,7 +283,13 @@ class CheckinArtworkMixin:
 
 
     async def _download_checkin_pixiv_background(
-        self, event: AstrMessageEvent, record, *, claim_usage: bool = True
+        self,
+        event: AstrMessageEvent,
+        record,
+        *,
+        claim_usage: bool = True,
+        preview_nonce: int = 0,
+        preview_excluded_ids: set[str] | None = None,
     ) -> CardBackground | None:
         token = self._cfg_str("pixiv_refresh_token")
         if not token:
@@ -275,14 +317,33 @@ class CheckinArtworkMixin:
 
         source_key = self._source_key(selected_tag, ranking_mode)
         used_ids = await self._checkin_background_used_ids(event, source_key)
+        used_ids.update(preview_excluded_ids or ())
         illusts: list[dict] = []
         raw_count = 0
+        transient_offset = 0
 
         for page_attempt in range(1, CHECKIN_BACKGROUND_PAGE_ATTEMPTS + 1):
-            # 获取作品列表（带分页游标）
-            illusts, raw_count, source_key = await self._fetch_paginated(
-                event, selected_tag, ranking_mode
-            )
+            if preview_nonce:
+                try:
+                    if selected_tag:
+                        illusts = await self.client.search(
+                            selected_tag, offset=transient_offset
+                        )
+                    else:
+                        illusts = await self.client.ranking(
+                            ranking_mode, offset=transient_offset
+                        )
+                except Exception as e:
+                    logger.warning(
+                        f"{LOG_PREFIX} 签到测试背景请求失败(tag={selected_tag!r}): {e}"
+                    )
+                    return None
+                raw_count = len(illusts)
+                transient_offset += raw_count
+            else:
+                illusts, raw_count, source_key = await self._fetch_paginated(
+                    event, selected_tag, ranking_mode
+                )
             if not illusts:
                 return None
 
@@ -298,6 +359,8 @@ class CheckinArtworkMixin:
                 CHECKIN_ARTWORK_TOLERANCE,
             )
             if not illusts:
+                if preview_nonce:
+                    continue
                 if self.image_index is None:
                     return None
                 try:
@@ -321,6 +384,8 @@ class CheckinArtworkMixin:
             if fresh:
                 illusts = fresh
                 break
+            if preview_nonce:
+                continue
             if self.image_index is None:
                 logger.info(f"{LOG_PREFIX} 签到背景候选均已在图片历史中，跳过 Pixiv 背景")
                 return None
@@ -341,13 +406,11 @@ class CheckinArtworkMixin:
             )
             return None
 
+        seed_text = f"checkin-bg|{record.date_key}|{record.user_id}|{source_key}"
+        if preview_nonce:
+            seed_text += f"|{preview_nonce}"
         seed = int.from_bytes(
-            hashlib.sha256(
-                f"checkin-bg|{record.date_key}|{record.user_id}|{source_key}".encode(
-                    "utf-8"
-                )
-            ).digest()[:8],
-            "big",
+            hashlib.sha256(seed_text.encode("utf-8")).digest()[:8], "big"
         )
         start = seed % len(illusts)
         ordered = illusts[start:] + illusts[:start]

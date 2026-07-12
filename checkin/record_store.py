@@ -28,6 +28,13 @@ from .snapshot import validate_greeting_source as _validate_greeting_source
 
 
 class RecordStoreMixin:
+    async def find_profile(self, user_id: str) -> CheckinProfile | None:
+        user_id = str(user_id or "")
+        if not user_id:
+            return None
+        async with self._lock:
+            return await asyncio.to_thread(self._find_profile_sync, user_id)
+
     async def get_profile(self, user_id: str) -> CheckinProfile:
         user_id = str(user_id or "")
         async with self._lock:
@@ -157,6 +164,13 @@ class RecordStoreMixin:
                 "SELECT * FROM checkin_profiles WHERE user_id = ?", (user_id,)
             ).fetchone()
         return self._row_to_profile(row)
+
+    def _find_profile_sync(self, user_id: str) -> CheckinProfile | None:
+        with closing(self._connect()) as conn:
+            row = conn.execute(
+                "SELECT * FROM checkin_profiles WHERE user_id = ?", (user_id,)
+            ).fetchone()
+        return self._row_to_profile(row) if row is not None else None
 
     def _checkin_sync(
         self, date_key: str, now: str, user_id: str, username: str, bot_name: str

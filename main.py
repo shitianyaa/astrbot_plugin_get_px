@@ -25,7 +25,7 @@ from pathlib import Path
 import re
 import time
 
-from astrbot.api.all import AstrBotConfig, logger
+from astrbot.api.all import AstrBotConfig, Image, logger
 from astrbot.api.event import AstrMessageEvent, filter
 from astrbot.api.star import Context, Star
 from astrbot.core.star.star_tools import StarTools
@@ -55,6 +55,7 @@ WEB_INTERNAL_ERROR_MESSAGE = "服务内部错误，请稍后重试"
 
 AUTO_TRIGGER_PATTERN = r"^/?(来\s*(.*?)(份|个|张|点))(.*?)(福利|色|瑟|涩|塞)?图$"
 CHECKIN_REGEX_PATTERN = r"^(?!/)签到$"
+CHECKIN_HELP_IMAGE = Path(__file__).resolve().parent / "assets" / "checkin_help.png"
 
 CHINESE_NUMBER_MAP = {
     "一": "1",
@@ -310,10 +311,20 @@ class GetPxPlugin(
         async for result in self._handle_checkin(event):
             yield result
 
+    @filter.command("签到帮助")
+    async def cmd_checkin_help(self, event: AstrMessageEvent):
+        """发送签到功能帮助图片。"""
+        event.stop_event()
+        if not CHECKIN_HELP_IMAGE.is_file():
+            logger.error(f"{LOG_PREFIX} 签到帮助图片不存在: {CHECKIN_HELP_IMAGE}")
+            yield event.plain_result("签到帮助图片缺失，请联系管理员重新安装插件")
+            return
+        yield event.chain_result([Image.fromFileSystem(str(CHECKIN_HELP_IMAGE))])
+
     @filter.permission_type(filter.PermissionType.ADMIN)
     @filter.command("签到测试")
     async def cmd_checkin_preview(self, event: AstrMessageEvent):
-        """管理员预览签到卡片，不写入签到数据。"""
+        """用真实用户资料和问候配置预览卡片，不写入签到数据。"""
         event.stop_event()
         async for result in self._handle_checkin_preview(event):
             yield result
@@ -467,6 +478,9 @@ class GetPxPlugin(
             "",
             "签到",
             "　　每日签到，也可直接发送 签到",
+            "",
+            "签到帮助",
+            "　　发送完整签到功能帮助图片",
             "",
             "签到测试",
             "　　管理员预览签到卡片，不写入签到数据",

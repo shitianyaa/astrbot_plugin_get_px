@@ -19,6 +19,15 @@ from .snapshot import (
 
 
 class FeatureStoreMixin:
+    async def find_user_preference(
+        self, user_id: str
+    ) -> CheckinUserPreference | None:
+        user_id = str(user_id or "")
+        if not user_id:
+            return None
+        async with self._lock:
+            return await asyncio.to_thread(self._find_preference_sync, user_id)
+
     async def get_user_preference(self, user_id: str) -> CheckinUserPreference:
         async with self._lock:
             return await asyncio.to_thread(
@@ -124,6 +133,14 @@ class FeatureStoreMixin:
                 "SELECT * FROM checkin_user_preferences WHERE user_id = ?", (user_id,)
             ).fetchone()
         return self._row_to_preference(row)
+
+    def _find_preference_sync(self, user_id: str) -> CheckinUserPreference | None:
+        with closing(self._connect()) as conn:
+            row = conn.execute(
+                "SELECT * FROM checkin_user_preferences WHERE user_id = ?",
+                (user_id,),
+            ).fetchone()
+        return self._row_to_preference(row) if row is not None else None
 
     def _set_birthday_sync(
         self, user_id: str, month: int, day: int, source: str

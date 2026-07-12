@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from contextlib import closing
+import hashlib
 import sqlite3
 import sys
 import tempfile
@@ -20,12 +21,22 @@ class FakeEvent:
     def __init__(self, payload=None, *, platform="aiocqhttp"):
         self.bot = SimpleNamespace(call_action=AsyncMock(return_value=payload or {}))
         self._platform = platform
+        self.send = AsyncMock()
 
     def get_sender_id(self):
         return "10001"
 
     def get_platform_name(self):
         return self._platform
+
+    def get_sender_name(self):
+        return "测试用户"
+
+    def chain_result(self, content):
+        return content
+
+    def plain_result(self, content):
+        return content
 
 
 def make_plugin(data_dir: str) -> GetPxPlugin:
@@ -118,3 +129,64 @@ async def test_old_user_achievements_are_backfilled_and_highest_title_is_equippe
         assert "本次补发: 初见旅人、七日同行、月下常客" in achievements
         assert "[当前] 月下常客" in titles
         assert preference.selected_title_id == "total_30"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("greeting_mode", ["hitokoto", "ai"])
+async def test_preview_uses_real_data_and_remote_greeting_without_writes(
+    greeting_mode: str,
+) -> None:
+    with tempfile.TemporaryDirectory() as tmp:
+        plugin = make_plugin(tmp)
+        plugin.config = {
+            "checkin_bot_name": "neko",
+            "checkin_greeting_mode": greeting_mode,
+            "checkin_avatar_enabled": False,
+        }
+        plugin.holiday_calendar = None
+        plugin.checkin_greeting = SimpleNamespace(
+            generate_hitokoto=AsyncMock(
+                return_value=("一言测试问候", "hitokoto", "作者 · 作品")
+            ),
+            generate=AsyncMock(return_value=("AI 测试问候", "ai")),
+        )
+        event = FakeEvent()
+        result = await plugin.checkin_store.checkin(
+            user_id="10001", username="测试用户", bot_name="neko"
+        )
+        await plugin.checkin_store.unlock_achievements(result.profile)
+        await plugin.checkin_store.set_birthday(
+            user_id="10001", month=7, day=12, source="manual"
+        )
+
+        preview_path = Path(tmp) / "preview.jpg"
+        preview_path.write_bytes(b"preview")
+        plugin._prepare_checkin_background = AsyncMock(return_value=None)
+        plugin._render_checkin_card = AsyncMock(return_value=str(preview_path))
+        database_path = plugin.checkin_store._db_path
+        before_hash = hashlib.sha256(database_path.read_bytes()).hexdigest()
+
+        outputs = [item async for item in plugin._handle_checkin_preview(event)]
+
+        after_hash = hashlib.sha256(database_path.read_bytes()).hexdigest()
+        assert outputs == []
+        assert before_hash == after_hash
+        event.send.assert_awaited_once()
+        render_kwargs = plugin._render_checkin_card.await_args.kwargs
+        plugin._prepare_checkin_background.assert_awaited_once_with(
+            event,
+            render_kwargs["record"],
+            claim_usage=False,
+            refresh_preview=True,
+        )
+        assert render_kwargs["profile"].coins == result.profile.coins
+        assert render_kwargs["record"].total_days_after == result.profile.total_days
+        assert render_kwargs["user_title"] == "初见旅人"
+        if greeting_mode == "hitokoto":
+            assert render_kwargs["record"].greeting == "一言测试问候"
+            plugin.checkin_greeting.generate_hitokoto.assert_awaited_once()
+            plugin.checkin_greeting.generate.assert_not_awaited()
+        else:
+            assert render_kwargs["record"].greeting == "AI 测试问候"
+            plugin.checkin_greeting.generate.assert_awaited_once()
+            plugin.checkin_greeting.generate_hitokoto.assert_not_awaited()

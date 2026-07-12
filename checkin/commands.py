@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from dataclasses import replace
+from datetime import date, timedelta
 from pathlib import Path
 import re
 import time
@@ -10,12 +12,25 @@ from astrbot.core.star.star_tools import StarTools
 
 from .models import (
     ACHIEVEMENTS,
+    BOOST_MULTIPLIER,
     BOOST_PRODUCTS,
+    STREAK_AFFECTION_BONUS,
+    STREAK_AFFECTION_BONUS_MAX,
+    STREAK_COIN_BONUS,
+    STREAK_COIN_BONUS_MAX,
+    STREAK_STEP_DAYS,
     CheckinProfile,
     CheckinRecord,
     CheckinResult,
 )
-from .rules import affection_level, boost_status_text
+from .rules import (
+    affection_level,
+    boost_status_text,
+    daily_base_reward,
+    daily_note,
+    is_boost_active,
+    parse_date,
+)
 from .store import CheckinStore
 from .birthday import parse_month_day
 from .card import CardBackground
@@ -79,65 +94,98 @@ class CheckinCommandMixin:
             cleanup(str(temp_path))
 
     async def _handle_checkin_preview(self, event: AstrMessageEvent):
+        if self.checkin_store is None:
+            yield event.plain_result("签到数据尚未初始化，请稍后再试")
+            return
         user_id = str(event.get_sender_id() or "debug")
         username = self._event_username(event, user_id)
         bot_name = self._cfg_str("checkin_bot_name", "neko") or "neko"
         date_key = CheckinStore.today_key()
         now = CheckinStore.now_iso()
-        profile = CheckinProfile(
-            user_id=user_id,
-            coins=888,
-            affection=66.6,
-            total_days=12,
-            streak_days=5,
-            last_checkin_date=date_key,
-            boost_start_date="",
-            boost_until_date="",
-            repeat_penalty_date="",
-            repeat_penalty_total=0.0,
-            created_at=now,
-            updated_at=now,
+        profile = await self.checkin_store.find_profile(user_id)
+        if profile is None:
+            profile = CheckinProfile(
+                user_id=user_id,
+                coins=0,
+                affection=0.0,
+                total_days=0,
+                streak_days=0,
+                last_checkin_date="",
+                boost_start_date="",
+                boost_until_date="",
+                repeat_penalty_date="",
+                repeat_penalty_total=0.0,
+                created_at=now,
+                updated_at=now,
+            )
+        existing_record = await self.checkin_store.get_today_record(user_id)
+        record = (
+            replace(
+                existing_record,
+                username=username,
+                bot_name=bot_name,
+                background_mode="",
+                background_source="",
+                background_illust_id="",
+                background_title="",
+                background_author="",
+                event_key="",
+                event_label="",
+                greeting="",
+                greeting_source="local",
+                greeting_attribution="",
+                secondary_note="",
+            )
+            if existing_record is not None
+            else self._build_checkin_preview_record(
+                profile=profile,
+                date_key=date_key,
+                now=now,
+                username=username,
+                bot_name=bot_name,
+            )
         )
-        record = CheckinRecord(
-            date_key=date_key,
-            user_id=user_id,
-            username=username,
-            bot_name=bot_name,
-            base_coins=88,
-            bonus_coins=12,
-            coins_reward=100,
-            base_affection=0.88,
-            bonus_affection=0.12,
-            affection_reward=1.0,
-            boost_active=False,
-            boost_multiplier=1.0,
-            total_coins_after=profile.coins,
-            total_affection_after=profile.affection,
-            total_days_after=profile.total_days,
-            streak_days_after=profile.streak_days,
-            note="签到测试预览，不会写入签到数据。",
-            background_mode="",
-            background_source="",
-            background_illust_id="",
-            background_title="",
-            background_author="",
-            created_at=now,
-            updated_at=now,
+        content, user_title = await self._compose_checkin_content(
+            event,
+            record,
+            self._checkin_profile_from_record(record),
+            mutate_features=False,
         )
-        result = CheckinResult(profile=profile, record=record, duplicate=False)
+        greeting, source, attribution = await self._generate_checkin_greeting(
+            event, content
+        )
+        record = replace(
+            record,
+            event_key=content.event_key,
+            event_label=content.event_label,
+            greeting=greeting,
+            greeting_source=source,
+            greeting_attribution=attribution,
+            secondary_note=content.secondary_note,
+        )
+        preview_profile = self._checkin_profile_from_record(record)
+        result = CheckinResult(
+            profile=preview_profile,
+            record=record,
+            duplicate=existing_record is not None,
+        )
 
         background: CardBackground | None = None
         card_path = ""
         try:
             background = await self._prepare_checkin_background(
-                event, record, claim_usage=False
+                event,
+                record,
+                claim_usage=False,
+                refresh_preview=True,
             )
             card_path = await self._render_checkin_card(
                 event,
-                profile=profile,
+                profile=preview_profile,
                 record=record,
                 background=background,
                 bot_name=bot_name,
+                user_title=user_title,
             )
         except Exception as e:
             logger.warning(f"{LOG_PREFIX} 签到测试卡片渲染失败，回退纯文字: {e}")
@@ -163,6 +211,63 @@ class CheckinCommandMixin:
             cleanup(background.image_path)
         yield event.plain_result(
             "签到测试预览（未写入数据）\n" + self._format_checkin_plain_text(result)
+        )
+
+    @staticmethod
+    def _build_checkin_preview_record(
+        *,
+        profile: CheckinProfile,
+        date_key: str,
+        now: str,
+        username: str,
+        bot_name: str,
+    ) -> CheckinRecord:
+        today = date.fromisoformat(date_key)
+        previous_date = parse_date(profile.last_checkin_date)
+        streak_days = (
+            profile.streak_days + 1
+            if previous_date == today - timedelta(days=1)
+            else 1
+        )
+        base_coins, base_affection = daily_base_reward(profile.user_id, date_key)
+        streak_steps = streak_days // STREAK_STEP_DAYS
+        bonus_coins = min(
+            streak_steps * STREAK_COIN_BONUS, STREAK_COIN_BONUS_MAX
+        )
+        bonus_affection = min(
+            streak_steps * STREAK_AFFECTION_BONUS,
+            STREAK_AFFECTION_BONUS_MAX,
+        )
+        boost_active = is_boost_active(profile, date_key)
+        affection_reward = round(base_affection + bonus_affection, 2)
+        if boost_active:
+            affection_reward = round(affection_reward * BOOST_MULTIPLIER, 2)
+        coins_reward = base_coins + bonus_coins
+        return CheckinRecord(
+            date_key=date_key,
+            user_id=profile.user_id,
+            username=username,
+            bot_name=bot_name,
+            base_coins=base_coins,
+            bonus_coins=bonus_coins,
+            coins_reward=coins_reward,
+            base_affection=base_affection,
+            bonus_affection=bonus_affection,
+            affection_reward=affection_reward,
+            boost_active=boost_active,
+            boost_multiplier=BOOST_MULTIPLIER if boost_active else 1.0,
+            total_coins_after=profile.coins + coins_reward,
+            total_affection_after=round(profile.affection + affection_reward, 2),
+            total_days_after=profile.total_days + 1,
+            streak_days_after=streak_days,
+            note=daily_note(profile.user_id, date_key, streak_days),
+            background_mode="",
+            background_source="",
+            background_illust_id="",
+            background_title="",
+            background_author="",
+            created_at=now,
+            updated_at=now,
         )
 
 

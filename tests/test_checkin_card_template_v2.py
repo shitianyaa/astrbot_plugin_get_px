@@ -2,6 +2,8 @@ import re
 import unittest
 from pathlib import Path
 
+from PIL import Image
+
 
 ROOT = Path(__file__).resolve().parents[1]
 TEMPLATE_DIR = ROOT / "templates" / "checkin_card_v2"
@@ -14,6 +16,16 @@ def _css_rule(css: str, selector: str) -> str:
 
 
 class CheckinCardTemplateV2Test(unittest.TestCase):
+    def test_static_checkin_help_image_is_bundled(self):
+        from astrbot_plugin_get_px.main import CHECKIN_HELP_IMAGE, GetPxPlugin
+
+        self.assertEqual(CHECKIN_HELP_IMAGE, ROOT / "assets" / "checkin_help.png")
+        self.assertTrue(CHECKIN_HELP_IMAGE.is_file())
+        with Image.open(CHECKIN_HELP_IMAGE) as image:
+            self.assertEqual(image.format, "PNG")
+            self.assertEqual(image.size, (1440, 2040))
+        self.assertTrue(hasattr(GetPxPlugin, "cmd_checkin_help"))
+
     def test_required_h_paper_album_regions_exist(self):
         html = (TEMPLATE_DIR / "index.html").read_text(encoding="utf-8")
         css = (TEMPLATE_DIR / "style.css").read_text(encoding="utf-8")
