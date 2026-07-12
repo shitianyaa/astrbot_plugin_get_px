@@ -141,9 +141,17 @@
     "hint": "签到卡片 JPEG 输出质量。数值越高文字和插画越清晰，但文件也会更大；推荐 92–97。修改后会自动使用新的缓存。"
   },
   "checkin_ai_greeting_enabled": {
-    "description": "签到 AI 问候",
+    "description": "签到 AI 问候（旧配置兼容）",
     "type": "bool",
-    "default": false
+    "default": false,
+    "hint": "当问候来源选择 auto 时，开启后使用 AstrBot 文本模型，关闭后使用本地文案。"
+  },
+  "checkin_greeting_mode": {
+    "description": "签到问候来源",
+    "type": "string",
+    "default": "auto",
+    "options": ["auto", "local", "ai", "hitokoto"],
+    "hint": "auto=兼容原 AI 开关；local=本地事件文案；ai=AstrBot 文本模型；hitokoto=一言 API。远程请求失败时自动回退本地文案。"
   },
   "checkin_ai_greeting_provider_id": {
     "description": "签到问候模型",
@@ -161,6 +169,13 @@
     "type": "float",
     "default": 8.0,
     "slider": {"min": 1, "max": 30, "step": 1}
+  },
+  "checkin_hitokoto_timeout": {
+    "description": "一言请求超时（秒）",
+    "type": "float",
+    "default": 5.0,
+    "slider": {"min": 1, "max": 15, "step": 1},
+    "hint": "请求 https://v1.hitokoto.cn/ 的最长等待时间；超时或返回内容不合规时使用本地问候。"
   },
   "rate_limit_seconds": {
     "description": "请求频率限制（秒）",

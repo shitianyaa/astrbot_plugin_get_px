@@ -37,7 +37,7 @@ class CheckinCardTemplateV2Test(unittest.TestCase):
         self.assertIsNone(re.search(r"https?://", html + css))
 
     def test_runtime_template_embeds_local_css(self):
-        from astrbot_plugin_get_px.checkin_card import CHECKIN_CARD_TEMPLATE
+        from astrbot_plugin_get_px.checkin.card import CHECKIN_CARD_TEMPLATE
 
         self.assertNotIn("/*__CHECKIN_CARD_CSS__*/", CHECKIN_CARD_TEMPLATE)
         self.assertNotIn('href="./style.css"', CHECKIN_CARD_TEMPLATE)
@@ -116,6 +116,11 @@ class CheckinCardTemplateV2Test(unittest.TestCase):
         self.assertIn("max-width: 100%", nickname_only)
         self.assertIn("flex: 1 1 0", identity)
         self.assertIn("text-align: right", signature)
+        self.assertIn(
+            ".milestone-line {\n  justify-content: flex-start;\n}",
+            css,
+        )
+        self.assertIn("下一成就", html)
 
 
 if __name__ == "__main__":

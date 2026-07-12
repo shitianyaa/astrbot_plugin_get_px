@@ -44,7 +44,7 @@ def load_token() -> str:
 
 async def run_simulation(token: str):
     from pixivpy_async import AppPixivAPI
-    from image_index import ImageIndexStore, ordered_by_unused
+    from pixiv.index import ImageIndexStore, ordered_by_unused
 
     TAG = "蔚蓝档案"
     SCOPE = "group:test_123"

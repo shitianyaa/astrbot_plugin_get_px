@@ -2,16 +2,21 @@ from __future__ import annotations
 
 import tempfile
 from dataclasses import replace
-from pathlib import Path
 
 import pytest
 
+import checkin
 from checkin import ACHIEVEMENTS, CheckinStore
-from checkin_birthday import (
+from checkin.birthday import (
     birthday_matches,
     parse_month_day,
     parse_qq_birthday,
 )
+
+
+def test_checkin_package_exports_public_models() -> None:
+    assert checkin.CheckinStore is CheckinStore
+    assert checkin.ACHIEVEMENTS is ACHIEVEMENTS
 
 
 @pytest.mark.asyncio
@@ -76,7 +81,7 @@ async def test_achievements_unlock_idempotently_and_titles_require_unlock() -> N
         assert unlocked == ("first_meeting", "streak_7", "total_30")
         assert await store.unlock_achievements(profile) == ()
         preference = await store.get_user_preference("10001")
-        assert preference.selected_title_id == "first_meeting"
+        assert preference.selected_title_id == "total_30"
         assert await store.select_title(user_id="10001", title="七日同行") == "streak_7"
         with pytest.raises(ValueError, match="尚未解锁"):
             await store.select_title(user_id="10001", title="千日物语")

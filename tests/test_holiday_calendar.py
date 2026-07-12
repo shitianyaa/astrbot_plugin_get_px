@@ -8,7 +8,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from holiday_calendar import HolidayCalendar
+from checkin.holiday import HolidayCalendar
 
 
 def test_parse_and_lookup_online_holiday(tmp_path: Path) -> None:
@@ -126,7 +126,7 @@ def test_next_year_failure_does_not_discard_current_year(tmp_path: Path) -> None
     context.__aenter__.return_value = session
 
     calendar = HolidayCalendar(tmp_path, plugin_version="2.6.1")
-    with patch("holiday_calendar.aiohttp.ClientSession", return_value=context):
+    with patch("checkin.holiday.aiohttp.ClientSession", return_value=context):
         assert __import__("asyncio").run(calendar.refresh_if_due())
     assert calendar.lookup(f"{current_year}-01-01") is not None
     assert calendar._state["years"] == [current_year]

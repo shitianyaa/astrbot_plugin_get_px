@@ -4,7 +4,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 
-from astrbot_plugin_get_px.main import GetPxPlugin
+from astrbot_plugin_get_px.pixiv.filters import FiltersMixin
 
 
 class FilteringTest(unittest.TestCase):
@@ -15,7 +15,7 @@ class FilteringTest(unittest.TestCase):
             {"id": "3", "type": "ugoira"},
         ]
 
-        filtered = GetPxPlugin._filter_manga(illusts)
+        filtered = FiltersMixin._filter_manga(illusts)
 
         self.assertEqual([illust["id"] for illust in filtered], ["2", "3"])
 

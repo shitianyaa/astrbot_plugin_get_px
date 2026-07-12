@@ -7,8 +7,8 @@ from unittest import mock
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 
-import astrbot_plugin_get_px.downloader as dl  # noqa: E402
-from astrbot_plugin_get_px.downloader import ImageDownloader  # noqa: E402
+import astrbot_plugin_get_px.pixiv.downloader as dl  # noqa: E402
+from astrbot_plugin_get_px.pixiv.downloader import ImageDownloader  # noqa: E402
 
 
 class _FakeContent:

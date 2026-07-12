@@ -7,8 +7,8 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 
 from astrbot_plugin_get_px.checkin import CheckinProfile, CheckinRecord
-from astrbot_plugin_get_px.checkin_content import resolve_checkin_content
-from astrbot_plugin_get_px.holiday_calendar import OnlineHoliday
+from astrbot_plugin_get_px.checkin.content import resolve_checkin_content
+from astrbot_plugin_get_px.checkin.holiday import OnlineHoliday
 
 
 def make_record(**overrides: object) -> CheckinRecord:

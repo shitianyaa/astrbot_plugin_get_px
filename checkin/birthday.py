@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import re
 from datetime import date, datetime
-from typing import Any, Mapping
+from typing import Mapping
 
 
 def parse_month_day(value: object) -> tuple[int, int] | None:

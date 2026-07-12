@@ -1,7 +1,9 @@
 from __future__ import annotations
 
-import tempfile
+from contextlib import closing
+import sqlite3
 import sys
+import tempfile
 from types import SimpleNamespace
 from unittest.mock import AsyncMock
 from pathlib import Path
@@ -94,3 +96,25 @@ async def test_event_admin_and_title_commands() -> None:
         )
         assert "初见旅人" in await plugin._handle_checkin_titles(event)
         assert "已佩戴" in await plugin._handle_select_checkin_title(event, "初见旅人")
+
+
+@pytest.mark.asyncio
+async def test_old_user_achievements_are_backfilled_and_highest_title_is_equipped() -> None:
+    with tempfile.TemporaryDirectory() as tmp:
+        plugin = make_plugin(tmp)
+        event = FakeEvent()
+        await plugin.checkin_store.get_profile("10001")
+        with closing(sqlite3.connect(plugin.checkin_store._db_path)) as conn:
+            conn.execute(
+                "UPDATE checkin_profiles SET total_days = 30, streak_days = 7 WHERE user_id = ?",
+                ("10001",),
+            )
+            conn.commit()
+
+        achievements = await plugin._handle_checkin_achievements(event)
+        titles = await plugin._handle_checkin_titles(event)
+        preference = await plugin.checkin_store.get_user_preference("10001")
+
+        assert "本次补发: 初见旅人、七日同行、月下常客" in achievements
+        assert "[当前] 月下常客" in titles
+        assert preference.selected_title_id == "total_30"

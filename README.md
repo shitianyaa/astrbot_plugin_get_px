@@ -141,11 +141,11 @@
 
 法定节假日与调休数据来自 `holiday-cn` 年度数据，并保存在 AstrBot 插件数据目录。插件首次安装、插件版本变化时会在后台尝试更新一次；正常运行期间距上次成功更新满 `180` 天后再次更新。网络失败不会阻塞插件启动或签到，会继续使用旧缓存，并由内置公历日期和 `lunar-python` 农历节日规则兜底。每次更新会预取当前年份和下一年份的数据。
 
-签到问候可选择性启用 AI。管理员可以单独选择文本模型；未指定时尝试当前会话文本模型。单次调用默认最多等待 `8` 秒，模型未配置、超时、报错、返回空文本或输出不合规时均直接保留本地固定文案，不影响奖励和卡片发送。
+签到问候可选择本地事件文案、AstrBot 文本模型或 [一言 API](https://developer.hitokoto.cn/sentence/)。AI 模式可单独选择文本模型；未指定时尝试当前会话文本模型。一言模式每位用户当日首次签到仅请求一次，句子和卡片会随当日签到记录复用；API 超时、报错、返回空文本或内容不合规时，均回退到对应事件的本地文案，不影响奖励和卡片发送。`auto` 模式会继续尊重原有的 AI 开关。
 
 生日只保存月日，不保存出生年份。首次签到会在 OneBot QQ 平台尝试一次资料读取；直接使用 `/签到生日` 可查看生日，并在尚未保存时重新读取 QQ 资料。QQ 资料未公开时会给出提示，用户也可以手动设置或清除生日。管理员可以添加插件全局年度事件和单次事件。主事件按“生日、单次事件、年度事件、节假日、签到里程碑、连续签到”排序，其他同日事件进入次要备注。
 
-累计签到和连续签到会解锁称号：初见旅人、七日同行、月下常客、百日珍藏、周年相守和千日物语。首次解锁时自动佩戴第一个称号，之后可用 `/佩戴称号` 自行切换。
+累计签到和连续签到会解锁称号：初见旅人、七日同行、月下常客、百日珍藏、周年相守和千日物语。老用户在下一次签到、查看成就或查看称号时会按当前数据补发已满足的称号；尚未佩戴称号时自动佩戴当前已解锁的最高称号，之后可用 `/佩戴称号` 自行切换。
 
 ## 排行榜类型
 
@@ -201,10 +201,12 @@
 | `checkin_custom_background` | 本地图片路径；V2 仍按竖向作品相框完整显示 | 空 |
 | `checkin_avatar_enabled` | 签到卡片显示用户头像 | `true` |
 | `checkin_card_quality` | 签到卡片 JPEG 清晰度，范围 60–100；修改后自动生成新的当天缓存 | `95` |
-| `checkin_ai_greeting_enabled` | 签到 AI 问候开关；关闭时始终使用本地文案 | `false` |
+| `checkin_ai_greeting_enabled` | 旧 AI 开关兼容项；仅在 `checkin_greeting_mode=auto` 时决定使用 AI 或本地文案 | `false` |
+| `checkin_greeting_mode` | 签到问候来源：`auto` / `local` / `ai` / `hitokoto` | `auto` |
 | `checkin_ai_greeting_provider_id` | 签到问候文本模型；留空时尝试当前会话文本模型 | 空 |
 | `checkin_ai_greeting_prompt` | 签到问候提示词，使用 `{checkin_data}` 注入受控数据 | 见配置页 |
 | `checkin_ai_greeting_timeout` | 单次问候模型调用超时秒数；失败后回退本地文案 | `8.0` |
+| `checkin_hitokoto_timeout` | 一言 API 请求超时秒数；失败后回退本地文案 | `5.0` |
 | `rate_limit_seconds` | 同一用户请求频率限制，单位秒；`0` 为禁用 | `3` |
 | `ai_enabled` | AI 识图评论开关 | `false` |
 | `ai_probability` | AI 识图触发概率，范围 0-100 | `30` |
@@ -226,6 +228,10 @@
 - 发送用原图或大图是临时文件，发送完成后会自动清理。
 - 图片历史删除或加入黑名单不会清空当天已发作品索引。
 
+## 开发与架构
+
+项目已按签到、Pixiv、Web API 和 Plugin Pages 前端拆分，模块职责与依赖方向见 [项目架构](docs/project/architecture.md)。
+
 ## 获取 Pixiv Token
 
 可以使用 [pixiv-token](https://github.com/shitianyaa/pixiv-token) 获取 Pixiv `refresh_token`，然后填入插件配置的 `pixiv_refresh_token`。
@@ -242,4 +248,5 @@ Pillow
 
 - Pixiv 图片获取基于 [pixivpy-async](https://github.com/Mikubill/pixivpy-async)
 - 历史缩略图生成基于 [Pillow](https://python-pillow.org/)
+- 签到每日一言由 [Hitokoto API](https://github.com/hitokoto-osc/hitokoto-api) 提供，感谢一言开源社区和公共 API 服务
 - 每日签到设计参考 [zhenxun_bot](https://github.com/zhenxun-org/zhenxun_bot)

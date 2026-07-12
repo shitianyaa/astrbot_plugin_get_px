@@ -120,6 +120,7 @@ class CheckinBackupWebTest(unittest.IsolatedAsyncioTestCase):
                 "event_label",
                 "greeting",
                 "greeting_source",
+                "greeting_attribution",
                 "secondary_note",
                 "template_version",
             ):
@@ -157,6 +158,7 @@ class CheckinBackupWebTest(unittest.IsolatedAsyncioTestCase):
             imported = await plugin.checkin_store.get_today_record("20002")
             self.assertIsNotNone(imported)
             self.assertEqual(imported.greeting_source, "local")
+            self.assertEqual(imported.greeting_attribution, "")
             self.assertEqual(imported.template_version, "v2")
 
     async def test_web_checkin_import_rejects_invalid_snapshot(self):

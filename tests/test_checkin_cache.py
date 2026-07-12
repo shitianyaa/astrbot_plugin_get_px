@@ -13,7 +13,7 @@ from PIL import Image
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 
-from astrbot_plugin_get_px.checkin_cache import CheckinCardCache  # noqa: E402
+from astrbot_plugin_get_px.checkin.cache import CheckinCardCache  # noqa: E402
 
 
 def _write_jpeg(path: Path, *, size: tuple[int, int] = (960, 540)) -> None:
@@ -128,7 +128,7 @@ class CheckinCardCacheTest(unittest.IsolatedAsyncioTestCase):
             return str(renderer_output)
 
         with patch(
-            "astrbot_plugin_get_px.checkin_cache.shutil.copyfileobj",
+            "astrbot_plugin_get_px.checkin.cache.shutil.copyfileobj",
             side_effect=slow_copy,
         ):
             store_task = asyncio.create_task(
@@ -192,10 +192,10 @@ class CheckinCardCacheTest(unittest.IsolatedAsyncioTestCase):
                     pass
 
         with patch(
-            "astrbot_plugin_get_px.checkin_cache.shutil.copyfileobj",
+            "astrbot_plugin_get_px.checkin.cache.shutil.copyfileobj",
             side_effect=slow_copy,
         ), patch(
-            "astrbot_plugin_get_px.checkin_cache.asyncio.shield",
+            "astrbot_plugin_get_px.checkin.cache.asyncio.shield",
             side_effect=observed_shield,
         ):
             store_task = asyncio.create_task(store_with_caller_cleanup())
@@ -279,7 +279,7 @@ class CheckinCardCacheTest(unittest.IsolatedAsyncioTestCase):
             return str(renderer_output)
 
         with patch(
-            "astrbot_plugin_get_px.checkin_cache.shutil.copyfileobj",
+            "astrbot_plugin_get_px.checkin.cache.shutil.copyfileobj",
             side_effect=slow_copy,
         ):
             store_task = asyncio.create_task(

@@ -7,9 +7,9 @@ from types import SimpleNamespace
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 
-from astrbot_plugin_get_px import checkin_background  # noqa: E402
-from astrbot_plugin_get_px.checkin_card import CardBackground  # noqa: E402
-from astrbot_plugin_get_px.image_index import ImageIndexStore  # noqa: E402
+from astrbot_plugin_get_px.checkin import background as checkin_background  # noqa: E402
+from astrbot_plugin_get_px.checkin.card import CardBackground  # noqa: E402
+from astrbot_plugin_get_px.pixiv.index import ImageIndexStore  # noqa: E402
 from astrbot_plugin_get_px.main import GetPxPlugin  # noqa: E402
 
 

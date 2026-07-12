@@ -15,12 +15,16 @@ from PIL import Image as PILImage
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 
 from astrbot_plugin_get_px.main import GetPxPlugin  # noqa: E402
+from astrbot_plugin_get_px.checkin.application import (  # noqa: E402
+    CheckinApplicationMixin,
+)
+from astrbot_plugin_get_px.checkin.artwork import CheckinArtworkMixin  # noqa: E402
 from astrbot_plugin_get_px.checkin import (  # noqa: E402
     CheckinProfile,
     CheckinRecord,
     CheckinResult,
 )
-from astrbot_plugin_get_px.checkin_card import CardBackground  # noqa: E402
+from astrbot_plugin_get_px.checkin.card import CardBackground  # noqa: E402
 
 
 class _FakeEvent:
@@ -137,6 +141,7 @@ class _FakeCheckinStore:
             event_label=kwargs["event_label"],
             greeting=kwargs["greeting"],
             greeting_source=source,
+            greeting_attribution=kwargs.get("greeting_attribution", ""),
             secondary_note=kwargs["secondary_note"],
             template_version=kwargs["template_version"],
         )
@@ -155,6 +160,15 @@ class _FakeGreetingGenerator:
         self.order.append("ai")
         self.calls.append((event, context, kwargs))
         return "AI 今天也很高兴见到你", "ai"
+
+    async def generate_hitokoto(self, context, **kwargs):
+        self.order.append("hitokoto")
+        self.calls.append((context, kwargs))
+        return (
+            "每一天都是新的一页。",
+            "hitokoto",
+            "毛不易 · 芬芳一生",
+        )
 
 
 class _FakeCache:
@@ -263,13 +277,27 @@ class MainErrorHandlingTest(unittest.IsolatedAsyncioTestCase):
         self.assertNotIn("_format_duplicate_checkin_text", source)
 
     def test_checkin_flow_lock_is_user_scoped_across_midnight(self):
-        source = inspect.getsource(GetPxPlugin._handle_checkin)
+        source = inspect.getsource(CheckinApplicationMixin._handle_checkin)
 
         self.assertIn("lock_key = user_id", source)
         self.assertNotIn("CheckinStore.today_key()", source)
 
+    def test_greeting_mode_preserves_legacy_ai_switch(self):
+        plugin = object.__new__(GetPxPlugin)
+        plugin.config = {
+            "checkin_greeting_mode": "auto",
+            "checkin_ai_greeting_enabled": True,
+        }
+        self.assertEqual(plugin._checkin_greeting_mode(), "ai")
+        plugin.config["checkin_ai_greeting_enabled"] = False
+        self.assertEqual(plugin._checkin_greeting_mode(), "local")
+        plugin.config["checkin_greeting_mode"] = "hitokoto"
+        self.assertEqual(plugin._checkin_greeting_mode(), "hitokoto")
+
     def test_portrait_page_exhaustion_log_has_neutral_reason(self):
-        source = inspect.getsource(GetPxPlugin._download_checkin_pixiv_background)
+        source = inspect.getsource(
+            CheckinArtworkMixin._download_checkin_pixiv_background
+        )
 
         self.assertIn("连续 {CHECKIN_BACKGROUND_PAGE_ATTEMPTS} 页无可用竖向作品", source)
         self.assertNotIn(
@@ -416,6 +444,28 @@ class MainErrorHandlingTest(unittest.IsolatedAsyncioTestCase):
             self.assertLess(order.index("send"), order.index("usage"))
             self.assertTrue(plugin.checkin_cache.cache_path.exists())
             self.assertFalse(rendered.exists())
+
+    async def test_hitokoto_mode_upgrades_local_greeting_once(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            order = []
+            record = _record(persisted=False, with_background=False)
+            plugin = _plugin_for_checkin(
+                tmp, CheckinResult(_profile(), record, duplicate=False), order
+            )
+            plugin.config["checkin_greeting_mode"] = "hitokoto"
+
+            updated = await plugin._prepare_checkin_record_content(
+                _FakeEvent(order), record, allow_ai=True
+            )
+
+            self.assertEqual(updated.greeting_source, "hitokoto")
+            self.assertEqual(updated.greeting, "每一天都是新的一页。")
+            self.assertEqual(updated.greeting_attribution, "毛不易 · 芬芳一生")
+            self.assertEqual(
+                [item["greeting_source"] for item in plugin.checkin_store.content_updates],
+                ["local", "hitokoto"],
+            )
+            self.assertIn("hitokoto", order)
 
     async def test_render_failure_does_not_persist_artwork_or_usage(self):
         with tempfile.TemporaryDirectory() as tmp:

@@ -1,0 +1,425 @@
+from __future__ import annotations
+
+from pathlib import Path
+import re
+import time
+
+from astrbot.api.all import File, Image, Plain, logger
+from astrbot.api.event import AstrMessageEvent
+from astrbot.core.star.star_tools import StarTools
+
+from .models import (
+    ACHIEVEMENTS,
+    BOOST_PRODUCTS,
+    CheckinProfile,
+    CheckinRecord,
+    CheckinResult,
+)
+from .rules import affection_level, boost_status_text
+from .store import CheckinStore
+from .birthday import parse_month_day
+from .card import CardBackground
+from .snapshot import dump_checkin_snapshot_json
+try:
+    from ..pixiv.downloader import cleanup
+except ImportError:  # Direct imports used by the test suite.
+    from pixiv.downloader import cleanup
+
+
+LOG_PREFIX = "[GetPx]"
+PLUGIN_NAME = "astrbot_plugin_get_px"
+
+
+class CheckinCommandMixin:
+    """Implement user-facing check-in commands without AstrBot decorators."""
+
+    def _plugin_data_dir(self) -> Path:
+        data_dir = self.data_dir
+        if data_dir is None:
+            data_dir = Path(StarTools.get_data_dir(PLUGIN_NAME))
+            self.data_dir = data_dir
+        return Path(data_dir)
+
+    def _checkin_backup_dir(self) -> Path:
+        backup_dir = self._plugin_data_dir() / "checkin_backups"
+        backup_dir.mkdir(parents=True, exist_ok=True)
+        return backup_dir
+
+    @staticmethod
+    def _checkin_backup_name(prefix: str) -> str:
+        return f"{prefix}-{time.strftime('%Y%m%d-%H%M%S')}.json"
+
+    async def _write_checkin_snapshot_backup(self, *, prefix: str) -> Path:
+        if self.checkin_store is None:
+            raise RuntimeError("签到数据尚未初始化")
+        snapshot = await self.checkin_store.export_snapshot()
+        return self._write_checkin_snapshot_file(snapshot, prefix=prefix)
+
+    def _write_checkin_snapshot_file(
+        self, snapshot: dict[str, object], *, prefix: str
+    ) -> Path:
+        backup_dir = self._checkin_backup_dir()
+        file_path = backup_dir / self._checkin_backup_name(prefix)
+        index = 1
+        while file_path.exists():
+            timestamp = time.strftime("%Y%m%d-%H%M%S")
+            file_path = backup_dir / f"{prefix}-{timestamp}-{index}.json"
+            index += 1
+        file_path.write_text(dump_checkin_snapshot_json(snapshot), encoding="utf-8")
+        return file_path
+
+    async def _read_uploaded_file_bytes(self, upload) -> bytes:
+        filename = str(getattr(upload, "filename", "") or "").strip() or "upload.json"
+        safe_name = re.sub(r"[^A-Za-z0-9._-]+", "_", Path(filename).name)
+        temp_path = self._checkin_backup_dir() / f".upload-{time.time_ns()}-{safe_name}"
+        await upload.save(str(temp_path))
+        try:
+            return temp_path.read_bytes()
+        finally:
+            cleanup(str(temp_path))
+
+    async def _handle_checkin_preview(self, event: AstrMessageEvent):
+        user_id = str(event.get_sender_id() or "debug")
+        username = self._event_username(event, user_id)
+        bot_name = self._cfg_str("checkin_bot_name", "neko") or "neko"
+        date_key = CheckinStore.today_key()
+        now = CheckinStore.now_iso()
+        profile = CheckinProfile(
+            user_id=user_id,
+            coins=888,
+            affection=66.6,
+            total_days=12,
+            streak_days=5,
+            last_checkin_date=date_key,
+            boost_start_date="",
+            boost_until_date="",
+            repeat_penalty_date="",
+            repeat_penalty_total=0.0,
+            created_at=now,
+            updated_at=now,
+        )
+        record = CheckinRecord(
+            date_key=date_key,
+            user_id=user_id,
+            username=username,
+            bot_name=bot_name,
+            base_coins=88,
+            bonus_coins=12,
+            coins_reward=100,
+            base_affection=0.88,
+            bonus_affection=0.12,
+            affection_reward=1.0,
+            boost_active=False,
+            boost_multiplier=1.0,
+            total_coins_after=profile.coins,
+            total_affection_after=profile.affection,
+            total_days_after=profile.total_days,
+            streak_days_after=profile.streak_days,
+            note="签到测试预览，不会写入签到数据。",
+            background_mode="",
+            background_source="",
+            background_illust_id="",
+            background_title="",
+            background_author="",
+            created_at=now,
+            updated_at=now,
+        )
+        result = CheckinResult(profile=profile, record=record, duplicate=False)
+
+        background: CardBackground | None = None
+        card_path = ""
+        try:
+            background = await self._prepare_checkin_background(
+                event, record, claim_usage=False
+            )
+            card_path = await self._render_checkin_card(
+                event,
+                profile=profile,
+                record=record,
+                background=background,
+                bot_name=bot_name,
+            )
+        except Exception as e:
+            logger.warning(f"{LOG_PREFIX} 签到测试卡片渲染失败，回退纯文字: {e}")
+
+        if card_path:
+            try:
+                content = [
+                    Plain("签到测试预览（仅管理员，不写入签到数据）"),
+                    Image.fromFileSystem(card_path),
+                ]
+                if background and background.pixiv_caption:
+                    content.append(Plain(background.pixiv_caption))
+                await event.send(event.chain_result(content))
+                return
+            except Exception as e:
+                logger.warning(f"{LOG_PREFIX} 签到测试卡片发送失败，回退纯文字: {e}")
+            finally:
+                cleanup(card_path)
+                if background and background.image_path and background.mode == "pixiv_daily":
+                    cleanup(background.image_path)
+
+        if background and background.image_path and background.mode == "pixiv_daily":
+            cleanup(background.image_path)
+        yield event.plain_result(
+            "签到测试预览（未写入数据）\n" + self._format_checkin_plain_text(result)
+        )
+
+
+
+    async def _handle_checkin_export(self, event: AstrMessageEvent):
+        if self.checkin_store is None:
+            return event.plain_result("签到数据尚未初始化，请稍后再试")
+        try:
+            export_path = await self._write_checkin_snapshot_backup(
+                prefix="checkin-export"
+            )
+        except Exception as e:
+            logger.error(f"{LOG_PREFIX} 导出签到备份失败: {e}")
+            return event.plain_result(f"导出签到备份失败: {e}")
+        try:
+            await event.send(
+                event.chain_result([File(name=export_path.name, file=str(export_path))])
+            )
+            return None
+        except Exception as e:
+            logger.error(f"{LOG_PREFIX} 发送签到备份文件失败: {e}")
+            return event.plain_result(f"发送签到备份文件失败: {e}")
+
+
+
+    async def _handle_checkin_status(self, event: AstrMessageEvent):
+        if not self._cfg_bool("checkin_enabled", True):
+            yield event.plain_result("签到功能已关闭")
+            return
+        if self.checkin_store is None:
+            yield event.plain_result("签到数据尚未初始化，请稍后再试")
+            return
+        user_id = str(event.get_sender_id() or "")
+        if not user_id:
+            yield event.plain_result("无法识别用户 ID，暂时不能查看签到状态")
+            return
+        try:
+            profile = await self.checkin_store.get_profile(user_id)
+        except Exception as e:
+            logger.warning(f"{LOG_PREFIX} 读取签到状态失败: {e}")
+            yield event.plain_result(f"读取签到状态失败: {e}")
+            return
+        level = affection_level(profile.affection)
+        today = CheckinStore.today_key()
+        signed_today = profile.last_checkin_date == today
+        lines = [
+            "签到状态",
+            f"UID: {profile.user_id}",
+            f"今日: {'已签到' if signed_today else '未签到'}",
+            f"累计签到: {profile.total_days} 天",
+            f"连续签到: {profile.streak_days} 天",
+            f"金币: {profile.coins}",
+            f"好感度: {profile.affection:.2f}（{level['name']}）",
+            f"好感度加持: {boost_status_text(profile, today)}",
+        ]
+        yield event.plain_result("\n".join(lines))
+
+
+
+    async def _handle_checkin_birthday(
+        self, event: AstrMessageEvent, action: str, value: str
+    ) -> str:
+        if self.checkin_store is None:
+            return "签到数据尚未初始化，请稍后再试"
+        user_id = str(event.get_sender_id() or "")
+        if not user_id:
+            return "无法识别用户 ID"
+        action = str(action or "").strip()
+        try:
+            if action == "设置":
+                parsed = parse_month_day(value)
+                if parsed is None:
+                    return "用法: /签到生日 设置 MM-DD"
+                preference = await self.checkin_store.set_birthday(
+                    user_id=user_id, month=parsed[0], day=parsed[1], source="manual"
+                )
+                return f"生日已设置为 {preference.birthday_label}（手动）"
+            if action == "清除":
+                await self.checkin_store.clear_birthday(user_id)
+                return "生日已清除，再次使用 /签到生日 会重新读取 QQ 资料"
+            if action:
+                return "用法: /签到生日 或 /签到生日 设置 MM-DD 或 /签到生日 清除"
+            preference = await self.checkin_store.get_user_preference(user_id)
+            if preference.birthday_label:
+                source = "手动" if preference.birthday_source == "manual" else "QQ资料"
+                return f"当前签到生日: {preference.birthday_label}（{source}）"
+            parsed = await self._fetch_qq_birthday(event, user_id)
+            await self.checkin_store.mark_qq_birthday_checked(user_id)
+            if parsed is None:
+                return "用户未公开生日"
+            preference = await self.checkin_store.set_qq_birthday_if_not_manual(
+                user_id=user_id, month=parsed[0], day=parsed[1]
+            )
+            return f"当前签到生日: {preference.birthday_label}（QQ资料）"
+        except ValueError as exc:
+            return str(exc)
+
+
+
+    async def _handle_checkin_achievements(self, event: AstrMessageEvent) -> str:
+        if self.checkin_store is None:
+            return "签到数据尚未初始化，请稍后再试"
+        user_id = str(event.get_sender_id() or "")
+        profile = await self.checkin_store.get_profile(user_id)
+        newly_unlocked = await self.checkin_store.unlock_achievements(profile)
+        unlocked = set(await self.checkin_store.list_achievements(user_id))
+        lines = ["签到成就"]
+        if newly_unlocked:
+            names = "、".join(str(ACHIEVEMENTS[item]["title"]) for item in newly_unlocked)
+            lines.append(f"本次补发: {names}")
+        for achievement_id, definition in ACHIEVEMENTS.items():
+            value = profile.total_days if definition["kind"] == "total" else profile.streak_days
+            mark = "✓" if achievement_id in unlocked else "·"
+            lines.append(f"{mark} {definition['title']}（{min(value, definition['threshold'])}/{definition['threshold']}）")
+        return "\n".join(lines)
+
+
+
+    async def _handle_checkin_titles(self, event: AstrMessageEvent) -> str:
+        if self.checkin_store is None:
+            return "签到数据尚未初始化，请稍后再试"
+        user_id = str(event.get_sender_id() or "")
+        profile = await self.checkin_store.get_profile(user_id)
+        await self.checkin_store.unlock_achievements(profile)
+        preference = await self.checkin_store.get_user_preference(user_id)
+        unlocked = await self.checkin_store.list_achievements(user_id)
+        lines = ["签到称号"]
+        if not unlocked:
+            lines.append("尚未解锁称号，完成首次签到即可获得")
+        for achievement_id in unlocked:
+            title = str(ACHIEVEMENTS[achievement_id]["title"])
+            mark = "当前" if achievement_id == preference.selected_title_id else "可用"
+            lines.append(f"[{mark}] {title}（{achievement_id}）")
+        lines.append("使用 /佩戴称号 <称号ID或名称> 切换")
+        return "\n".join(lines)
+
+
+
+    async def _handle_select_checkin_title(self, event: AstrMessageEvent, title: str) -> str:
+        if self.checkin_store is None:
+            return "签到数据尚未初始化，请稍后再试"
+        if not title:
+            return "用法: /佩戴称号 <称号ID或名称>"
+        try:
+            user_id = str(event.get_sender_id() or "")
+            profile = await self.checkin_store.get_profile(user_id)
+            await self.checkin_store.unlock_achievements(profile)
+            title_id = await self.checkin_store.select_title(
+                user_id=user_id, title=title
+            )
+        except ValueError as exc:
+            return str(exc)
+        return f"已佩戴称号：{ACHIEVEMENTS[title_id]['title']}"
+
+
+
+    async def _handle_checkin_event_admin(
+        self, event: AstrMessageEvent, action: str, event_type: str, date_value: str, name: str
+    ) -> str:
+        if self.checkin_store is None:
+            return "签到数据尚未初始化，请稍后再试"
+        if action == "列表" or not action:
+            events = await self.checkin_store.list_global_events()
+            if not events:
+                return "当前没有全局签到事件"
+            return "\n".join(
+                ["全局签到事件"]
+                + [f"#{item.event_id} {item.event_type} {item.date_value} {item.name}" for item in events]
+            )
+        if action == "删除":
+            if not event_type.isdigit():
+                return "用法: /签到事件 删除 ID"
+            deleted = await self.checkin_store.delete_global_event(int(event_type))
+            return "事件已删除" if deleted else "未找到该事件"
+        if action in {"添加年度", "添加单次"}:
+            name = " ".join(part for part in (date_value, name) if part).strip()
+            date_value = event_type
+            event_type = action.removeprefix("添加")
+            action = "添加"
+        if action != "添加":
+            return "用法: /签到事件 添加 <年度|单次> <日期> <名称>"
+        type_map = {"年度": "annual", "单次": "once"}
+        if event_type not in type_map or not name:
+            return "用法: /签到事件 添加年度 MM-DD 名称\n或: /签到事件 添加单次 YYYY-MM-DD 名称"
+        try:
+            item = await self.checkin_store.add_global_event(
+                event_type=type_map[event_type], date_value=date_value,
+                name=name, created_by=str(event.get_sender_id() or ""),
+            )
+        except ValueError as exc:
+            return str(exc)
+        return f"已添加事件 #{item.event_id}: {item.date_value} {item.name}"
+
+
+
+    async def _handle_buy_checkin_boost(self, event: AstrMessageEvent, days: str):
+        if not self._cfg_bool("checkin_enabled", True):
+            yield event.plain_result("签到功能已关闭")
+            return
+        if self.checkin_store is None:
+            yield event.plain_result("签到数据尚未初始化，请稍后再试")
+            return
+        if not days or not days.isdigit():
+            yield event.plain_result("用法: /购买加持 <1|3|7>\n示例: /购买加持 3")
+            return
+        user_id = str(event.get_sender_id() or "")
+        if not user_id:
+            yield event.plain_result("无法识别用户 ID，暂时不能购买加持")
+            return
+        try:
+            purchase = await self.checkin_store.purchase_boost(
+                user_id=user_id,
+                days=int(days),
+            )
+        except Exception as e:
+            logger.warning(f"{LOG_PREFIX} 购买签到加持失败: {e}")
+            yield event.plain_result(f"购买失败: {e}")
+            return
+        lines = [purchase.message, f"当前金币: {purchase.profile.coins}"]
+        if purchase.success:
+            lines.append(
+                f"好感度加持: {boost_status_text(purchase.profile, CheckinStore.today_key())}"
+            )
+        yield event.plain_result("\n".join(lines))
+
+
+
+    @staticmethod
+    def _build_checkin_shop() -> str:
+        lines = [
+            "签到商店",
+            "金币可购买好感度双倍加持，加持只影响之后签到获得的好感度。",
+        ]
+        for days, cost in BOOST_PRODUCTS.items():
+            lines.append(f"/购买加持 {days} - {days} 天，{cost} 金币")
+        return "\n".join(lines)
+
+
+
+    @staticmethod
+    def _format_checkin_plain_text(result) -> str:
+        record = result.record
+        if record is None:
+            return "签到成功"
+        level = affection_level(record.total_affection_after)
+        heading = (
+            f"{record.username} 今日签到记录"
+            if result.duplicate
+            else f"{record.username} 签到成功"
+        )
+        return "\n".join(
+            [
+                heading,
+                f"日期: {record.date_key}",
+                f"今日奖励: 金币 +{record.coins_reward}，好感度 +{record.affection_reward:.2f}",
+                f"累计签到: {record.total_days_after} 天，连续签到: {record.streak_days_after} 天",
+                f"金币: {record.total_coins_after}，好感度: {record.total_affection_after:.2f}（{level['name']}）",
+                record.greeting or record.note,
+            ]
+        )

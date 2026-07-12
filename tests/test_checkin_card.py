@@ -1,5 +1,5 @@
 import base64
-from dataclasses import FrozenInstanceError
+from dataclasses import FrozenInstanceError, replace
 import sys
 import tempfile
 import unittest
@@ -12,13 +12,13 @@ from PIL import Image
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 
-from astrbot_plugin_get_px import checkin_card  # noqa: E402
+from astrbot_plugin_get_px.checkin import card as checkin_card  # noqa: E402
 from astrbot_plugin_get_px.checkin import CheckinProfile, CheckinRecord  # noqa: E402
-from astrbot_plugin_get_px.checkin_card import (  # noqa: E402
+from astrbot_plugin_get_px.checkin.card import (  # noqa: E402
     CardBackground,
     _file_to_data_url,
 )
-from astrbot_plugin_get_px.checkin_cache import CheckinCardCache  # noqa: E402
+from astrbot_plugin_get_px.checkin.cache import CheckinCardCache  # noqa: E402
 from astrbot_plugin_get_px.main import GetPxPlugin  # noqa: E402
 
 def _profile() -> CheckinProfile:
@@ -100,7 +100,7 @@ class CheckinCardViewModelTest(unittest.TestCase):
         self.assertNotIn("生日", view_model.badges)
         self.assertFalse(any(badge.startswith("×") for badge in view_model.badges))
         self.assertEqual(view_model.affection_next_text, "距离“信赖”还需 3.40")
-        self.assertEqual(view_model.milestone_next_text, "累计签到 30 天，还差 18 天")
+        self.assertEqual(view_model.milestone_next_text, "月下常客 · 还差 18 天")
         self.assertLessEqual(len(view_model.artwork_title), 18)
         self.assertTrue(view_model.artwork_title.endswith("…"))
         self.assertLessEqual(len(view_model.artwork_author), 12)
@@ -118,6 +118,19 @@ class CheckinCardViewModelTest(unittest.TestCase):
         self.assertNotIn("user_id", data)
         self.assertNotIn("123456789", repr(data))
         self.assertIn("星期六", str(data["date_label"]))
+
+    def test_hitokoto_greeting_uses_neutral_signature(self):
+        view_model = checkin_card.build_checkin_card_view_model(
+            profile=_profile(),
+            record=replace(
+                _record(),
+                greeting_source="hitokoto",
+                greeting_attribution="毛不易 · 芬芳一生",
+            ),
+            bot_name="neko",
+        )
+
+        self.assertEqual(view_model.bot_name, "毛不易 · 芬芳一生")
 
     def test_card_data_rejects_non_fixed_canvas_dimensions(self):
         for width, height in ((959, 540), (960, 539), (1200, 675), (960.5, 540)):

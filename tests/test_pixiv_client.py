@@ -5,7 +5,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 
-from astrbot_plugin_get_px.pixiv_client import PixivClient  # noqa: E402
+from astrbot_plugin_get_px.pixiv.client import PixivClient  # noqa: E402
 
 
 class _FakeNotFoundError(Exception):

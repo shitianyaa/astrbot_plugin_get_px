@@ -15,7 +15,7 @@ from checkin import (
     is_boost_active,
     load_checkin_snapshot_json,
 )
-from checkin_background import (
+from checkin.background import (
     filter_illusts_by_aspect_ratio,
     illust_aspect_ratio,
     parse_aspect_ratio,
@@ -343,6 +343,37 @@ class CheckinStoreTest(unittest.IsolatedAsyncioTestCase):
 
             self.assertEqual(await store.get_today_record("10001"), checked.record)
 
+    async def test_hitokoto_can_upgrade_local_content_once(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            store = FrozenCheckinStore(tmp)
+            await store.checkin(user_id="10001", username="tester", bot_name="neko")
+            await store.update_record_content(
+                user_id="10001",
+                date_key="2026-05-26",
+                event_key="normal",
+                event_label="",
+                greeting="Local greeting",
+                greeting_source="local",
+                secondary_note="",
+                template_version="v2",
+            )
+
+            remote = await store.update_record_content(
+                user_id="10001",
+                date_key="2026-05-26",
+                event_key="normal",
+                event_label="",
+                greeting="Hitokoto greeting",
+                greeting_source="hitokoto",
+                greeting_attribution="毛不易 · 芬芳一生",
+                secondary_note="",
+                template_version="v2",
+            )
+
+            self.assertEqual(remote.greeting_source, "hitokoto")
+            self.assertEqual(remote.greeting, "Hitokoto greeting")
+            self.assertEqual(remote.greeting_attribution, "毛不易 · 芬芳一生")
+
     async def test_empty_ai_update_cannot_reopen_local_content_transition(self):
         with tempfile.TemporaryDirectory() as tmp:
             store = FrozenCheckinStore(tmp)
@@ -546,6 +577,7 @@ class CheckinStoreTest(unittest.IsolatedAsyncioTestCase):
                 "event_label",
                 "greeting",
                 "greeting_source",
+                "greeting_attribution",
                 "secondary_note",
                 "template_version",
             ):
@@ -559,6 +591,7 @@ class CheckinStoreTest(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(normalized["records"][0]["event_label"], "")
             self.assertEqual(normalized["records"][0]["greeting"], "")
             self.assertEqual(normalized["records"][0]["greeting_source"], "local")
+            self.assertEqual(normalized["records"][0]["greeting_attribution"], "")
             self.assertEqual(normalized["records"][0]["secondary_note"], "")
             self.assertEqual(normalized["records"][0]["template_version"], "v2")
 
@@ -568,6 +601,7 @@ class CheckinStoreTest(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(summary["schema_version"], 3)
             self.assertIsNotNone(record)
             self.assertEqual(record.greeting_source, "local")
+            self.assertEqual(record.greeting_attribution, "")
             self.assertEqual(record.template_version, "v2")
 
     async def test_version_two_snapshot_rejects_invalid_greeting_source(self):

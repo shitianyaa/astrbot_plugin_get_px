@@ -1,0 +1,292 @@
+   ============================================= */
+.toast {
+  position: fixed;
+  bottom: 24px;
+  left: 50%;
+  transform: translateX(-50%);
+  max-width: 480px;
+  width: max-content;
+  padding: 12px 20px;
+  border-radius: var(--radius-md);
+  background: var(--paper);
+  color: var(--ink);
+  font-size: 13px;
+  font-weight: 500;
+  box-shadow: var(--shadow-lg);
+  border: 1px solid var(--line);
+  z-index: 1000;
+  animation: toastIn 0.3s var(--ease-spring);
+}
+
+.toast[hidden] {
+  display: none;
+}
+
+.toast.success {
+  border-color: var(--success);
+  background: var(--success-light);
+  color: #065F46;
+}
+
+.toast.error {
+  border-color: var(--danger);
+  background: var(--danger-light);
+  color: #991B1B;
+}
+
+.toast.link-toast {
+  padding: 14px 20px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  max-width: 520px;
+}
+
+.toast.link-toast div {
+  font-size: 13px;
+  color: var(--ink);
+}
+
+.toast.link-toast input {
+  width: 100%;
+  padding: 6px 10px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-sm);
+  background: var(--paper-2);
+  font-size: 12px;
+  color: var(--ink);
+  font-family: monospace;
+}
+
+@keyframes toastIn {
+  from {
+    opacity: 0;
+    transform: translateX(-50%) translateY(12px);
+  }
+  to {
+    opacity: 1;
+    transform: translateX(-50%) translateY(0);
+  }
+}
+
+/* =============================================
+   CONFIRM DIALOG
+   ============================================= */
+.confirm-dialog {
+  position: fixed;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: rgba(15, 23, 42, 0.40);
+  backdrop-filter: blur(4px);
+  -webkit-backdrop-filter: blur(4px);
+  z-index: 2000;
+  animation: fadeIn 0.2s var(--ease-out);
+}
+
+.confirm-dialog[hidden] {
+  display: none;
+}
+
+.confirm-panel {
+  background: var(--paper);
+  border-radius: var(--radius-lg);
+  padding: 28px 32px;
+  max-width: 440px;
+  width: calc(100vw - 48px);
+  box-shadow: var(--shadow-lg);
+  text-align: center;
+  animation: dialogIn 0.3s var(--ease-spring);
+}
+
+.confirm-kicker {
+  font-size: 11px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.10em;
+  color: var(--danger);
+  margin-bottom: 8px;
+}
+
+.confirm-panel h2 {
+  font-family: var(--font-serif);
+  font-size: 18px;
+  font-weight: 700;
+  color: var(--ink);
+  margin-bottom: 8px;
+}
+
+.confirm-panel > p {
+  font-size: 13px;
+  color: var(--muted);
+  line-height: 1.6;
+  margin-bottom: 20px;
+}
+
+.confirm-actions {
+  display: flex;
+  gap: 10px;
+  justify-content: center;
+}
+
+.confirm-actions button {
+  padding: 10px 24px;
+  border-radius: var(--radius-sm);
+  font-size: 13px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: background var(--dur-fast) var(--ease-out),
+              transform var(--dur-fast) var(--ease-out);
+  border: 1px solid var(--line);
+  background: var(--paper);
+  color: var(--ink);
+}
+
+.confirm-actions button:hover {
+  background: var(--paper-2);
+}
+
+.confirm-actions button:active {
+  transform: scale(0.97);
+}
+
+.button-danger-solid {
+  background: var(--danger) !important;
+  color: #FFFFFF !important;
+  border-color: var(--danger) !important;
+}
+
+.button-danger-solid:hover {
+  background: #B91C1C !important;
+  border-color: #B91C1C !important;
+}
+
+@keyframes fadeIn {
+  from { opacity: 0; }
+  to   { opacity: 1; }
+}
+
+@keyframes dialogIn {
+  from {
+    opacity: 0;
+    transform: scale(0.94) translateY(8px);
+  }
+  to {
+    opacity: 1;
+    transform: scale(1) translateY(0);
+  }
+}
+
+/* =============================================
+   LIGHTBOX
+   ============================================= */
+.lightbox {
+  position: fixed;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: rgba(15, 23, 42, 0.85);
+  backdrop-filter: blur(8px);
+  -webkit-backdrop-filter: blur(8px);
+  z-index: 3000;
+  animation: fadeIn 0.2s var(--ease-out);
+  padding: 32px;
+}
+
+.lightbox[hidden] {
+  display: none;
+}
+
+.lightbox img {
+  max-width: 90vw;
+  max-height: 85vh;
+  object-fit: contain;
+  border-radius: var(--radius-md);
+  box-shadow: var(--shadow-lg);
+  animation: dialogIn 0.3s var(--ease-spring);
+}
+
+.lightbox-close {
+  position: absolute;
+  top: 16px;
+  right: 16px;
+  padding: 8px 18px;
+  border: 1px solid rgba(255, 255, 255, 0.20);
+  border-radius: var(--radius-sm);
+  background: rgba(255, 255, 255, 0.08);
+  color: #FFFFFF;
+  font-size: 13px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: background var(--dur-fast) var(--ease-out);
+}
+
+.lightbox-close:hover {
+  background: rgba(255, 255, 255, 0.18);
+}
+
+/* =============================================
+   FLOATING REFRESH BUTTON
+   ============================================= */
+.floating-refresh {
+  position: fixed;
+  bottom: 24px;
+  right: 24px;
+  width: 44px;
+  height: 44px;
+  padding: 0;
+  border: 1px solid var(--line);
+  border-radius: 50%;
+  background: var(--paper);
+  box-shadow: var(--shadow);
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 500;
+  transition: background var(--dur) var(--ease-out),
+              border-color var(--dur) var(--ease-out),
+              box-shadow var(--dur) var(--ease-out),
+              transform var(--dur) var(--ease-out);
+}
+
+.floating-refresh:hover {
+  box-shadow: var(--shadow-lg);
+  transform: translateY(-2px);
+  border-color: var(--accent-2);
+  background: var(--accent-2);
+}
+
+.floating-refresh:hover svg {
+  stroke: #FFFFFF;
+}
+
+.floating-refresh:active {
+  transform: scale(0.94);
+}
+
+.floating-refresh:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
+  pointer-events: none;
+}
+
+.floating-refresh svg {
+  width: 18px;
+  height: 18px;
+  fill: none;
+  stroke: var(--muted);
+  stroke-width: 2;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+  transition: stroke var(--dur-fast) var(--ease-out);
+}
+
+/* =============================================
+   DARK MODE — Component Overrides
+   These components use fixed light surfaces (near-white cover chips,
+   tinted toasts) with hardcoded text colors that lose contrast once
+   the palette flips. Re-tint them for dark mode only — light mode is
+   left untouched. Placed after the base rules so source order wins.

@@ -9,19 +9,15 @@ from typing import Any, Iterable
 
 from astrbot.api import logger
 
-from .checkin import (
-    CheckinProfile,
-    CheckinRecord,
-    affection_level,
-    boost_remaining_days,
-)
-from .checkin_content import CheckinContent, MILESTONES
+from .content import CheckinContent, MILESTONES
+from .models import ACHIEVEMENTS, CheckinProfile, CheckinRecord
+from .rules import affection_level, boost_remaining_days
 
 
 CHECKIN_CARD_WIDTH = 960
 CHECKIN_CARD_HEIGHT = 540
 
-_TEMPLATE_DIR = Path(__file__).with_name("templates") / "checkin_card_v2"
+_TEMPLATE_DIR = Path(__file__).resolve().parents[1] / "templates" / "checkin_card_v2"
 _CSS_MARKER = "/*__CHECKIN_CARD_CSS__*/"
 _FONT_DATA_MARKER = "__CHECKIN_CARD_FONT_DATA__"
 _FONT_PATH = _TEMPLATE_DIR / "fonts" / "LXGWWenKaiLite-GB2312.woff2"
@@ -160,10 +156,13 @@ def _affection_next_text(value: float, level: dict[str, Any]) -> str:
 
 
 def _milestone_next_text(total_days: int) -> str:
-    for milestone in MILESTONES:
-        if milestone > total_days:
-            return f"累计签到 {milestone} 天，还差 {milestone - total_days} 天"
-    return "已完成全部签到纪念"
+    for definition in ACHIEVEMENTS.values():
+        if definition["kind"] != "total":
+            continue
+        threshold = int(definition["threshold"])
+        if threshold > total_days:
+            return f'{definition["title"]} · 还差 {threshold - total_days} 天'
+    return "已解锁全部签到成就"
 
 
 def _artwork_aspect_ratio(background: CardBackground) -> float | None:
@@ -218,7 +217,12 @@ def build_checkin_card_view_model(
         username=_one_line(record.username or "访客"),
         avatar_url=_one_line(avatar_url),
         user_title=_truncate_display(user_title, 16),
-        bot_name=_truncate_display(bot_name or record.bot_name or "neko", 16),
+        bot_name=_truncate_display(
+            (record.greeting_attribution or "一言")
+            if record.greeting_source == "hitokoto"
+            else (bot_name or record.bot_name or "neko"),
+            20,
+        ),
         greeting=_truncate_display(greeting or record.note or "明天也要来哦", 44),
         greeting_source=_one_line(record.greeting_source or "local"),
         secondary_note=_truncate_display(secondary_note, 44),

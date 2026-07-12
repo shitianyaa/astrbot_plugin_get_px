@@ -5,7 +5,7 @@ import unittest
 from datetime import datetime
 from pathlib import Path
 
-from image_index import ImageIndexStore
+from pixiv.index import ImageIndexStore
 
 
 class FrozenImageIndexStore(ImageIndexStore):
@@ -278,7 +278,7 @@ class ImageIndexStoreTest(unittest.IsolatedAsyncioTestCase):
                 self.assertEqual(new_offset, 30)
 
                 # 直接修改数据库，把 updated_at 改成 PAGE_CURSOR_TTL_DAYS+1 天前
-                from image_index import PAGE_CURSOR_TTL_DAYS
+                from pixiv.index import PAGE_CURSOR_TTL_DAYS
                 from datetime import timedelta
                 old_time = store._frozen_dt - timedelta(days=PAGE_CURSOR_TTL_DAYS + 1)
                 # 关闭 store 的连接，用独立连接修改数据库

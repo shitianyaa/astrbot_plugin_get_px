@@ -9,8 +9,9 @@ import pytest
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 
-from astrbot_plugin_get_px.checkin_content import GreetingContext
-from astrbot_plugin_get_px.checkin_greeting import DEFAULT_CHECKIN_GREETING_PROMPT, CheckinGreetingGenerator
+from astrbot_plugin_get_px.checkin.content import GreetingContext
+from astrbot_plugin_get_px.checkin import greeting as checkin_greeting
+from astrbot_plugin_get_px.checkin.greeting import DEFAULT_CHECKIN_GREETING_PROMPT, CheckinGreetingGenerator
 
 
 @dataclass
@@ -40,6 +41,39 @@ class FakeContext:
 @dataclass
 class FakeEvent:
     unified_msg_origin: str = "group:123"
+
+
+class FakeHitokotoResponse:
+    def __init__(self, payload: object):
+        self.payload = payload
+
+    async def __aenter__(self):
+        return self
+
+    async def __aexit__(self, *_args):
+        return None
+
+    def raise_for_status(self) -> None:
+        return None
+
+    async def json(self, **_kwargs):
+        return self.payload
+
+
+class FakeHitokotoSession:
+    def __init__(self, payload: object, calls: list[dict[str, object]], **_kwargs):
+        self.payload = payload
+        self.calls = calls
+
+    async def __aenter__(self):
+        return self
+
+    async def __aexit__(self, *_args):
+        return None
+
+    def get(self, url: str, **kwargs):
+        self.calls.append({"url": url, **kwargs})
+        return FakeHitokotoResponse(self.payload)
 
 
 def make_greeting_context(username: str = "Alice") -> GreetingContext:
@@ -149,6 +183,62 @@ async def test_timeout_and_empty_response_use_local_fallback() -> None:
 
     assert timeout_result == ("本地问候。", "local")
     assert empty_result == ("本地问候。", "local")
+
+
+@pytest.mark.asyncio
+async def test_hitokoto_source_returns_valid_short_sentence(monkeypatch) -> None:
+    calls: list[dict[str, object]] = []
+    monkeypatch.setattr(
+        checkin_greeting.aiohttp,
+        "ClientSession",
+        lambda **kwargs: FakeHitokotoSession(
+            {
+                "hitokoto": "今日也要好好生活。",
+                "from_who": "毛不易",
+                "from": "芬芳一生",
+            },
+            calls,
+            **kwargs,
+        ),
+    )
+
+    result = await CheckinGreetingGenerator(FakeContext()).generate_hitokoto(
+        make_greeting_context(), timeout=5.0
+    )
+
+    assert result == (
+        "今日也要好好生活。",
+        "hitokoto",
+        "毛不易 · 芬芳一生",
+    )
+    assert calls[0]["url"] == checkin_greeting.HITOKOTO_API_URL
+    assert calls[0]["params"] == {"encode": "json", "max_length": "44"}
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("payload", ({}, [], {"hitokoto": "很" * 45}))
+async def test_invalid_hitokoto_payload_uses_local_fallback(
+    monkeypatch, payload: object
+) -> None:
+    monkeypatch.setattr(
+        checkin_greeting.aiohttp,
+        "ClientSession",
+        lambda **kwargs: FakeHitokotoSession(payload, [], **kwargs),
+    )
+
+    result = await CheckinGreetingGenerator(FakeContext()).generate_hitokoto(
+        make_greeting_context(), timeout=5.0
+    )
+
+    assert result == ("本地问候。", "local", "")
+
+
+def test_hitokoto_attribution_handles_missing_or_unsafe_fields() -> None:
+    formatter = CheckinGreetingGenerator._hitokoto_attribution
+
+    assert formatter(None, "芬芳一生") == "芬芳一生"
+    assert formatter("", "") == "一言"
+    assert formatter("<b>作者</b>", "作品") == "作品"
 
 
 @pytest.mark.asyncio
