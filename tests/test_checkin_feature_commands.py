@@ -48,7 +48,9 @@ def make_plugin(data_dir: str) -> GetPxPlugin:
 async def test_birthday_command_manual_clear_and_direct_fetch() -> None:
     with tempfile.TemporaryDirectory() as tmp:
         plugin = make_plugin(tmp)
-        event = FakeEvent({"birthday_year": 2000, "birthday_month": 7, "birthday_day": 11})
+        event = FakeEvent(
+            {"birthday_year": 2000, "birthday_month": 7, "birthday_day": 11}
+        )
         assert "07-11" in await plugin._handle_checkin_birthday(event, "设置", "07-11")
         assert "手动" in await plugin._handle_checkin_birthday(event, "", "")
         assert "已清除" in await plugin._handle_checkin_birthday(event, "清除", "")
@@ -59,9 +61,7 @@ async def test_birthday_command_manual_clear_and_direct_fetch() -> None:
 async def test_birthday_direct_lookup_reports_private_profile() -> None:
     with tempfile.TemporaryDirectory() as tmp:
         plugin = make_plugin(tmp)
-        event = FakeEvent(
-            {"birthday_year": 0, "birthday_month": 0, "birthday_day": 0}
-        )
+        event = FakeEvent({"birthday_year": 0, "birthday_month": 0, "birthday_day": 0})
 
         assert await plugin._handle_checkin_birthday(event, "", "") == "用户未公开生日"
 
@@ -109,7 +109,77 @@ async def test_event_admin_and_title_commands() -> None:
 
 
 @pytest.mark.asyncio
-async def test_old_user_achievements_are_backfilled_and_highest_title_is_equipped() -> None:
+async def test_theme_shop_purchase_and_switch_commands() -> None:
+    with tempfile.TemporaryDirectory() as tmp:
+        plugin = make_plugin(tmp)
+        plugin.config = {
+            "checkin_enabled": True,
+            "checkin_theme_price": 10,
+            "checkin_background_refresh_cost": 5,
+        }
+        event = FakeEvent()
+        await plugin.checkin_store.checkin(
+            user_id="10001", username="测试用户", bot_name="neko"
+        )
+
+        shop = plugin._build_checkin_shop()
+        assert "/刷新签到背景 - 5 金币" in shop
+        assert "/购买主题 01 - 浅蓝，10 金币" in shop
+
+        purchased = await plugin._handle_buy_checkin_theme(event, "01")
+        assert "购买成功" in purchased
+        assert "浅蓝" in purchased
+        themes = await plugin._handle_checkin_themes(event)
+        assert "[当前] 01 · 浅蓝" in themes
+
+        switched = await plugin._handle_select_checkin_theme(event, "默认")
+        assert "米白" in switched
+        preference = await plugin.checkin_store.get_user_preference("10001")
+        assert preference.selected_theme_id == "default"
+
+
+@pytest.mark.asyncio
+async def test_theme_preview_is_available_without_purchase_or_database_write() -> None:
+    with tempfile.TemporaryDirectory() as tmp:
+        plugin = make_plugin(tmp)
+        event = FakeEvent()
+
+        before = await plugin.checkin_store.export_snapshot()
+        result = await plugin._handle_checkin_theme_preview(event, "1")
+        after = await plugin.checkin_store.export_snapshot()
+
+        assert len(result) == 2
+        assert result[0].text.startswith("主题预览：01 · 浅蓝")
+        preview_path = Path(result[1].path)
+        assert preview_path.name == "preview.png"
+        assert preview_path.parent.name == "01_stellar_ticket"
+        assert before == after
+
+        usage = await plugin._handle_checkin_theme_preview(event, "unknown")
+        assert "用法：/查看主题 <编号>" in usage
+
+
+@pytest.mark.asyncio
+async def test_background_refresh_requires_today_checkin() -> None:
+    with tempfile.TemporaryDirectory() as tmp:
+        plugin = make_plugin(tmp)
+        plugin.config = {
+            "checkin_enabled": True,
+            "checkin_background_mode": "pixiv_daily",
+            "checkin_background_refresh_cost": 100,
+        }
+        event = FakeEvent()
+
+        outputs = [
+            item async for item in plugin._handle_refresh_checkin_background(event)
+        ]
+        assert outputs == ["请先完成今天的签到，再更新背景"]
+
+
+@pytest.mark.asyncio
+async def test_old_user_achievements_are_backfilled_and_highest_title_is_equipped() -> (
+    None
+):
     with tempfile.TemporaryDirectory() as tmp:
         plugin = make_plugin(tmp)
         event = FakeEvent()
@@ -184,12 +254,9 @@ async def test_preview_uses_real_data_and_remote_greeting_without_writes(
         if greeting_mode == "hitokoto":
             assert render_kwargs["record"].greeting == "一言测试问候"
             plugin.checkin_greeting.generate_hitokoto.assert_awaited_once()
-            assert (
-                plugin.checkin_greeting.generate_hitokoto.await_args.kwargs[
-                    "categories"
-                ]
-                == ["动画", "诗词"]
-            )
+            assert plugin.checkin_greeting.generate_hitokoto.await_args.kwargs[
+                "categories"
+            ] == ["动画", "诗词"]
             plugin.checkin_greeting.generate.assert_not_awaited()
         else:
             assert render_kwargs["record"].greeting == "AI 测试问候"

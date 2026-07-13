@@ -75,16 +75,56 @@ _EVENT_GREETINGS: dict[str, tuple[str, str, str]] = {
         "又来到{event}，很高兴今天也与你相遇。",
         "{event}值得珍藏，而你让这一天更加特别。",
     ),
-    "new_year": ("元旦快乐，愿新一年平安顺遂。", "新年又见面了，一起收好今天的祝福吧。", "新年的第一页，也想继续与你并肩写下。"),
-    "spring_festival": ("春节快乐，愿新春安稳如意。", "新春相遇，愿团圆与好运都来到你身边。", "新岁与你重逢，就是我收到的最好祝福。"),
-    "lantern_festival": ("元宵节快乐，愿灯火照亮你的归途。", "元宵相遇，记得收下今天这份圆满。", "万家灯火里，我依然最期待与你相见。"),
-    "labour_day": ("劳动节快乐，也要记得好好休息。", "假日相遇，愿今天轻松又自在。", "辛苦之后的闲暇，想与你一起慢慢珍藏。"),
-    "dragon_boat": ("端午安康，愿你今日顺遂。", "端午相遇，愿粽香与好运都陪着你。", "端午安康，与你相见让今日更值得纪念。"),
-    "qixi": ("七夕快乐，愿今天有温柔相伴。", "七夕又见面了，愿你的心意都有回应。", "星河漫长，而我仍在这里等你如约而来。"),
-    "mid_autumn": ("中秋快乐，愿你平安团圆。", "月圆之夜与你相遇，今天也圆满了。", "月色很好，而与你重逢让它更值得珍藏。"),
-    "national_day": ("国庆节快乐，愿假日轻松顺利。", "国庆相遇，愿今天多一份从容好心情。", "在这个特别的日子与你见面，真好。"),
-    "double_ninth": ("重阳安康，愿岁岁平安。", "重阳相遇，愿秋日温柔常伴你左右。", "又逢重阳，与你共记这一页便是珍贵。"),
-    "workday": ("今天是调休工作日，也别忘了留一点休息时间。", "调休工作日也要照顾好自己，我们慢慢来。", "即使今天需要补班，我也想为你留一小段温柔。"),
+    "new_year": (
+        "元旦快乐，愿新一年平安顺遂。",
+        "新年又见面了，一起收好今天的祝福吧。",
+        "新年的第一页，也想继续与你并肩写下。",
+    ),
+    "spring_festival": (
+        "春节快乐，愿新春安稳如意。",
+        "新春相遇，愿团圆与好运都来到你身边。",
+        "新岁与你重逢，就是我收到的最好祝福。",
+    ),
+    "lantern_festival": (
+        "元宵节快乐，愿灯火照亮你的归途。",
+        "元宵相遇，记得收下今天这份圆满。",
+        "万家灯火里，我依然最期待与你相见。",
+    ),
+    "labour_day": (
+        "劳动节快乐，也要记得好好休息。",
+        "假日相遇，愿今天轻松又自在。",
+        "辛苦之后的闲暇，想与你一起慢慢珍藏。",
+    ),
+    "dragon_boat": (
+        "端午安康，愿你今日顺遂。",
+        "端午相遇，愿粽香与好运都陪着你。",
+        "端午安康，与你相见让今日更值得纪念。",
+    ),
+    "qixi": (
+        "七夕快乐，愿今天有温柔相伴。",
+        "七夕又见面了，愿你的心意都有回应。",
+        "星河漫长，而我仍在这里等你如约而来。",
+    ),
+    "mid_autumn": (
+        "中秋快乐，愿你平安团圆。",
+        "月圆之夜与你相遇，今天也圆满了。",
+        "月色很好，而与你重逢让它更值得珍藏。",
+    ),
+    "national_day": (
+        "国庆节快乐，愿假日轻松顺利。",
+        "国庆相遇，愿今天多一份从容好心情。",
+        "在这个特别的日子与你见面，真好。",
+    ),
+    "double_ninth": (
+        "重阳安康，愿岁岁平安。",
+        "重阳相遇，愿秋日温柔常伴你左右。",
+        "又逢重阳，与你共记这一页便是珍贵。",
+    ),
+    "workday": (
+        "今天是调休工作日，也别忘了留一点休息时间。",
+        "调休工作日也要照顾好自己，我们慢慢来。",
+        "即使今天需要补班，我也想为你留一小段温柔。",
+    ),
 }
 
 
@@ -132,7 +172,10 @@ class GreetingContext:
             ("关系阶段", self.relationship_stage),
             ("连续签到", f"{self.streak_days} 天"),
             ("累计签到", f"{self.total_days} 天"),
-            ("今日奖励", f"金币 +{self.coins_reward}，好感度 +{self.affection_reward:g}"),
+            (
+                "今日奖励",
+                f"金币 +{self.coins_reward}，好感度 +{self.affection_reward:g}",
+            ),
             ("里程碑", self.milestone or "无"),
             ("加持状态", self.boost_status or "无"),
             ("当前称号", self.current_title or "无"),
@@ -216,43 +259,55 @@ def resolve_checkin_content(
 
     candidates: list[tuple[str, str, str, str]] = []
     if birthday_label:
-        candidates.append((
-            "birthday",
-            birthday_label,
-            "生日纪念",
-            "生日",
-        ))
+        candidates.append(
+            (
+                "birthday",
+                birthday_label,
+                "生日纪念",
+                "生日",
+            )
+        )
     if custom_event_label:
-        candidates.append((
-            "custom",
-            custom_event_label,
-            "纪念日相遇",
-            custom_event_label,
-        ))
+        candidates.append(
+            (
+                "custom",
+                custom_event_label,
+                "纪念日相遇",
+                custom_event_label,
+            )
+        )
     if built_in:
         key, label, built_in_title = built_in
         candidates.append((key, label, built_in_title, label))
     if milestone:
-        candidates.append((
-            "milestone",
-            f"累计签到 {milestone} 天",
-            "签到纪念",
-            f"{milestone}天",
-        ))
+        candidates.append(
+            (
+                "milestone",
+                f"累计签到 {milestone} 天",
+                "签到纪念",
+                f"{milestone}天",
+            )
+        )
     if streak_event:
-        candidates.append((
-            "streak",
-            f"连续签到 {record.streak_days_after} 天",
-            "连续相遇",
-            f"连签{record.streak_days_after}天",
-        ))
+        candidates.append(
+            (
+                "streak",
+                f"连续签到 {record.streak_days_after} 天",
+                "连续相遇",
+                f"连签{record.streak_days_after}天",
+            )
+        )
     event_key, event_label, title, badge = (
         candidates[0] if candidates else ("normal", "", "今日签到", "")
     )
 
     stage = _relationship_stage(profile.affection)
     greeting_key = "workday" if event_key == "normal" and workday_label else event_key
-    bank = _NORMAL_GREETINGS if greeting_key == "normal" else _event_greeting_bank(greeting_key)
+    bank = (
+        _NORMAL_GREETINGS
+        if greeting_key == "normal"
+        else _event_greeting_bank(greeting_key)
+    )
     greeting = _stable_choice(
         bank[stage], record.user_id, record.date_key, greeting_key, stage
     ).format(event=event_label)

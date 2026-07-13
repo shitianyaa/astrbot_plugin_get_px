@@ -48,9 +48,13 @@ class Scenario:
 
 SCENARIOS = (
     Scenario("01-normal", "普通签到"),
-    Scenario("02-online-holiday", "联网法定节假日", online_holiday=OnlineHoliday("国庆黄金周", True)),
+    Scenario(
+        "02-online-holiday",
+        "联网法定节假日",
+        online_holiday=OnlineHoliday("国庆黄金周", True),
+    ),
     Scenario("03-lunar-festival", "农历节日（春节）", date_key="2026-02-17"),
-    Scenario("04-birthday", "生日" , birthday="生日"),
+    Scenario("04-birthday", "生日", birthday="生日"),
     Scenario("05-custom-event", "自定义纪念日", custom_event="相遇纪念日"),
     Scenario("06-milestone", "累计签到里程碑", total_days=30),
     Scenario("07-streak", "连续签到事件", total_days=31, streak_days=7),
@@ -201,7 +205,9 @@ async def render_matrix() -> list[dict[str, object]]:
                 illust_id="445566" if scenario.with_artwork else "",
                 title="夏日画页" if scenario.with_artwork else "",
                 author="测试画师" if scenario.with_artwork else "",
-                illust={"width": 750, "height": 1000} if scenario.with_artwork else None,
+                illust={"width": 750, "height": 1000}
+                if scenario.with_artwork
+                else None,
             )
             data = build_checkin_card_data(
                 profile=profile,
@@ -268,7 +274,12 @@ def build_contact_sheet(report: list[dict[str, object]]) -> Path:
             thumb = source.resize(thumb_size, Image.Resampling.LANCZOS)
         sheet.paste(thumb, (x, y + 28))
         status = "PASS" if not item["outside"] else "OUTSIDE"
-        draw.text((x, y), f"{item['scenario']}  {item['label']}  [{status}]", fill="#332b26", font=font)
+        draw.text(
+            (x, y),
+            f"{item['scenario']}  {item['label']}  [{status}]",
+            fill="#332b26",
+            font=font,
+        )
     path = OUTPUT_DIR / "checkin-event-matrix-contact-sheet.png"
     sheet.save(path)
     return path
@@ -277,9 +288,13 @@ def build_contact_sheet(report: list[dict[str, object]]) -> Path:
 async def main() -> None:
     report = await render_matrix()
     report_path = OUTPUT_DIR / "report.json"
-    report_path.write_text(json.dumps(report, ensure_ascii=False, indent=2), encoding="utf-8")
+    report_path.write_text(
+        json.dumps(report, ensure_ascii=False, indent=2), encoding="utf-8"
+    )
     contact_sheet = build_contact_sheet(report)
-    failures = [item for item in report if item["size"] != [960, 540] or item["outside"]]
+    failures = [
+        item for item in report if item["size"] != [960, 540] or item["outside"]
+    ]
     print(f"Rendered {len(report)} scenarios: {contact_sheet}")
     print(json.dumps(report, ensure_ascii=False, indent=2))
     if failures:

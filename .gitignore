@@ -2,5 +2,15 @@ __pycache__/
 *.pyc
 .pytest_cache/
 .ruff_cache/
+.venv/
+.vscode/
+node_modules/
+playwright-report/
+test-results/
+.claude/
+.agents/
 .omo/
+scratch/
 data/
+templates/checkin_card_liked/**/preview.html
+docs/images/checkin-event-matrix/

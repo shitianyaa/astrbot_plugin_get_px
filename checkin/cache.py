@@ -141,8 +141,7 @@ class CheckinCardCache:
             deferred_expired_store = any(
                 active_date is not None and active_date < cutoff
                 for active_date in (
-                    _directory_date(date_key)
-                    for date_key in self._active_store_dates
+                    _directory_date(date_key) for date_key in self._active_store_dates
                 )
             )
             self.root.mkdir(parents=True, exist_ok=True)
@@ -223,13 +222,16 @@ class CheckinCardCache:
         final_path.parent.mkdir(parents=True, exist_ok=True)
         temporary_path: Path | None = None
         try:
-            with source.open("rb") as source_file, tempfile.NamedTemporaryFile(
-                mode="wb",
-                dir=final_path.parent,
-                prefix=f".{final_path.stem}.",
-                suffix=".tmp",
-                delete=False,
-            ) as temporary_file:
+            with (
+                source.open("rb") as source_file,
+                tempfile.NamedTemporaryFile(
+                    mode="wb",
+                    dir=final_path.parent,
+                    prefix=f".{final_path.stem}.",
+                    suffix=".tmp",
+                    delete=False,
+                ) as temporary_file,
+            ):
                 temporary_path = Path(temporary_file.name)
                 shutil.copyfileobj(source_file, temporary_file)
                 temporary_file.flush()

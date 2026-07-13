@@ -1,0 +1,216 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta name="color-scheme" content="light" />
+    <meta name="theme-color" content="#fdfbfc" />
+    <meta name="description" content="AstrBot 插件 GetPx 插件管理中心 - 管理群签到排行、内容安全过滤和签到备份数据。" />
+    <title>插件管理中心</title>
+    <link rel="stylesheet" href="./styles.css" />
+  </head>
+  <body>
+    <a class="skip-link" href="#mainContent">跳到主要内容</a>
+    <div class="shell">
+      <header class="topbar">
+        <div>
+          <p class="kicker">GET PX / CONTROL CONSOLE</p>
+          <h1>插件管理中心</h1>
+          <p class="subtitle">查看群签到活动，管理内置与自定义安全策略，备份与恢复签到数据。</p>
+        </div>
+        <div class="safety-lock" role="status" aria-label="内容安全状态">
+          <span class="pulse" aria-hidden="true"></span>
+          <span><strong>安全策略已锁定</strong>仅允许普通分级 (x_restrict = 0) 作品</span>
+        </div>
+      </header>
+
+      <section id="overview" class="status-line" aria-label="系统运行概览"></section>
+
+      <section id="globalError" class="global-error" role="alert" hidden>
+        <span id="globalErrorMessage">部分数据加载失败。</span>
+        <button id="retryAllBtn" type="button">重新加载</button>
+      </section>
+
+      <nav class="workspace-nav" aria-label="功能模块导航">
+        <button class="active" data-view="ranking" type="button">群排行</button>
+        <button data-view="safety" type="button">内容安全</button>
+        <button data-view="data" type="button">数据管理</button>
+        <button id="refreshBtn" class="refresh" type="button">刷新数据</button>
+      </nav>
+
+      <main id="mainContent" tabindex="-1">
+        <!-- 群排行模块 -->
+        <section id="rankingView" class="workspace active" aria-labelledby="rankingTitle">
+          <div class="ranking-layout">
+            <aside class="group-rail">
+              <div class="section-heading">
+                <p>GROUP SCOPE</p>
+                <h2 id="rankingTitle">选择群聊</h2>
+              </div>
+              <div id="groupList" class="group-list"></div>
+            </aside>
+
+            <div class="ranking-main">
+              <div class="ranking-toolbar">
+                <div>
+                  <p id="selectedGroupMeta" class="eyebrow">尚未选择群聊</p>
+                  <h2 id="selectedGroupName">群签到轨道</h2>
+                </div>
+                <div class="segmented" aria-label="榜单时间筛选">
+                  <button class="active" data-rank="today" type="button">今日</button>
+                  <button data-rank="month" type="button">月度</button>
+                  <button data-rank="streak" type="button">连签</button>
+                  <button data-rank="total" type="button">累计</button>
+                </div>
+              </div>
+
+              <div class="activity-head">
+                <div>
+                  <span>群活跃轨道</span>
+                  <small id="trendCaption">最近 7 天</small>
+                </div>
+                <div class="segmented compact" aria-label="趋势统计时间跨度">
+                  <button class="active" data-days="7" type="button">7 天</button>
+                  <button data-days="30" type="button">30 天</button>
+                </div>
+              </div>
+              <div id="activityTrack" class="activity-track" aria-label="签到趋势日期轨道"></div>
+              <div id="rankingContent" class="ranking-content"></div>
+            </div>
+          </div>
+        </section>
+
+        <!-- 内容安全模块 -->
+        <section id="safetyView" class="workspace" aria-labelledby="safetyTitle">
+          <div class="section-heading wide">
+            <p>CONTENT GUARD</p>
+            <h2 id="safetyTitle">内容安全策略</h2>
+            <span>安全策略已强制开启。系统屏蔽词在搜索前拦截，黑名单作品在返回后自动阻断。</span>
+          </div>
+
+          <div class="policy-strip">
+            <div><b>1</b><span>分级限制<strong>仅 x_restrict = 0</strong></span></div>
+            <div><b>2</b><span>文本检查<strong>标题 / 简介 / 标签 / 翻译标签</strong></span></div>
+            <div><b>3</b><span>ID 拦截<strong>Pixiv 作品黑名单</strong></span></div>
+          </div>
+
+          <div class="safety-columns">
+            <!-- 内置安全词 -->
+            <section class="panel">
+              <div class="panel-title">
+                <div>
+                  <p>BUILT-IN TERMS</p>
+                  <h3>系统内置安全词</h3>
+                </div>
+                <span id="builtinCount" class="count" aria-live="polite"></span>
+              </div>
+              <label for="builtinSearch" class="sr-only">搜索内置词</label>
+              <input id="builtinSearch" name="builtin_search" class="search" type="search" autocomplete="off" spellcheck="false" placeholder="输入关键字筛选内置安全词…" />
+              <div id="builtinTerms" class="term-cloud readonly"></div>
+            </section>
+
+            <!-- 自定义屏蔽词 -->
+            <section class="panel">
+              <div class="panel-title">
+                <div>
+                  <p>CUSTOM TERMS</p>
+                  <h3>自定义屏蔽词</h3>
+                </div>
+                <span id="customCount" class="count" aria-live="polite"></span>
+              </div>
+              <form id="termForm" class="inline-form">
+                <label for="termInput" class="sr-only">自定义屏蔽词</label>
+                <input id="termInput" name="custom_safety_term" maxlength="64" autocomplete="off" spellcheck="false" placeholder="例如：某些敏感词汇…" required />
+                <button type="submit">添加屏蔽词</button>
+                <p id="termError" class="form-error" aria-live="polite"></p>
+              </form>
+              <div id="customTerms" class="term-list"></div>
+            </section>
+          </div>
+
+          <!-- 作品 ID 黑名单 -->
+          <section class="panel blacklist-panel">
+            <div class="panel-title">
+              <div>
+                <p>ILLUSTRATION BLACKLIST</p>
+                <h3>作品 ID 黑名单</h3>
+              </div>
+              <span id="blacklistCount" class="count" aria-live="polite"></span>
+            </div>
+            <form id="blacklistForm" class="blacklist-form">
+              <div>
+                <label for="blacklistId">Pixiv 作品 ID</label>
+                <input id="blacklistId" name="pixiv_illust_id" inputmode="numeric" pattern="[0-9]+" autocomplete="off" spellcheck="false" required placeholder="例如：12345678…" />
+              </div>
+              <div>
+                <label for="blacklistReason">加入原因</label>
+                <input id="blacklistReason" name="blacklist_reason" maxlength="200" autocomplete="off" placeholder="例如：含有不适合的背景…" />
+              </div>
+              <button type="submit">加入黑名单</button>
+              <p id="blacklistError" class="form-error" aria-live="polite"></p>
+            </form>
+            <div id="blacklistContent" class="blacklist-list"></div>
+          </section>
+        </section>
+
+        <!-- 数据管理模块 -->
+        <section id="dataView" class="workspace" aria-labelledby="dataTitle">
+          <div class="section-heading wide">
+            <p>DATA OPERATIONS</p>
+            <h2 id="dataTitle">签到数据管理</h2>
+            <span>备份包含用户资料、签到记录、群活跃数据和主题配置。</span>
+          </div>
+
+          <div class="data-grid">
+            <!-- 导出备份 -->
+            <section class="data-action export-action">
+              <span class="action-index">EXPORT</span>
+              <h3>下载完整签到备份</h3>
+              <p>将当前签到记录导出为 schema v5 JSON 备份文件，供迁移或手工备份使用。</p>
+              <button id="exportBtn" type="button">下载备份 (.json)</button>
+              <small id="latestBackup" aria-live="polite">最近备份：尚无备份记录</small>
+            </section>
+
+            <!-- 恢复备份 -->
+            <section class="data-action import-action">
+              <span class="action-index">RESTORE</span>
+              <h3>从备份文件恢复</h3>
+              <p>导入 JSON 格式的备份。注意：这会覆盖现有的签到数据。在导入前，系统会自动创建当前数据的回滚备份。</p>
+              <label for="importFile" class="sr-only">选择备份文件</label>
+              <input id="importFile" name="checkin_backup" type="file" accept="application/json,.json" />
+              <button id="importBtn" class="danger" type="button" disabled>确认恢复此备份</button>
+              <small id="importResult" aria-live="polite">尚未选择任何文件 (最大支持 5 MiB)</small>
+            </section>
+
+            <!-- 缓存统计报告 -->
+            <section class="cache-report">
+              <div>
+                <span>CACHE CLEANUP</span>
+                <strong>最近一次启动缓存清理结果</strong>
+              </div>
+              <dl id="cacheStats"></dl>
+            </section>
+          </div>
+        </section>
+      </main>
+    </div>
+
+    <!-- 全局轻量通知 -->
+    <div id="toast" class="toast" role="status" aria-live="polite"></div>
+
+    <!-- 全局确认对话框 -->
+    <dialog id="confirmDialog">
+      <form method="dialog">
+        <p class="kicker">CONFIRM ACTION</p>
+        <h2 id="dialogTitle">确认操作</h2>
+        <p id="dialogMessage"></p>
+        <div class="dialog-actions">
+          <button value="cancel" type="submit">取消</button>
+          <button id="dialogConfirm" class="danger" value="confirm" type="submit">确认执行</button>
+        </div>
+      </form>
+    </dialog>
+
+    <script type="module" src="./app.js"></script>
+  </body>
+</html>

@@ -17,32 +17,6 @@ DEFAULT_AUTO_DOWNGRADE_ORIGINAL_LIMIT_MB = 3.0
 class DeliveryMixin:
     """Direct illustration download and send-error handling."""
 
-    async def _record_sent_image(
-        self,
-        event: AstrMessageEvent,
-        illust: dict,
-        image_path: str,
-        *,
-        source: str,
-        page: int = 1,
-        quality: str = "",
-        file_size: int = 0,
-    ) -> None:
-        if self.image_history is None:
-            return
-        try:
-            await self.image_history.record_sent(
-                illust=illust,
-                image_path=image_path,
-                event=event,
-                source=source,
-                page=page,
-                quality=quality,
-                file_size=file_size,
-            )
-        except Exception as exc:
-            logger.warning(f"{LOG_PREFIX} 写入图片历史失败: {exc}")
-
     async def _handle_download(
         self, event: AstrMessageEvent, illust_id: int, page: int = 1
     ):
@@ -61,7 +35,9 @@ class DeliveryMixin:
         try:
             illust = await self.client.illust_detail(illust_id)
         except Exception as e:
-            logger.warning(f"{LOG_PREFIX} 下载前获取作品详情失败 illust_id={illust_id}: {e}")
+            logger.warning(
+                f"{LOG_PREFIX} 下载前获取作品详情失败 illust_id={illust_id}: {e}"
+            )
             yield event.plain_result("❌ 获取作品详情失败，请稍后再试")
             return
 
@@ -69,21 +45,13 @@ class DeliveryMixin:
             yield event.plain_result(f"😶 未找到作品 {illust_id}")
             return
 
-        reason = await self._blacklist_reason_for_illust(illust, str(illust_id))
+        try:
+            reason = await self._blacklist_reason_for_illust(illust, str(illust_id))
+        except RuntimeError:
+            yield event.plain_result("🚫 内容安全服务暂不可用，本次请求已拒绝")
+            return
         if reason:
             yield event.plain_result(f"🚫 {reason}")
-            return
-
-        # R18 检查
-        r18_mode = self._cfg_int("pixiv_r18", 0, 0, 2)
-        x_restrict = int(illust.get("x_restrict", 0) or 0)
-        if r18_mode == 0 and x_restrict > 0:
-            yield event.plain_result("🔒 该作品为 R18 内容，当前配置不允许下载")
-            return
-        if r18_mode == 1 and x_restrict == 0:
-            yield event.plain_result(
-                "🔒 该作品非 R18 内容，当前配置仅允许下载 R18 作品"
-            )
             return
 
         title = illust.get("title", "无标题")
@@ -262,17 +230,6 @@ class DeliveryMixin:
                         yield event.plain_result(
                             f"😢 发送失败（已重试{max_retries}次），请稍后再试"
                         )
-
-            if send_success:
-                await self._record_sent_image(
-                    event,
-                    illust,
-                    path,
-                    source="download",
-                    page=page,
-                    quality=actual_quality,
-                    file_size=file_size,
-                )
 
         except asyncio.TimeoutError:
             logger.warning(f"{LOG_PREFIX} {log_context} 下载超时 ({timeout_sec}s)")

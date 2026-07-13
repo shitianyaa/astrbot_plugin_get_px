@@ -72,6 +72,7 @@ class SchemaMixin:
                     greeting_attribution TEXT NOT NULL DEFAULT '',
                     secondary_note TEXT NOT NULL DEFAULT '',
                     template_version TEXT NOT NULL DEFAULT 'v2',
+                    theme_id TEXT NOT NULL DEFAULT 'default',
                     background_mode TEXT NOT NULL DEFAULT '',
                     background_source TEXT NOT NULL DEFAULT '',
                     background_illust_id TEXT NOT NULL DEFAULT '',
@@ -95,6 +96,7 @@ class SchemaMixin:
                 "greeting_attribution": "TEXT NOT NULL DEFAULT ''",
                 "secondary_note": "TEXT NOT NULL DEFAULT ''",
                 "template_version": "TEXT NOT NULL DEFAULT 'v2'",
+                "theme_id": "TEXT NOT NULL DEFAULT 'default'",
                 "background_mode": "TEXT NOT NULL DEFAULT ''",
                 "background_source": "TEXT NOT NULL DEFAULT ''",
                 "background_illust_id": "TEXT NOT NULL DEFAULT ''",
@@ -112,8 +114,29 @@ class SchemaMixin:
                     birthday_source TEXT NOT NULL DEFAULT '',
                     qq_birthday_checked INTEGER NOT NULL DEFAULT 0,
                     selected_title_id TEXT NOT NULL DEFAULT '',
+                    selected_theme_id TEXT NOT NULL DEFAULT 'default',
                     created_at TEXT NOT NULL,
                     updated_at TEXT NOT NULL
+                )
+                """
+            )
+            preference_columns = {
+                str(row["name"])
+                for row in conn.execute("PRAGMA table_info(checkin_user_preferences)")
+            }
+            if "selected_theme_id" not in preference_columns:
+                conn.execute(
+                    "ALTER TABLE checkin_user_preferences "
+                    "ADD COLUMN selected_theme_id TEXT NOT NULL DEFAULT 'default'"
+                )
+            conn.execute(
+                """
+                CREATE TABLE IF NOT EXISTS checkin_theme_purchases (
+                    user_id TEXT NOT NULL,
+                    theme_id TEXT NOT NULL,
+                    cost INTEGER NOT NULL DEFAULT 0,
+                    purchased_at TEXT NOT NULL,
+                    PRIMARY KEY (user_id, theme_id)
                 )
                 """
             )
@@ -139,6 +162,27 @@ class SchemaMixin:
                     unlocked_at TEXT NOT NULL,
                     PRIMARY KEY (user_id, achievement_id)
                 )
+                """
+            )
+            conn.execute(
+                """
+                CREATE TABLE IF NOT EXISTS checkin_group_presence (
+                    date_key TEXT NOT NULL,
+                    group_id TEXT NOT NULL,
+                    group_name TEXT NOT NULL DEFAULT '',
+                    platform TEXT NOT NULL DEFAULT '',
+                    user_id TEXT NOT NULL,
+                    username TEXT NOT NULL DEFAULT '',
+                    first_seen_at TEXT NOT NULL,
+                    last_seen_at TEXT NOT NULL,
+                    PRIMARY KEY (date_key, group_id, user_id)
+                )
+                """
+            )
+            conn.execute(
+                """
+                CREATE INDEX IF NOT EXISTS idx_checkin_group_presence_lookup
+                ON checkin_group_presence (group_id, date_key, first_seen_at)
                 """
             )
             conn.commit()

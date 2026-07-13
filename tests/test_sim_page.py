@@ -72,8 +72,10 @@ async def run_simulation(token: str):
 
         # 模拟搜索
         resp = await api.search_illust(
-            TAG, search_target="partial_match_for_tags",
-            sort="date_desc", offset=offset,
+            TAG,
+            search_target="partial_match_for_tags",
+            sort="date_desc",
+            offset=offset,
         )
         illusts = list(resp.get("illusts") or [])
         if not illusts:
@@ -94,26 +96,28 @@ async def run_simulation(token: str):
         fresh_count = len(fresh_ids)
         used_count = len(ids) - fresh_count
 
-        print(f"[第{round_num}轮] offset={offset:>4}  "
-              f"返回={len(ids):>2}张  fresh={fresh_count:>2}  used={used_count:>2}  "
-              f"游标推进={'是' if fresh_count == 0 else '否'}")
+        print(
+            f"[第{round_num}轮] offset={offset:>4}  "
+            f"返回={len(ids):>2}张  fresh={fresh_count:>2}  used={used_count:>2}  "
+            f"游标推进={'是' if fresh_count == 0 else '否'}"
+        )
 
         total_fresh_global |= set(fresh_ids)
-        total_used_global |= (set(ids) - set(fresh_ids))
+        total_used_global |= set(ids) - set(fresh_ids)
 
         # 如有新鲜图 → 模拟"发送"，写入 image_usage
         if fresh_ids:
             for fid in fresh_ids:
                 await store.record_usage(
-                    scope=SCOPE, source_key=SOURCE_KEY,
-                    illust_id=fid, feature="normal",
+                    scope=SCOPE,
+                    source_key=SOURCE_KEY,
+                    illust_id=fid,
+                    feature="normal",
                 )
 
         # 页面耗尽检测 → 推进游标
         if fresh_count == 0 and ids:
-            new_offset = await store.advance_page_offset(
-                SCOPE, SOURCE_KEY, len(ids)
-            )
+            new_offset = await store.advance_page_offset(SCOPE, SOURCE_KEY, len(ids))
             print(f"         → 推进到 offset={new_offset}")
 
         # 间隔 3 秒
@@ -121,7 +125,7 @@ async def run_simulation(token: str):
             print("         (等待 3s...)")
             await asyncio.sleep(3)
 
-    print(f"\n{'='*50}")
+    print(f"\n{'=' * 50}")
     print(f"累计新鲜图: {len(total_fresh_global)} 张")
     print(f"累计已用过: {len(total_used_global)} 张")
     final_offset = await store.get_page_offset(SCOPE, SOURCE_KEY)
@@ -130,12 +134,15 @@ async def run_simulation(token: str):
     # 验证游标持久化
     store2 = ImageIndexStore(TEST_DIR)
     reloaded = await store2.get_page_offset(SCOPE, SOURCE_KEY)
-    print(f"持久化验证: 重新读取游标 = {reloaded} {'✓' if reloaded == final_offset else '✗'}")
+    print(
+        f"持久化验证: 重新读取游标 = {reloaded} {'✓' if reloaded == final_offset else '✗'}"
+    )
 
     # 验证 TTL 过期（模拟 4 天前最后访问）
     import sqlite3 as _sq
     from datetime import datetime as _dt, timedelta as _td
     from zoneinfo import ZoneInfo as _ZI
+
     _shanghai = _ZI("Asia/Shanghai")
     old_time = (_dt.now(_shanghai) - _td(days=4)).isoformat(timespec="seconds")
     with _sq.connect(store._db_path) as _conn:
@@ -145,8 +152,10 @@ async def run_simulation(token: str):
         )
         _conn.commit()
     expired_offset = await store.get_page_offset(SCOPE, SOURCE_KEY)
-    print(f"TTL 过期验证: 4天前游标={final_offset} → 过期后={expired_offset} "
-          f"{'✓' if expired_offset == 0 else '✗ (应为0)'}")
+    print(
+        f"TTL 过期验证: 4天前游标={final_offset} → 过期后={expired_offset} "
+        f"{'✓' if expired_offset == 0 else '✗ (应为0)'}"
+    )
 
     print("\n[✓] 模拟完成")
 
@@ -157,5 +166,6 @@ if __name__ == "__main__":
         asyncio.run(run_simulation(token))
     finally:
         import shutil
+
         if TEST_DIR.exists():
             shutil.rmtree(TEST_DIR, ignore_errors=True)

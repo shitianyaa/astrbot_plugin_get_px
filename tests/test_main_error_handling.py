@@ -308,7 +308,9 @@ class MainErrorHandlingTest(unittest.IsolatedAsyncioTestCase):
             CheckinArtworkMixin._download_checkin_pixiv_background
         )
 
-        self.assertIn("连续 {CHECKIN_BACKGROUND_PAGE_ATTEMPTS} 页无可用竖向作品", source)
+        self.assertIn(
+            "连续 {CHECKIN_BACKGROUND_PAGE_ATTEMPTS} 页无可用竖向作品", source
+        )
         self.assertNotIn(
             "连续 {CHECKIN_BACKGROUND_PAGE_ATTEMPTS} 页候选均已使用", source
         )
@@ -342,11 +344,15 @@ class MainErrorHandlingTest(unittest.IsolatedAsyncioTestCase):
 
         payload = json.loads(body)
         self.assertEqual(status, 500)
-        self.assertEqual(payload, {"success": False, "error": "服务内部错误，请稍后重试"})
+        self.assertEqual(
+            payload, {"success": False, "error": "服务内部错误，请稍后重试"}
+        )
         self.assertNotIn("pixiv.db", body)
         self.assertNotIn("secret", body)
 
-    async def test_duplicate_checkin_sends_cached_card_without_ai_or_artwork_selection(self):
+    async def test_duplicate_checkin_sends_cached_card_without_ai_or_artwork_selection(
+        self,
+    ):
         with tempfile.TemporaryDirectory() as tmp:
             order = []
             result = CheckinResult(_profile(), _record(), duplicate=True)
@@ -396,7 +402,9 @@ class MainErrorHandlingTest(unittest.IsolatedAsyncioTestCase):
             plugin._prepare_checkin_background.assert_not_awaited()
             plugin._restore_checkin_background.assert_awaited_once()
             self.assertEqual(
-                plugin._restore_checkin_background.await_args.args[1].background_illust_id,
+                plugin._restore_checkin_background.await_args.args[
+                    1
+                ].background_illust_id,
                 "445566",
             )
             self.assertEqual(plugin.checkin_greeting.calls, [])
@@ -405,7 +413,9 @@ class MainErrorHandlingTest(unittest.IsolatedAsyncioTestCase):
             self.assertLess(order.index("cache_get"), order.index("render"))
             self.assertLess(order.index("render"), order.index("send"))
 
-    async def test_first_checkin_persists_content_then_rendered_artwork_and_usage_after_send(self):
+    async def test_first_checkin_persists_content_then_rendered_artwork_and_usage_after_send(
+        self,
+    ):
         with tempfile.TemporaryDirectory() as tmp:
             order = []
             record = _record(persisted=False, with_background=False)
@@ -440,11 +450,16 @@ class MainErrorHandlingTest(unittest.IsolatedAsyncioTestCase):
 
             self.assertEqual(output, [])
             self.assertEqual(
-                [update["greeting_source"] for update in plugin.checkin_store.content_updates],
+                [
+                    update["greeting_source"]
+                    for update in plugin.checkin_store.content_updates
+                ],
                 ["local", "ai"],
             )
             self.assertEqual(len(plugin.checkin_store.background_updates), 1)
-            self.assertEqual(plugin.checkin_store.background_updates[0]["illust_id"], "445566")
+            self.assertEqual(
+                plugin.checkin_store.background_updates[0]["illust_id"], "445566"
+            )
             self.assertEqual(len(plugin.checkin_greeting.calls), 1)
             self.assertLess(order.index("content:local"), order.index("ai"))
             self.assertLess(order.index("ai"), order.index("content:ai"))
@@ -472,7 +487,10 @@ class MainErrorHandlingTest(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(updated.greeting, "每一天都是新的一页。")
             self.assertEqual(updated.greeting_attribution, "毛不易 · 芬芳一生")
             self.assertEqual(
-                [item["greeting_source"] for item in plugin.checkin_store.content_updates],
+                [
+                    item["greeting_source"]
+                    for item in plugin.checkin_store.content_updates
+                ],
                 ["local", "hitokoto"],
             )
             self.assertIn("hitokoto", order)
@@ -485,7 +503,9 @@ class MainErrorHandlingTest(unittest.IsolatedAsyncioTestCase):
         with tempfile.TemporaryDirectory() as tmp:
             order = []
             result = CheckinResult(
-                _profile(), _record(persisted=False, with_background=False), duplicate=False
+                _profile(),
+                _record(persisted=False, with_background=False),
+                duplicate=False,
             )
             plugin = _plugin_for_checkin(tmp, result, order)
             source = Path(tmp) / "selected.png"
@@ -515,7 +535,9 @@ class MainErrorHandlingTest(unittest.IsolatedAsyncioTestCase):
         with tempfile.TemporaryDirectory() as tmp:
             order = []
             result = CheckinResult(
-                _profile(), _record(persisted=False, with_background=False), duplicate=False
+                _profile(),
+                _record(persisted=False, with_background=False),
+                duplicate=False,
             )
             plugin = _plugin_for_checkin(tmp, result, order)
             source = Path(tmp) / "selected.png"
@@ -541,11 +563,15 @@ class MainErrorHandlingTest(unittest.IsolatedAsyncioTestCase):
             plugin._record_checkin_background.assert_not_awaited()
             plugin._release_checkin_background_claim.assert_awaited_once()
 
-    async def test_cache_store_cancellation_releases_claim_and_cleans_pixiv_source(self):
+    async def test_cache_store_cancellation_releases_claim_and_cleans_pixiv_source(
+        self,
+    ):
         with tempfile.TemporaryDirectory() as tmp:
             order = []
             result = CheckinResult(
-                _profile(), _record(persisted=False, with_background=False), duplicate=False
+                _profile(),
+                _record(persisted=False, with_background=False),
+                duplicate=False,
             )
             plugin = _plugin_for_checkin(tmp, result, order)
             source = Path(tmp) / "selected.png"
@@ -564,7 +590,9 @@ class MainErrorHandlingTest(unittest.IsolatedAsyncioTestCase):
                 _make_card(final_cache)
                 raise asyncio.CancelledError()
 
-            plugin.checkin_cache.store = AsyncMock(side_effect=cancel_after_cache_publish)
+            plugin.checkin_cache.store = AsyncMock(
+                side_effect=cancel_after_cache_publish
+            )
 
             with self.assertRaises(asyncio.CancelledError):
                 await _collect(plugin._handle_checkin(_FakeEvent(order)))
@@ -573,11 +601,15 @@ class MainErrorHandlingTest(unittest.IsolatedAsyncioTestCase):
             self.assertFalse(source.exists())
             self.assertTrue(final_cache.exists())
 
-    async def test_usage_cancellation_releases_claim_cleans_source_and_keeps_cache(self):
+    async def test_usage_cancellation_releases_claim_cleans_source_and_keeps_cache(
+        self,
+    ):
         with tempfile.TemporaryDirectory() as tmp:
             order = []
             result = CheckinResult(
-                _profile(), _record(persisted=False, with_background=False), duplicate=False
+                _profile(),
+                _record(persisted=False, with_background=False),
+                duplicate=False,
             )
             plugin = _plugin_for_checkin(tmp, result, order)
             source = Path(tmp) / "selected.png"
@@ -601,11 +633,15 @@ class MainErrorHandlingTest(unittest.IsolatedAsyncioTestCase):
             self.assertFalse(source.exists())
             self.assertTrue(plugin.checkin_cache.cache_path.exists())
 
-    async def test_failed_first_send_then_cached_resend_records_metadata_usage_once(self):
+    async def test_failed_first_send_then_cached_resend_records_metadata_usage_once(
+        self,
+    ):
         with tempfile.TemporaryDirectory() as tmp:
             order = []
             first_result = CheckinResult(
-                _profile(), _record(persisted=False, with_background=False), duplicate=False
+                _profile(),
+                _record(persisted=False, with_background=False),
+                duplicate=False,
             )
             plugin = _plugin_for_checkin(tmp, first_result, order)
             store = _ConcurrentCheckinStore(first_result, order)
@@ -648,7 +684,9 @@ class MainErrorHandlingTest(unittest.IsolatedAsyncioTestCase):
         with tempfile.TemporaryDirectory() as tmp:
             order = []
             first_result = CheckinResult(
-                _profile(), _record(persisted=False, with_background=False), duplicate=False
+                _profile(),
+                _record(persisted=False, with_background=False),
+                duplicate=False,
             )
             plugin = _plugin_for_checkin(tmp, first_result, order)
             store = _ConcurrentCheckinStore(first_result, order)
@@ -674,9 +712,13 @@ class MainErrorHandlingTest(unittest.IsolatedAsyncioTestCase):
             rendered = Path(tmp) / "rendered.jpg"
             plugin._render_checkin_card.return_value = _make_card(rendered)
 
-            first = asyncio.create_task(_collect(plugin._handle_checkin(_FakeEvent(order))))
+            first = asyncio.create_task(
+                _collect(plugin._handle_checkin(_FakeEvent(order)))
+            )
             await prepare_started.wait()
-            second = asyncio.create_task(_collect(plugin._handle_checkin(_FakeEvent(order))))
+            second = asyncio.create_task(
+                _collect(plugin._handle_checkin(_FakeEvent(order)))
+            )
             await asyncio.sleep(0.02)
             calls_before_first_finished = store.checkin_calls
             finish_prepare.set()
@@ -685,7 +727,9 @@ class MainErrorHandlingTest(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(calls_before_first_finished, 1)
             self.assertEqual(store.checkin_calls, 2)
 
-    async def test_duplicate_cache_identity_uses_record_snapshot_not_current_profile(self):
+    async def test_duplicate_cache_identity_uses_record_snapshot_not_current_profile(
+        self,
+    ):
         with tempfile.TemporaryDirectory() as tmp:
             order = []
             record = replace(_record(), boost_active=True, boost_multiplier=2.0)

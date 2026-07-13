@@ -10,6 +10,7 @@ from .models import (
     CheckinGlobalEvent,
     CheckinProfile,
     CheckinUserPreference,
+    ThemePurchaseResult,
 )
 from .snapshot import (
     clean_event_name as _clean_event_name,
@@ -19,9 +20,7 @@ from .snapshot import (
 
 
 class FeatureStoreMixin:
-    async def find_user_preference(
-        self, user_id: str
-    ) -> CheckinUserPreference | None:
+    async def find_user_preference(self, user_id: str) -> CheckinUserPreference | None:
         user_id = str(user_id or "")
         if not user_id:
             return None
@@ -85,6 +84,40 @@ class FeatureStoreMixin:
                 self._select_title_sync, str(user_id or ""), str(title or "")
             )
 
+    async def list_owned_theme_ids(self, user_id: str) -> tuple[str, ...]:
+        async with self._lock:
+            return await asyncio.to_thread(
+                self._list_owned_theme_ids_sync, str(user_id or "")
+            )
+
+    async def purchase_theme(
+        self,
+        *,
+        user_id: str,
+        theme_id: str,
+        cost: int,
+        template_version: str,
+    ) -> ThemePurchaseResult:
+        async with self._lock:
+            return await asyncio.to_thread(
+                self._purchase_theme_sync,
+                str(user_id or ""),
+                str(theme_id or ""),
+                max(0, int(cost)),
+                str(template_version or ""),
+            )
+
+    async def select_theme(
+        self, *, user_id: str, theme_id: str, template_version: str
+    ) -> str:
+        async with self._lock:
+            return await asyncio.to_thread(
+                self._select_theme_sync,
+                str(user_id or ""),
+                str(theme_id or ""),
+                str(template_version or ""),
+            )
+
     async def add_global_event(
         self, *, event_type: str, date_value: str, name: str, created_by: str
     ) -> CheckinGlobalEvent:
@@ -107,7 +140,9 @@ class FeatureStoreMixin:
 
     async def delete_global_event(self, event_id: int) -> bool:
         async with self._lock:
-            return await asyncio.to_thread(self._delete_global_event_sync, int(event_id))
+            return await asyncio.to_thread(
+                self._delete_global_event_sync, int(event_id)
+            )
 
     async def events_for_date(self, date_key: str) -> tuple[CheckinGlobalEvent, ...]:
         day = date.fromisoformat(date_key)
@@ -206,7 +241,11 @@ class FeatureStoreMixin:
         with closing(self._connect()) as conn:
             conn.execute("BEGIN IMMEDIATE")
             for achievement_id, definition in ACHIEVEMENTS.items():
-                value = profile.total_days if definition["kind"] == "total" else profile.streak_days
+                value = (
+                    profile.total_days
+                    if definition["kind"] == "total"
+                    else profile.streak_days
+                )
                 if value < int(definition["threshold"]):
                     continue
                 changed = conn.execute(
@@ -257,8 +296,13 @@ class FeatureStoreMixin:
         return tuple(str(row["achievement_id"]) for row in rows)
 
     def _select_title_sync(self, user_id: str, title: str) -> str:
-        title_id = title if title in ACHIEVEMENTS else next(
-            (key for key, value in ACHIEVEMENTS.items() if value["title"] == title), ""
+        title_id = (
+            title
+            if title in ACHIEVEMENTS
+            else next(
+                (key for key, value in ACHIEVEMENTS.items() if value["title"] == title),
+                "",
+            )
         )
         if not title_id:
             raise ValueError("未知称号")
@@ -272,6 +316,184 @@ class FeatureStoreMixin:
             )
             conn.commit()
         return title_id
+
+    def _list_owned_theme_ids_sync(self, user_id: str) -> tuple[str, ...]:
+        if not user_id:
+            return ("default",)
+        with closing(self._connect()) as conn:
+            rows = conn.execute(
+                "SELECT theme_id FROM checkin_theme_purchases "
+                "WHERE user_id = ? ORDER BY purchased_at, theme_id",
+                (user_id,),
+            ).fetchall()
+        return ("default",) + tuple(str(row["theme_id"]) for row in rows)
+
+    def _purchase_theme_sync(
+        self,
+        user_id: str,
+        theme_id: str,
+        cost: int,
+        template_version: str,
+    ) -> ThemePurchaseResult:
+        if not user_id:
+            raise ValueError("user_id is required")
+        if not theme_id or theme_id == "default":
+            raise ValueError("默认主题无需购买")
+        now = self.now_iso()
+        date_key = self.today_key()
+        with closing(self._connect()) as conn:
+            conn.execute("BEGIN IMMEDIATE")
+            try:
+                conn.execute(
+                    """
+                    INSERT OR IGNORE INTO checkin_profiles (
+                        user_id, coins, affection, total_days, streak_days,
+                        last_checkin_date, boost_start_date, boost_until_date,
+                        repeat_penalty_date, repeat_penalty_total,
+                        created_at, updated_at
+                    )
+                    VALUES (?, 0, 0, 0, 0, '', '', '', '', 0, ?, ?)
+                    """,
+                    (user_id, now, now),
+                )
+                conn.execute(
+                    """
+                    INSERT OR IGNORE INTO checkin_user_preferences
+                    (user_id, selected_theme_id, created_at, updated_at)
+                    VALUES (?, 'default', ?, ?)
+                    """,
+                    (user_id, now, now),
+                )
+                profile_row = conn.execute(
+                    "SELECT * FROM checkin_profiles WHERE user_id = ?",
+                    (user_id,),
+                ).fetchone()
+                existing = conn.execute(
+                    "SELECT 1 FROM checkin_theme_purchases "
+                    "WHERE user_id = ? AND theme_id = ?",
+                    (user_id, theme_id),
+                ).fetchone()
+                if existing is not None:
+                    conn.execute(
+                        "UPDATE checkin_user_preferences "
+                        "SET selected_theme_id = ?, updated_at = ? WHERE user_id = ?",
+                        (theme_id, now, user_id),
+                    )
+                    conn.execute(
+                        """
+                        UPDATE checkin_records
+                        SET theme_id = ?, template_version = ?, updated_at = ?
+                        WHERE date_key = ? AND user_id = ?
+                        """,
+                        (theme_id, template_version, now, date_key, user_id),
+                    )
+                    conn.commit()
+                    return ThemePurchaseResult(
+                        True,
+                        self._row_to_profile(profile_row),
+                        theme_id,
+                        0,
+                        True,
+                        "该主题已经购买，已为你切换。",
+                    )
+                coins = int(profile_row["coins"] or 0)
+                if coins < cost:
+                    conn.commit()
+                    return ThemePurchaseResult(
+                        False,
+                        self._row_to_profile(profile_row),
+                        theme_id,
+                        cost,
+                        False,
+                        f"金币不足，需要 {cost}，当前只有 {coins}。",
+                    )
+                remaining = coins - cost
+                conn.execute(
+                    "UPDATE checkin_profiles SET coins = ?, updated_at = ? "
+                    "WHERE user_id = ?",
+                    (remaining, now, user_id),
+                )
+                conn.execute(
+                    """
+                    INSERT INTO checkin_theme_purchases
+                    (user_id, theme_id, cost, purchased_at)
+                    VALUES (?, ?, ?, ?)
+                    """,
+                    (user_id, theme_id, cost, now),
+                )
+                conn.execute(
+                    "UPDATE checkin_user_preferences "
+                    "SET selected_theme_id = ?, updated_at = ? WHERE user_id = ?",
+                    (theme_id, now, user_id),
+                )
+                conn.execute(
+                    """
+                    UPDATE checkin_records
+                    SET theme_id = ?, template_version = ?,
+                        total_coins_after = ?, updated_at = ?
+                    WHERE date_key = ? AND user_id = ?
+                    """,
+                    (
+                        theme_id,
+                        template_version,
+                        remaining,
+                        now,
+                        date_key,
+                        user_id,
+                    ),
+                )
+                updated_row = conn.execute(
+                    "SELECT * FROM checkin_profiles WHERE user_id = ?",
+                    (user_id,),
+                ).fetchone()
+                conn.commit()
+            except Exception:
+                conn.rollback()
+                raise
+        return ThemePurchaseResult(
+            True,
+            self._row_to_profile(updated_row),
+            theme_id,
+            cost,
+            False,
+            f"购买成功，消耗 {cost} 金币并已切换主题。",
+        )
+
+    def _select_theme_sync(
+        self, user_id: str, theme_id: str, template_version: str
+    ) -> str:
+        if not user_id:
+            raise ValueError("user_id is required")
+        if not theme_id:
+            raise ValueError("theme_id is required")
+        if theme_id != "default":
+            with closing(self._connect()) as conn:
+                owned = conn.execute(
+                    "SELECT 1 FROM checkin_theme_purchases "
+                    "WHERE user_id = ? AND theme_id = ?",
+                    (user_id, theme_id),
+                ).fetchone()
+            if owned is None:
+                raise ValueError("该主题尚未购买")
+        self._get_or_create_preference_sync(user_id)
+        now = self.now_iso()
+        with closing(self._connect()) as conn:
+            conn.execute("BEGIN IMMEDIATE")
+            conn.execute(
+                "UPDATE checkin_user_preferences "
+                "SET selected_theme_id = ?, updated_at = ? WHERE user_id = ?",
+                (theme_id, now, user_id),
+            )
+            conn.execute(
+                """
+                UPDATE checkin_records
+                SET theme_id = ?, template_version = ?, updated_at = ?
+                WHERE date_key = ? AND user_id = ?
+                """,
+                (theme_id, template_version, now, self.today_key(), user_id),
+            )
+            conn.commit()
+        return theme_id
 
     def _add_global_event_sync(
         self, event_type: str, date_value: str, name: str, created_by: str
@@ -337,13 +559,17 @@ class FeatureStoreMixin:
             selected_title_id=str(row["selected_title_id"] or ""),
             created_at=str(row["created_at"] or ""),
             updated_at=str(row["updated_at"] or ""),
+            selected_theme_id=str(row["selected_theme_id"] or "default"),
         )
 
     @staticmethod
     def _row_to_global_event(row: sqlite3.Row) -> CheckinGlobalEvent:
         return CheckinGlobalEvent(
-            event_id=int(row["event_id"]), event_type=str(row["event_type"]),
-            date_value=str(row["date_value"]), name=str(row["name"]),
+            event_id=int(row["event_id"]),
+            event_type=str(row["event_type"]),
+            date_value=str(row["date_value"]),
+            name=str(row["name"]),
             created_by=str(row["created_by"] or ""),
-            created_at=str(row["created_at"]), updated_at=str(row["updated_at"]),
+            created_at=str(row["created_at"]),
+            updated_at=str(row["updated_at"]),
         )

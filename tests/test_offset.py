@@ -34,7 +34,7 @@ def load_token() -> str:
     sys.exit(1)
 
 
-async def test_offset():
+async def run_offset_test():
     from pixivpy_async import AppPixivAPI
 
     token = load_token()
@@ -61,7 +61,9 @@ async def test_offset():
             offset=0,
         )
         ids0 = [str(i["id"]) for i in (resp0.get("illusts") or [])]
-        print(f"  offset=0   → {len(ids0)} 张: {ids0[:5]}{'...' if len(ids0) > 5 else ''}")
+        print(
+            f"  offset=0   → {len(ids0)} 张: {ids0[:5]}{'...' if len(ids0) > 5 else ''}"
+        )
     except Exception as e:
         print(f"  [✗] offset=0 失败: {e}")
         sys.exit(1)
@@ -75,7 +77,9 @@ async def test_offset():
             offset=PAGE_SIZE,
         )
         ids1 = [str(i["id"]) for i in (resp1.get("illusts") or [])]
-        print(f"  offset={PAGE_SIZE} → {len(ids1)} 张: {ids1[:5]}{'...' if len(ids1) > 5 else ''}")
+        print(
+            f"  offset={PAGE_SIZE} → {len(ids1)} 张: {ids1[:5]}{'...' if len(ids1) > 5 else ''}"
+        )
     except Exception as e:
         print(f"  [✗] offset={PAGE_SIZE} 失败: {e}")
         sys.exit(1)
@@ -93,7 +97,9 @@ async def test_offset():
     try:
         resp_r0 = await api.illust_ranking(mode="week", offset=0)
         ids_r0 = [str(i["id"]) for i in (resp_r0.get("illusts") or [])]
-        print(f"  offset=0   → {len(ids_r0)} 张: {ids_r0[:5]}{'...' if len(ids_r0) > 5 else ''}")
+        print(
+            f"  offset=0   → {len(ids_r0)} 张: {ids_r0[:5]}{'...' if len(ids_r0) > 5 else ''}"
+        )
     except Exception as e:
         print(f"  [✗] offset=0 失败: {e}")
         sys.exit(1)
@@ -102,7 +108,9 @@ async def test_offset():
         RANK_PAGE = len(ids_r0) if ids_r0 else 30
         resp_r1 = await api.illust_ranking(mode="week", offset=RANK_PAGE)
         ids_r1 = [str(i["id"]) for i in (resp_r1.get("illusts") or [])]
-        print(f"  offset={RANK_PAGE} → {len(ids_r1)} 张: {ids_r1[:5]}{'...' if len(ids_r1) > 5 else ''}")
+        print(
+            f"  offset={RANK_PAGE} → {len(ids_r1)} 张: {ids_r1[:5]}{'...' if len(ids_r1) > 5 else ''}"
+        )
     except Exception as e:
         print(f"  [✗] offset={RANK_PAGE} 失败: {e}")
         sys.exit(1)
@@ -119,4 +127,5 @@ async def test_offset():
 
 if __name__ == "__main__":
     import asyncio
-    asyncio.run(test_offset())
+
+    asyncio.run(run_offset_test())

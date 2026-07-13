@@ -60,9 +60,7 @@ class CheckinBackupWebTest(unittest.IsolatedAsyncioTestCase):
                 await plugin._read_uploaded_file_bytes(upload)
 
             self.assertLess(stream.tell(), MAX_CHECKIN_BACKUP_BYTES * 2)
-            self.assertFalse(
-                list((Path(tmp) / "checkin_backups").glob(".upload-*"))
-            )
+            self.assertFalse(list((Path(tmp) / "checkin_backups").glob(".upload-*")))
 
     async def test_handle_checkin_export_sends_only_file_component(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -84,7 +82,10 @@ class CheckinBackupWebTest(unittest.IsolatedAsyncioTestCase):
             self.assertIsInstance(event.sent[0][0], File)
 
     async def test_web_checkin_import_accepts_exported_snapshot(self):
-        with tempfile.TemporaryDirectory() as src_tmp, tempfile.TemporaryDirectory() as dst_tmp:
+        with (
+            tempfile.TemporaryDirectory() as src_tmp,
+            tempfile.TemporaryDirectory() as dst_tmp,
+        ):
             source = FrozenCheckinStore(src_tmp, date_key="2026-05-26")
             await source.checkin(user_id="20002", username="source", bot_name="neko")
             snapshot_text = dump_checkin_snapshot_json(await source.export_snapshot())
@@ -123,7 +124,8 @@ class CheckinBackupWebTest(unittest.IsolatedAsyncioTestCase):
             self.assertTrue(payload["success"])
             self.assertEqual(payload["profiles"], 1)
             self.assertEqual(payload["records"], 1)
-            self.assertTrue(payload["rollback_path"].endswith(".json"))
+            self.assertTrue(payload["rollback_file"].endswith(".json"))
+            self.assertNotIn("rollback_path", payload)
 
             imported = await plugin.checkin_store.get_profile("20002")
             replaced = await plugin.checkin_store.get_profile("10001")
@@ -131,7 +133,10 @@ class CheckinBackupWebTest(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(replaced.total_days, 0)
 
     async def test_web_checkin_import_accepts_version_one_snapshot(self):
-        with tempfile.TemporaryDirectory() as src_tmp, tempfile.TemporaryDirectory() as dst_tmp:
+        with (
+            tempfile.TemporaryDirectory() as src_tmp,
+            tempfile.TemporaryDirectory() as dst_tmp,
+        ):
             source = FrozenCheckinStore(src_tmp, date_key="2026-05-26")
             await source.checkin(user_id="20002", username="source", bot_name="neko")
             legacy = await source.export_snapshot()
@@ -242,6 +247,4 @@ class CheckinBackupWebTest(unittest.IsolatedAsyncioTestCase):
 
             self.assertEqual(response.status_code, 400)
             self.assertEqual(payload["error"], "签到备份文件不能超过 5 MiB")
-            self.assertFalse(
-                list((Path(tmp) / "checkin_backups").glob(".upload-*"))
-            )
+            self.assertFalse(list((Path(tmp) / "checkin_backups").glob(".upload-*")))

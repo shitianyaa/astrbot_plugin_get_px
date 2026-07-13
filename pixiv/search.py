@@ -123,7 +123,13 @@ class SearchMixin:
         except (TypeError, ValueError):
             count = 1
 
-        r18_mode = self._cfg_int("pixiv_r18", 0, 0, 2)
+        try:
+            if tag and await self._blocked_query_term(tag):
+                yield event.plain_result("🚫 搜索词不符合内容安全要求")
+                return
+        except RuntimeError:
+            yield event.plain_result("🚫 内容安全服务暂不可用，本次请求已拒绝")
+            return
         ranking_mode = ranking_override or self._cfg_str("pixiv_ranking_mode", "week")
         timeout_sec = self._cfg_float("request_timeout", 30.0, 5.0, 120.0)
         quality = self._cfg_str("image_quality", "original")
@@ -166,21 +172,6 @@ class SearchMixin:
             yield event.plain_result("❌ Pixiv 请求失败或无结果，换个标签试试")
             return
 
-        # R18 过滤
-        illusts = self._filter_r18(illusts, r18_mode)
-        if not illusts:
-            if r18_mode == 0:
-                yield event.plain_result(
-                    "🔒 过滤后没有可用作品。如果目标内容包含敏感作品，请到 Pixiv 官网「设置 > 显示设置」中开启「显示作品」选项，然后将插件 R18 设置改为 2（混合）。"
-                )
-            elif r18_mode == 1:
-                yield event.plain_result(
-                    "🔒 没有找到 R18 作品。请确认你的 Pixiv 账号已在官网「显示设置」中开启了「显示敏感作品」和「显示 R-18 作品」。"
-                )
-            else:
-                yield event.plain_result("🔒 过滤后没有可用作品")
-            return
-
         # 漫画过滤：普通搜索/排行中只要作品类型命中 manga 就过滤；漫画日榜保留后门。
         is_manga_ranking = not tag and ranking_mode == "day_manga"
         if filter_manga and not is_manga_ranking:
@@ -191,10 +182,14 @@ class SearchMixin:
                 )
                 return
 
-        illusts = await self._filter_blacklisted_illusts(illusts)
+        try:
+            illusts = await self._filter_blacklisted_illusts(illusts)
+        except RuntimeError:
+            yield event.plain_result("🚫 内容安全服务暂不可用，本次请求已拒绝")
+            return
         if not illusts:
             yield event.plain_result(
-                "😶 可用作品都被黑名单过滤了，换个标签或调整黑名单后再试"
+                "😶 可用作品都被内容安全策略过滤了，换个标签后再试"
             )
             return
 
@@ -225,7 +220,6 @@ class SearchMixin:
 
         # 判断发送模式
         send_as_forward = self._cfg_bool("send_as_forward", True)
-        history_source = f"search:{tag.strip()}" if tag else f"rank:{ranking_mode}"
 
         # 下载所有图片
         downloaded: list[tuple[dict, str, str, int]] = []
@@ -403,14 +397,6 @@ class SearchMixin:
                                 logger.info(
                                     f"{LOG_PREFIX} [降级] 作品 {illust_id} 已发送"
                                 )
-                                await self._record_sent_image(
-                                    event,
-                                    illust,
-                                    path,
-                                    source=history_source,
-                                    quality=actual_q,
-                                    file_size=file_size,
-                                )
                                 await self._record_image_usage(
                                     event,
                                     source_key,
@@ -438,14 +424,6 @@ class SearchMixin:
                                         pass
                 else:
                     for illust, path, actual_q, file_size in downloaded:
-                        await self._record_sent_image(
-                            event,
-                            illust,
-                            path,
-                            source=history_source,
-                            quality=actual_q,
-                            file_size=file_size,
-                        )
                         await self._record_image_usage(
                             event,
                             source_key,
@@ -474,14 +452,6 @@ class SearchMixin:
                             logger.info(
                                 f"{LOG_PREFIX} 作品 {illust_id} 已发送"
                                 + (f" (第{attempt}次尝试)" if attempt > 1 else "")
-                            )
-                            await self._record_sent_image(
-                                event,
-                                illust,
-                                path,
-                                source=history_source,
-                                quality=actual_q,
-                                file_size=file_size,
                             )
                             await self._record_image_usage(
                                 event,
@@ -527,7 +497,6 @@ class SearchMixin:
                     except Exception as e:
                         logger.warning(f"{LOG_PREFIX} 释放当天发图占用失败: {e}")
 
-
     async def _handle_rank(
         self, event: AstrMessageEvent, mode: str, count_str: str = ""
     ):
@@ -546,7 +515,6 @@ class SearchMixin:
         ):
             yield result
 
-
     async def _handle_info(self, event: AstrMessageEvent, illust_id: int):
         """查看作品详情。"""
 
@@ -561,7 +529,11 @@ class SearchMixin:
             yield event.plain_result(f"😶 未找到作品 {illust_id}")
             return
 
-        reason = await self._blacklist_reason_for_illust(illust, str(illust_id))
+        try:
+            reason = await self._blacklist_reason_for_illust(illust, str(illust_id))
+        except RuntimeError:
+            yield event.plain_result("🚫 内容安全服务暂不可用，本次请求已拒绝")
+            return
         if reason:
             yield event.plain_result(f"🚫 {reason}")
             return
@@ -571,7 +543,6 @@ class SearchMixin:
         tags = "、".join(t.get("name", "") for t in (illust.get("tags") or [])[:5])
         desc = (illust.get("caption") or "").strip()
         pages = len(illust.get("meta_pages") or [])
-        x_restrict = illust.get("x_restrict", 0)
         total_view = illust.get("total_view", 0)
         total_bookmark = illust.get("total_bookmark", 0)
 
@@ -582,7 +553,7 @@ class SearchMixin:
             f"作者: {author}",
             f"标签: {tags or '无'}",
             f"页数: {pages or 1}",
-            f"R18: {'是' if x_restrict else '否'}",
+            "内容分级: 普通",
             f"浏览: {total_view:,}　收藏: {total_bookmark:,}",
         ]
         if desc:

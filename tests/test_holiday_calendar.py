@@ -29,7 +29,9 @@ def test_parse_and_lookup_online_holiday(tmp_path: Path) -> None:
     assert workday is not None and not workday.is_off_day
 
 
-def test_refresh_due_on_install_version_change_and_after_six_months(tmp_path: Path) -> None:
+def test_refresh_due_on_install_version_change_and_after_six_months(
+    tmp_path: Path,
+) -> None:
     now = datetime(2026, 7, 11, tzinfo=timezone.utc)
     fresh = HolidayCalendar(tmp_path, plugin_version="2.6.1")
     assert fresh.should_refresh(now=now)
@@ -71,9 +73,7 @@ def test_cache_loads_existing_data_and_ignores_corruption(tmp_path: Path) -> Non
             {
                 "schema_version": 1,
                 "plugin_version": "2.6.1",
-                "days": {
-                    "2026-05-01": {"name": "劳动节", "is_off_day": True}
-                },
+                "days": {"2026-05-01": {"name": "劳动节", "is_off_day": True}},
             },
             ensure_ascii=False,
         ),

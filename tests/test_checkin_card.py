@@ -21,6 +21,7 @@ from astrbot_plugin_get_px.checkin.card import (  # noqa: E402
 from astrbot_plugin_get_px.checkin.cache import CheckinCardCache  # noqa: E402
 from astrbot_plugin_get_px.main import GetPxPlugin  # noqa: E402
 
+
 def _profile() -> CheckinProfile:
     return CheckinProfile(
         user_id="123456789",

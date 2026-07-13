@@ -1,6 +1,6 @@
 """AstrBot 插件 — Pixiv 发图
 
-通过标签搜索 Pixiv 插画并发送图片，支持排行榜、R18 过滤、多页作品、代理配置、自然语言自动触发和签到。
+通过标签搜索 Pixiv 插画并发送图片，支持排行榜、内容安全过滤、多页作品、代理配置、自然语言自动触发和签到。
 
 搜索指令：
     /p [标签] [数量]           搜索并发送图片
@@ -29,6 +29,7 @@ from astrbot.api.all import AstrBotConfig, Image, logger
 from astrbot.api.event import AstrMessageEvent, filter
 from astrbot.api.star import Context, Star
 from astrbot.core.star.star_tools import StarTools
+from .cache_cleanup import cleanup_legacy_caches
 from .checkin import CheckinStore
 from .checkin.application import CheckinApplicationMixin
 from .checkin.artwork import CheckinArtworkMixin
@@ -40,8 +41,8 @@ from .pixiv import DeliveryMixin, FiltersMixin, SearchMixin
 from .pixiv.client import PixivClient
 from .pixiv.commenter import AiCommenter
 from .pixiv.downloader import ImageDownloader
-from .pixiv.history import ImageAssetManager
 from .pixiv.index import ImageIndexStore
+from .pixiv.safety import normalized_builtin_terms, normalize_safety_text
 from .plugin_api import PluginWebApi
 
 # ──────────────────────────────────────────────────────────────────────
@@ -50,7 +51,7 @@ from .plugin_api import PluginWebApi
 
 LOG_PREFIX = "[GetPx]"
 PLUGIN_NAME = "astrbot_plugin_get_px"
-PLUGIN_VERSION = "2.7.0"
+PLUGIN_VERSION = "2.8.0"
 WEB_INTERNAL_ERROR_MESSAGE = "服务内部错误，请稍后重试"
 
 AUTO_TRIGGER_PATTERN = r"^/?(来\s*(.*?)(份|个|张|点))(.*?)(福利|色|瑟|涩|塞)?图$"
@@ -105,8 +106,8 @@ class GetPxPlugin(
         self._last_request: dict[str, float] = {}
         self.data_dir: Path | None = None
         self.image_index: ImageIndexStore | None = None
-        self.image_history: ImageAssetManager | None = None
-        self.image_history_web_api = PluginWebApi(
+        self.cache_cleanup_summary: dict[str, int] = {}
+        self.plugin_web_api = PluginWebApi(
             self,
             plugin_name=PLUGIN_NAME,
             log_prefix=LOG_PREFIX,
@@ -125,16 +126,16 @@ class GetPxPlugin(
 
     async def initialize(self):
         """插件加载时初始化 Pixiv 客户端。"""
-        self._init_client()
         data_dir = StarTools.get_data_dir(PLUGIN_NAME)
         self.data_dir = Path(data_dir)
+        cleanup_summary = await asyncio.to_thread(cleanup_legacy_caches, self.data_dir)
+        self.cache_cleanup_summary = cleanup_summary.to_dict()
+        self._init_client()
         self.image_index = ImageIndexStore(data_dir)
+        await self._migrate_legacy_safety_terms()
         await self.image_index.cleanup_old_days()
-        self.image_history = ImageAssetManager(data_dir)
         self.checkin_store = CheckinStore(data_dir)
-        self.checkin_cache = CheckinCardCache(
-            self.data_dir / "checkin_card_cache"
-        )
+        self.checkin_cache = CheckinCardCache(self.data_dir / "checkin_card_cache")
         self.checkin_cache.cleanup_expired(force=True)
         self.holiday_calendar = HolidayCalendar(
             self.data_dir,
@@ -143,8 +144,32 @@ class GetPxPlugin(
         self._holiday_refresh_task = asyncio.create_task(
             self._refresh_holiday_calendar()
         )
-        self.image_history_web_api.register()
+        self.plugin_web_api.register()
         logger.info(f"{LOG_PREFIX} 插件已加载")
+
+    async def _migrate_legacy_safety_terms(self) -> None:
+        if self.image_index is None or "blacklist_tags" not in self.config:
+            return
+        raw = self.config.get("blacklist_tags", "")
+        builtin = normalized_builtin_terms()
+        migrated = 0
+        try:
+            for term in self._split_config_tags(raw):
+                if normalize_safety_text(term) in builtin:
+                    continue
+                if await self.image_index.add_safety_term(
+                    term, added_by="legacy-config"
+                ):
+                    migrated += 1
+            self.config.pop("blacklist_tags", None)
+            save_config = getattr(self.config, "save_config", None)
+            if callable(save_config):
+                save_config()
+            logger.info(f"{LOG_PREFIX} 旧版屏蔽词迁移完成: migrated={migrated}")
+        except Exception as exc:
+            logger.warning(
+                f"{LOG_PREFIX} 旧版屏蔽词迁移失败: error={type(exc).__name__}"
+            )
 
     async def _refresh_holiday_calendar(self) -> None:
         if self.holiday_calendar is None:
@@ -170,7 +195,7 @@ class GetPxPlugin(
         logger.info(f"{LOG_PREFIX} 客户端已初始化")
 
     def _web_api(self) -> PluginWebApi:
-        service = getattr(self, "image_history_web_api", None)
+        service = getattr(self, "plugin_web_api", None)
         if service is None:
             service = PluginWebApi(
                 self,
@@ -197,8 +222,9 @@ class GetPxPlugin(
             self.client = None
         await self.downloader.close()
         self._last_request.clear()
+        if self.image_index is not None:
+            self.image_index.close()
         self.image_index = None
-        self.image_history = None
         self.checkin_store = None
         logger.info(f"{LOG_PREFIX} 插件已停止")
 
@@ -317,6 +343,12 @@ class GetPxPlugin(
         async for result in self._handle_checkin(event):
             yield result
 
+    @filter.command("签到排行")
+    async def cmd_checkin_ranking(self, event: AstrMessageEvent, mode: str = ""):
+        """查看当前群的签到排行。"""
+        event.stop_event()
+        yield event.plain_result(await self._handle_checkin_ranking(event, mode))
+
     @filter.command("签到帮助")
     async def cmd_checkin_help(self, event: AstrMessageEvent):
         """发送签到功能帮助图片。"""
@@ -376,11 +408,46 @@ class GetPxPlugin(
         async for result in self._handle_buy_checkin_boost(event, days):
             yield result
 
+    @filter.command("签到主题")
+    async def cmd_checkin_themes(self, event: AstrMessageEvent):
+        """查看已购买和可购买的签到主题。"""
+        event.stop_event()
+        yield event.plain_result(await self._handle_checkin_themes(event))
+
+    @filter.command("查看主题")
+    async def cmd_preview_checkin_theme(self, event: AstrMessageEvent, theme: str = ""):
+        """查看指定签到主题的静态预览图。"""
+        event.stop_event()
+        yield await self._handle_checkin_theme_preview(event, theme)
+
+    @filter.command("购买主题")
+    async def cmd_buy_checkin_theme(self, event: AstrMessageEvent, theme: str = ""):
+        """购买签到主题，购买成功后自动切换。"""
+        event.stop_event()
+        yield event.plain_result(await self._handle_buy_checkin_theme(event, theme))
+
+    @filter.command("切换主题")
+    async def cmd_select_checkin_theme(self, event: AstrMessageEvent, theme: str = ""):
+        """切换到默认或已购买的签到主题。"""
+        event.stop_event()
+        yield event.plain_result(await self._handle_select_checkin_theme(event, theme))
+
+    @filter.command("刷新签到背景")
+    async def cmd_refresh_checkin_background(self, event: AstrMessageEvent):
+        """花费金币重新抽取今天的签到背景。"""
+        event.stop_event()
+        async for result in self._handle_refresh_checkin_background(event):
+            yield result
+
     @filter.command("签到生日")
-    async def cmd_checkin_birthday(self, event: AstrMessageEvent, action: str = "", value: str = ""):
+    async def cmd_checkin_birthday(
+        self, event: AstrMessageEvent, action: str = "", value: str = ""
+    ):
         """查看或自动读取签到生日，也可手动设置或清除。"""
         event.stop_event()
-        yield event.plain_result(await self._handle_checkin_birthday(event, action, value))
+        yield event.plain_result(
+            await self._handle_checkin_birthday(event, action, value)
+        )
 
     @filter.command("签到成就")
     async def cmd_checkin_achievements(self, event: AstrMessageEvent):
@@ -403,7 +470,12 @@ class GetPxPlugin(
     @filter.permission_type(filter.PermissionType.ADMIN)
     @filter.command("签到事件")
     async def cmd_checkin_event_admin(
-        self, event: AstrMessageEvent, action: str = "", event_type: str = "", date_value: str = "", name: str = ""
+        self,
+        event: AstrMessageEvent,
+        action: str = "",
+        event_type: str = "",
+        date_value: str = "",
+        name: str = "",
     ):
         """管理员维护全局签到纪念日。"""
         event.stop_event()
@@ -497,8 +569,16 @@ class GetPxPlugin(
             "签到状态",
             "　　查看累计签到、金币、好感度和加持状态",
             "",
-            "签到商店 / 购买加持",
-            "　　查看并购买好感度双倍加持",
+            "签到排行 [今日|月榜|连签|累计]",
+            "　　查看当前群独立统计的签到排行",
+            "",
+            "签到商店 / 购买加持 / 刷新签到背景",
+            "　　使用金币购买好感度加持或重新抽取当日背景",
+            "",
+            "签到主题 / 查看主题 <编号>",
+            "　　查看主题列表或直接预览指定主题",
+            "购买主题 <编号> / 切换主题 <编号>",
+            "　　解锁并切换签到卡片主题",
             "",
             "签到生日 / 签到成就 / 签到称号 / 佩戴称号",
             "　　查看或自动读取生日，查看成就并切换卡片称号",

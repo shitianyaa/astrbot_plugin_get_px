@@ -170,6 +170,29 @@ class ImageIndexStoreTest(unittest.IsolatedAsyncioTestCase):
             finally:
                 store.close()
 
+    async def test_custom_safety_terms_and_blacklist_reason_persist(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            store = FrozenImageIndexStore(tmp)
+            try:
+                self.assertTrue(
+                    await store.add_safety_term("危险主题", added_by="admin")
+                )
+                self.assertIn(
+                    "危险主题".casefold(), await store.get_custom_safety_terms()
+                )
+                await store.add_blacklist_illust(
+                    illust_id="350",
+                    reason="构图不适合",
+                    added_by="web",
+                )
+                record = (await store.list_blacklist_illusts())[0]
+                self.assertEqual(record["reason"], "构图不适合")
+                self.assertEqual(record["added_by"], "web")
+                self.assertTrue(await store.remove_safety_term("危险主题"))
+                self.assertEqual(await store.get_custom_safety_terms(), set())
+            finally:
+                store.close()
+
     async def test_blacklist_thumbnail_is_copied_and_removed(self):
         with tempfile.TemporaryDirectory() as tmp:
             source_path = Path(tmp) / "source.jpg"
@@ -280,16 +303,21 @@ class ImageIndexStoreTest(unittest.IsolatedAsyncioTestCase):
                 # 直接修改数据库，把 updated_at 改成 PAGE_CURSOR_TTL_DAYS+1 天前
                 from pixiv.index import PAGE_CURSOR_TTL_DAYS
                 from datetime import timedelta
+
                 old_time = store._frozen_dt - timedelta(days=PAGE_CURSOR_TTL_DAYS + 1)
                 # 关闭 store 的连接，用独立连接修改数据库
                 store.close()
                 from contextlib import closing
+
                 with closing(sqlite3.connect(str(store._db_path))) as conn:
                     conn.execute(
                         "UPDATE source_page_cursor SET updated_at = ? "
                         "WHERE scope = ? AND source_key = ?",
-                        (old_time.isoformat(timespec="seconds"),
-                         "group:1", "search:blue_archive"),
+                        (
+                            old_time.isoformat(timespec="seconds"),
+                            "group:1",
+                            "search:blue_archive",
+                        ),
                     )
                     conn.commit()
                 # 重新获取连接

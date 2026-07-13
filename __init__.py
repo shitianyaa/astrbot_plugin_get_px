@@ -18,7 +18,6 @@ _LEGACY_MODULES = {
     "checkin_greeting": ".checkin.greeting",
     "downloader": ".pixiv.downloader",
     "holiday_calendar": ".checkin.holiday",
-    "image_history": ".pixiv.history",
     "image_index": ".pixiv.index",
     "pixiv_client": ".pixiv.client",
 }

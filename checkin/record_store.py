@@ -13,6 +13,7 @@ from .models import (
     STREAK_COIN_BONUS,
     STREAK_COIN_BONUS_MAX,
     STREAK_STEP_DAYS,
+    BackgroundRefreshResult,
     BoostPurchaseResult,
     CheckinProfile,
     CheckinRecord,
@@ -49,7 +50,16 @@ class RecordStoreMixin:
             )
 
     async def checkin(
-        self, *, user_id: str, username: str, bot_name: str
+        self,
+        *,
+        user_id: str,
+        username: str,
+        bot_name: str,
+        theme_id: str = "default",
+        template_version: str = "v2",
+        group_id: str = "",
+        group_name: str = "",
+        platform: str = "",
     ) -> CheckinResult:
         user_id = str(user_id or "")
         if not user_id:
@@ -64,6 +74,11 @@ class RecordStoreMixin:
                 user_id,
                 str(username or user_id),
                 str(bot_name or "neko"),
+                str(theme_id or "default"),
+                str(template_version or "v2"),
+                str(group_id or ""),
+                str(group_name or ""),
+                str(platform or ""),
             )
 
     async def purchase_boost(self, *, user_id: str, days: int) -> BoostPurchaseResult:
@@ -108,6 +123,31 @@ class RecordStoreMixin:
                 self.now_iso(),
             )
 
+    async def purchase_background_refresh(
+        self,
+        *,
+        user_id: str,
+        cost: int,
+        mode: str,
+        source: str,
+        illust_id: str,
+        title: str,
+        author: str,
+    ) -> BackgroundRefreshResult:
+        async with self._lock:
+            return await asyncio.to_thread(
+                self._purchase_background_refresh_sync,
+                str(user_id or ""),
+                max(0, int(cost)),
+                str(mode or ""),
+                str(source or ""),
+                str(illust_id or ""),
+                str(title or ""),
+                str(author or ""),
+                self.today_key(),
+                self.now_iso(),
+            )
+
     async def update_record_content(
         self,
         *,
@@ -122,9 +162,7 @@ class RecordStoreMixin:
         greeting_attribution: str = "",
     ) -> CheckinRecord:
         """Persist local content once and permit only one remote-source upgrade."""
-        validated_source = _validate_greeting_source(
-            greeting_source, "greeting_source"
-        )
+        validated_source = _validate_greeting_source(greeting_source, "greeting_source")
         async with self._lock:
             return await asyncio.to_thread(
                 self._update_record_content_sync,
@@ -173,7 +211,17 @@ class RecordStoreMixin:
         return self._row_to_profile(row) if row is not None else None
 
     def _checkin_sync(
-        self, date_key: str, now: str, user_id: str, username: str, bot_name: str
+        self,
+        date_key: str,
+        now: str,
+        user_id: str,
+        username: str,
+        bot_name: str,
+        theme_id: str,
+        template_version: str,
+        group_id: str,
+        group_name: str,
+        platform: str,
     ) -> CheckinResult:
         with closing(self._connect()) as conn:
             conn.execute("BEGIN IMMEDIATE")
@@ -201,6 +249,34 @@ class RecordStoreMixin:
                     """,
                     (date_key, user_id),
                 ).fetchone()
+                if group_id:
+                    conn.execute(
+                        """
+                        INSERT INTO checkin_group_presence (
+                            date_key, group_id, group_name, platform, user_id,
+                            username, first_seen_at, last_seen_at
+                        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                        ON CONFLICT(date_key, group_id, user_id) DO UPDATE SET
+                            group_name = CASE WHEN excluded.group_name != ''
+                                THEN excluded.group_name
+                                ELSE checkin_group_presence.group_name END,
+                            platform = CASE WHEN excluded.platform != ''
+                                THEN excluded.platform
+                                ELSE checkin_group_presence.platform END,
+                            username = excluded.username,
+                            last_seen_at = excluded.last_seen_at
+                        """,
+                        (
+                            date_key,
+                            group_id,
+                            group_name,
+                            platform,
+                            user_id,
+                            username,
+                            now,
+                            now,
+                        ),
+                    )
                 if record_row is not None:
                     conn.commit()
                     return CheckinResult(
@@ -229,9 +305,7 @@ class RecordStoreMixin:
                 boost_active = is_boost_active(profile, date_key)
                 affection_reward = round(base_affection + bonus_affection, 2)
                 if boost_active:
-                    affection_reward = round(
-                        affection_reward * BOOST_MULTIPLIER, 2
-                    )
+                    affection_reward = round(affection_reward * BOOST_MULTIPLIER, 2)
                 coins_reward = base_coins + bonus_coins
                 new_coins = profile.coins + coins_reward
                 new_affection = round(profile.affection + affection_reward, 2)
@@ -263,9 +337,9 @@ class RecordStoreMixin:
                         boost_active, boost_multiplier,
                         total_coins_after, total_affection_after,
                         total_days_after, streak_days_after,
-                        note, created_at, updated_at
+                        note, theme_id, template_version, created_at, updated_at
                     )
-                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                     """,
                     (
                         date_key,
@@ -285,6 +359,8 @@ class RecordStoreMixin:
                         total_days,
                         streak_days,
                         note,
+                        theme_id,
+                        template_version,
                         now,
                         now,
                     ),
@@ -309,6 +385,7 @@ class RecordStoreMixin:
             record=self._row_to_record(record_row),
             duplicate=False,
         )
+
     def _purchase_boost_sync(
         self, date_key: str, now: str, user_id: str, days: int
     ) -> BoostPurchaseResult:
@@ -336,6 +413,7 @@ class RecordStoreMixin:
             until_date = requested_start + timedelta(days=days - 1)
 
         with closing(self._connect()) as conn:
+            remaining = profile.coins - cost
             conn.execute(
                 """
                 UPDATE checkin_profiles
@@ -344,12 +422,20 @@ class RecordStoreMixin:
                 WHERE user_id = ?
                 """,
                 (
-                    profile.coins - cost,
+                    remaining,
                     start_date.isoformat(),
                     until_date.isoformat(),
                     now,
                     user_id,
                 ),
+            )
+            conn.execute(
+                """
+                UPDATE checkin_records
+                SET total_coins_after = ?, updated_at = ?
+                WHERE date_key = ? AND user_id = ?
+                """,
+                (remaining, now, date_key, user_id),
             )
             conn.commit()
 
@@ -360,6 +446,97 @@ class RecordStoreMixin:
             f"生效，到 {until_date.isoformat()} 结束。"
         )
         return BoostPurchaseResult(True, updated, days, cost, message)
+
+    def _purchase_background_refresh_sync(
+        self,
+        user_id: str,
+        cost: int,
+        mode: str,
+        source: str,
+        illust_id: str,
+        title: str,
+        author: str,
+        date_key: str,
+        now: str,
+    ) -> BackgroundRefreshResult:
+        if not user_id:
+            raise ValueError("user_id is required")
+        with closing(self._connect()) as conn:
+            conn.execute("BEGIN IMMEDIATE")
+            try:
+                profile_row = conn.execute(
+                    "SELECT * FROM checkin_profiles WHERE user_id = ?",
+                    (user_id,),
+                ).fetchone()
+                record_row = conn.execute(
+                    "SELECT * FROM checkin_records WHERE date_key = ? AND user_id = ?",
+                    (date_key, user_id),
+                ).fetchone()
+                if profile_row is None or record_row is None:
+                    conn.commit()
+                    profile = (
+                        self._row_to_profile(profile_row)
+                        if profile_row is not None
+                        else self._get_or_create_profile_sync(user_id)
+                    )
+                    return BackgroundRefreshResult(
+                        False, profile, None, cost, "请先完成今天的签到。"
+                    )
+                profile = self._row_to_profile(profile_row)
+                if profile.coins < cost:
+                    conn.commit()
+                    return BackgroundRefreshResult(
+                        False,
+                        profile,
+                        self._row_to_record(record_row),
+                        cost,
+                        f"金币不足，需要 {cost}，当前只有 {profile.coins}。",
+                    )
+                remaining = profile.coins - cost
+                conn.execute(
+                    "UPDATE checkin_profiles SET coins = ?, updated_at = ? "
+                    "WHERE user_id = ?",
+                    (remaining, now, user_id),
+                )
+                conn.execute(
+                    """
+                    UPDATE checkin_records
+                    SET background_mode = ?, background_source = ?,
+                        background_illust_id = ?, background_title = ?,
+                        background_author = ?, total_coins_after = ?, updated_at = ?
+                    WHERE date_key = ? AND user_id = ?
+                    """,
+                    (
+                        mode,
+                        source,
+                        illust_id,
+                        title,
+                        author,
+                        remaining,
+                        now,
+                        date_key,
+                        user_id,
+                    ),
+                )
+                updated_profile_row = conn.execute(
+                    "SELECT * FROM checkin_profiles WHERE user_id = ?",
+                    (user_id,),
+                ).fetchone()
+                updated_record_row = conn.execute(
+                    "SELECT * FROM checkin_records WHERE date_key = ? AND user_id = ?",
+                    (date_key, user_id),
+                ).fetchone()
+                conn.commit()
+            except Exception:
+                conn.rollback()
+                raise
+        return BackgroundRefreshResult(
+            True,
+            self._row_to_profile(updated_profile_row),
+            self._row_to_record(updated_record_row),
+            cost,
+            f"背景已更新，消耗 {cost} 金币。",
+        )
 
     def _get_record_sync(self, *, date_key: str, user_id: str) -> CheckinRecord | None:
         with closing(self._connect()) as conn:
@@ -527,4 +704,5 @@ class RecordStoreMixin:
             greeting_attribution=str(row["greeting_attribution"] or ""),
             secondary_note=str(row["secondary_note"] or ""),
             template_version=str(row["template_version"] or "v2"),
+            theme_id=str(row["theme_id"] or "default"),
         )

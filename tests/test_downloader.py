@@ -59,7 +59,9 @@ def _downloader_with(resp) -> ImageDownloader:
 class ImageDownloaderSizeLimitTest(unittest.IsolatedAsyncioTestCase):
     def test_square_medium_url_keeps_square_medium_quality_metadata(self):
         self.assertEqual(
-            dl._quality_from_url("https://i.pximg.net/c/360x360_70/img-master/square_medium.jpg"),
+            dl._quality_from_url(
+                "https://i.pximg.net/c/360x360_70/img-master/square_medium.jpg"
+            ),
             "square_medium",
         )
 

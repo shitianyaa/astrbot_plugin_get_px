@@ -11,23 +11,11 @@
     "default": "",
     "hint": "连接 Pixiv 用的代理，留空走直连。支持 http://、socks5://，如 http://127.0.0.1:7890。"
   },
-  "pixiv_r18": {
-    "description": "R18 模式",
-    "type": "int",
-    "default": 0,
-    "hint": "0 = 仅非 R18，1 = 仅 R18，2 = 混合。"
-  },
   "filter_manga": {
     "description": "过滤漫画",
     "type": "bool",
     "default": true,
     "hint": "开启后，普通搜索、普通排行榜和签到背景中只要作品类型为 manga 就过滤；主动请求漫画日榜 day_manga 时保留后门。"
-  },
-  "blacklist_tags": {
-    "description": "拉黑标签",
-    "type": "string",
-    "default": "furry,裸体,全裸,触手,露出,nsfw",
-    "hint": "多个标签可用逗号、顿号、分号或换行分隔；精确匹配 Pixiv 标签原文或翻译名。命中的作品不会被搜索、排行、签到背景、详情和下载使用。留空会回退默认拉黑标签。"
   },
   "pixiv_ranking_mode": {
     "description": "默认排行榜类型",
@@ -75,7 +63,7 @@
     "description": "合并转发发送",
     "type": "bool",
     "default": true,
-    "hint": "开启后多张图片以合并转发消息（聊天记录）形式发送，可规避内容审查风险。非 QQ 平台不支持合并转发时会自动拆分成单条消息发送；关闭则始终逐条发送。"
+    "hint": "开启后多张图片以合并转发消息（聊天记录）形式发送，便于集中浏览。非 QQ 平台不支持合并转发时会自动拆分成单条消息发送；关闭则始终逐条发送。"
   },
   "auto_trigger_enabled": {
     "description": "自然语言自动触发",
@@ -101,6 +89,20 @@
     "default": "pixiv_daily",
     "options": ["pixiv_daily", "custom"],
     "hint": "pixiv_daily = 每日从 Pixiv 自动选择背景；custom = 使用管理员配置的固定背景文件。"
+  },
+  "checkin_background_refresh_cost": {
+    "description": "签到背景刷新价格",
+    "type": "int",
+    "default": 100,
+    "slider": {"min": 0, "max": 5000, "step": 10},
+    "hint": "用户完成当天签到后，使用 /刷新签到背景 重新抽取 Pixiv 背景所需金币。设为 0 表示免费。"
+  },
+  "checkin_theme_price": {
+    "description": "签到主题统一价格",
+    "type": "int",
+    "default": 1500,
+    "slider": {"min": 0, "max": 50000, "step": 100},
+    "hint": "每套非默认签到主题的购买价格。默认米白始终免费。"
   },
   "checkin_background_tag": {
     "description": "签到 Pixiv 背景标签",
@@ -256,6 +258,6 @@
     "type": "string",
     "default": "mirror",
     "options": ["mirror", "official", "none"],
-    "hint": "图片历史页面加载 Google Fonts 的方式。mirror = 国内镜像（默认，速度快），official = 官方源（可能被墙），none = 不加载外部字体（使用系统字体）。"
+    "hint": "插件管理中心加载 Google Fonts 的方式。mirror = 国内镜像（默认，速度快），official = 官方源，none = 不加载外部字体（使用系统字体）。"
   }
 }

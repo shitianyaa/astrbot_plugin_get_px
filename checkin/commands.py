@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 from dataclasses import replace
 from datetime import date, timedelta
 from pathlib import Path
@@ -35,6 +36,12 @@ from .store import CheckinStore
 from .birthday import parse_month_day
 from .card import CardBackground
 from .snapshot import dump_checkin_snapshot_json
+from .themes import (
+    CHECKIN_THEMES,
+    get_checkin_theme,
+    resolve_checkin_theme,
+)
+
 try:
     from ..pixiv.downloader import cleanup
 except ImportError:  # Direct imports used by the test suite.
@@ -44,6 +51,7 @@ except ImportError:  # Direct imports used by the test suite.
 LOG_PREFIX = "[GetPx]"
 PLUGIN_NAME = "astrbot_plugin_get_px"
 MAX_CHECKIN_BACKUP_BYTES = 5 * 1024 * 1024
+PLUGIN_ROOT = Path(__file__).resolve().parents[1]
 
 
 class CheckinCommandMixin:
@@ -87,7 +95,10 @@ class CheckinCommandMixin:
         safe_name = re.sub(r"[^A-Za-z0-9._-]+", "_", Path(filename).name)
         temp_path = self._checkin_backup_dir() / f".upload-{time.time_ns()}-{safe_name}"
         content_length = getattr(upload, "content_length", None)
-        if isinstance(content_length, int) and content_length > MAX_CHECKIN_BACKUP_BYTES:
+        if (
+            isinstance(content_length, int)
+            and content_length > MAX_CHECKIN_BACKUP_BYTES
+        ):
             raise ValueError("签到备份文件不能超过 5 MiB")
         try:
             total = 0
@@ -212,7 +223,11 @@ class CheckinCommandMixin:
                 logger.warning(f"{LOG_PREFIX} 签到测试卡片发送失败，回退纯文字: {e}")
             finally:
                 cleanup(card_path)
-                if background and background.image_path and background.mode == "pixiv_daily":
+                if (
+                    background
+                    and background.image_path
+                    and background.mode == "pixiv_daily"
+                ):
                     cleanup(background.image_path)
 
         if background and background.image_path and background.mode == "pixiv_daily":
@@ -233,15 +248,11 @@ class CheckinCommandMixin:
         today = date.fromisoformat(date_key)
         previous_date = parse_date(profile.last_checkin_date)
         streak_days = (
-            profile.streak_days + 1
-            if previous_date == today - timedelta(days=1)
-            else 1
+            profile.streak_days + 1 if previous_date == today - timedelta(days=1) else 1
         )
         base_coins, base_affection = daily_base_reward(profile.user_id, date_key)
         streak_steps = streak_days // STREAK_STEP_DAYS
-        bonus_coins = min(
-            streak_steps * STREAK_COIN_BONUS, STREAK_COIN_BONUS_MAX
-        )
+        bonus_coins = min(streak_steps * STREAK_COIN_BONUS, STREAK_COIN_BONUS_MAX)
         bonus_affection = min(
             streak_steps * STREAK_AFFECTION_BONUS,
             STREAK_AFFECTION_BONUS_MAX,
@@ -278,8 +289,6 @@ class CheckinCommandMixin:
             updated_at=now,
         )
 
-
-
     async def _handle_checkin_export(self, event: AstrMessageEvent):
         if self.checkin_store is None:
             return event.plain_result("签到数据尚未初始化，请稍后再试")
@@ -299,7 +308,60 @@ class CheckinCommandMixin:
             logger.error(f"{LOG_PREFIX} 发送签到备份文件失败: {e}")
             return event.plain_result("发送签到备份文件失败，请稍后再试")
 
-
+    async def _handle_checkin_ranking(
+        self, event: AstrMessageEvent, mode: str = ""
+    ) -> str:
+        if self.checkin_store is None:
+            return "签到数据尚未初始化，请稍后再试"
+        group_id, group_name, _platform = self._event_group_context(event)
+        if not group_id:
+            return "签到排行只能在群聊中查看"
+        aliases = {
+            "": "today",
+            "今日": "today",
+            "今日榜": "today",
+            "月榜": "month",
+            "月度": "month",
+            "连签": "streak",
+            "连续": "streak",
+            "累计": "total",
+            "总榜": "total",
+        }
+        ranking_type = aliases.get(str(mode or "").strip())
+        if ranking_type is None:
+            return "用法：/签到排行 [今日|月榜|连签|累计]"
+        result = await self.checkin_store.get_group_ranking(
+            group_id=group_id,
+            ranking_type=ranking_type,
+            limit=10,
+        )
+        titles = {
+            "today": "今日签到",
+            "month": "本月签到",
+            "streak": "连续签到",
+            "total": "累计签到",
+        }
+        units = {"month": "天", "streak": "天", "total": "天"}
+        lines = [f"{group_name} · {titles[ranking_type]}排行"]
+        entries = result["entries"]
+        if not entries:
+            return lines[0] + "\n还没有签到记录"
+        for entry in entries:
+            if ranking_type == "today":
+                value = str(entry["value"])[11:19]
+            else:
+                value = f"{entry['value']}{units[ranking_type]}"
+            lines.append(f"{entry['rank']:>2}. {entry['username']}  {value}")
+        sender_id = str(event.get_sender_id() or "")
+        own = next(
+            (item for item in result["all_entries"] if item["user_id"] == sender_id),
+            None,
+        )
+        if own is None:
+            lines.append("\n你暂未进入本榜")
+        elif int(own["rank"]) > 10:
+            lines.append(f"\n你的名次：第 {own['rank']} 名")
+        return "\n".join(lines)
 
     async def _handle_checkin_status(self, event: AstrMessageEvent):
         if not self._cfg_bool("checkin_enabled", True):
@@ -314,6 +376,7 @@ class CheckinCommandMixin:
             return
         try:
             profile = await self.checkin_store.get_profile(user_id)
+            preference = await self.checkin_store.get_user_preference(user_id)
         except Exception as e:
             logger.warning(f"{LOG_PREFIX} 读取签到状态失败: {e}")
             yield event.plain_result("读取签到状态失败，请稍后再试")
@@ -328,12 +391,11 @@ class CheckinCommandMixin:
             f"累计签到: {profile.total_days} 天",
             f"连续签到: {profile.streak_days} 天",
             f"金币: {profile.coins}",
+            f"签到主题: {get_checkin_theme(preference.selected_theme_id).name}",
             f"好感度: {profile.affection:.2f}（{level['name']}）",
             f"好感度加持: {boost_status_text(profile, today)}",
         ]
         yield event.plain_result("\n".join(lines))
-
-
 
     async def _handle_checkin_birthday(
         self, event: AstrMessageEvent, action: str, value: str
@@ -373,8 +435,6 @@ class CheckinCommandMixin:
         except ValueError as exc:
             return str(exc)
 
-
-
     async def _handle_checkin_achievements(self, event: AstrMessageEvent) -> str:
         if self.checkin_store is None:
             return "签到数据尚未初始化，请稍后再试"
@@ -384,15 +444,21 @@ class CheckinCommandMixin:
         unlocked = set(await self.checkin_store.list_achievements(user_id))
         lines = ["签到成就"]
         if newly_unlocked:
-            names = "、".join(str(ACHIEVEMENTS[item]["title"]) for item in newly_unlocked)
+            names = "、".join(
+                str(ACHIEVEMENTS[item]["title"]) for item in newly_unlocked
+            )
             lines.append(f"本次补发: {names}")
         for achievement_id, definition in ACHIEVEMENTS.items():
-            value = profile.total_days if definition["kind"] == "total" else profile.streak_days
+            value = (
+                profile.total_days
+                if definition["kind"] == "total"
+                else profile.streak_days
+            )
             mark = "✓" if achievement_id in unlocked else "·"
-            lines.append(f"{mark} {definition['title']}（{min(value, definition['threshold'])}/{definition['threshold']}）")
+            lines.append(
+                f"{mark} {definition['title']}（{min(value, definition['threshold'])}/{definition['threshold']}）"
+            )
         return "\n".join(lines)
-
-
 
     async def _handle_checkin_titles(self, event: AstrMessageEvent) -> str:
         if self.checkin_store is None:
@@ -412,9 +478,9 @@ class CheckinCommandMixin:
         lines.append("使用 /佩戴称号 <称号ID或名称> 切换")
         return "\n".join(lines)
 
-
-
-    async def _handle_select_checkin_title(self, event: AstrMessageEvent, title: str) -> str:
+    async def _handle_select_checkin_title(
+        self, event: AstrMessageEvent, title: str
+    ) -> str:
         if self.checkin_store is None:
             return "签到数据尚未初始化，请稍后再试"
         if not title:
@@ -430,10 +496,13 @@ class CheckinCommandMixin:
             return str(exc)
         return f"已佩戴称号：{ACHIEVEMENTS[title_id]['title']}"
 
-
-
     async def _handle_checkin_event_admin(
-        self, event: AstrMessageEvent, action: str, event_type: str, date_value: str, name: str
+        self,
+        event: AstrMessageEvent,
+        action: str,
+        event_type: str,
+        date_value: str,
+        name: str,
     ) -> str:
         if self.checkin_store is None:
             return "签到数据尚未初始化，请稍后再试"
@@ -443,7 +512,10 @@ class CheckinCommandMixin:
                 return "当前没有全局签到事件"
             return "\n".join(
                 ["全局签到事件"]
-                + [f"#{item.event_id} {item.event_type} {item.date_value} {item.name}" for item in events]
+                + [
+                    f"#{item.event_id} {item.event_type} {item.date_value} {item.name}"
+                    for item in events
+                ]
             )
         if action == "删除":
             if not event_type.isdigit():
@@ -462,14 +534,14 @@ class CheckinCommandMixin:
             return "用法: /签到事件 添加年度 MM-DD 名称\n或: /签到事件 添加单次 YYYY-MM-DD 名称"
         try:
             item = await self.checkin_store.add_global_event(
-                event_type=type_map[event_type], date_value=date_value,
-                name=name, created_by=str(event.get_sender_id() or ""),
+                event_type=type_map[event_type],
+                date_value=date_value,
+                name=name,
+                created_by=str(event.get_sender_id() or ""),
             )
         except ValueError as exc:
             return str(exc)
         return f"已添加事件 #{item.event_id}: {item.date_value} {item.name}"
-
-
 
     async def _handle_buy_checkin_boost(self, event: AstrMessageEvent, days: str):
         if not self._cfg_bool("checkin_enabled", True):
@@ -501,19 +573,252 @@ class CheckinCommandMixin:
             )
         yield event.plain_result("\n".join(lines))
 
-
-
-    @staticmethod
-    def _build_checkin_shop() -> str:
+    def _build_checkin_shop(self) -> str:
+        refresh_cost = self._cfg_int("checkin_background_refresh_cost", 100, 0, 100000)
+        theme_cost = self._cfg_int("checkin_theme_price", 1500, 0, 1000000)
         lines = [
             "签到商店",
-            "金币可购买好感度双倍加持，加持只影响之后签到获得的好感度。",
+            "金币可购买好感度加持、更新当天背景和解锁签到主题。",
         ]
         for days, cost in BOOST_PRODUCTS.items():
             lines.append(f"/购买加持 {days} - {days} 天，{cost} 金币")
+        lines.append(f"/刷新签到背景 - {refresh_cost} 金币")
+        for theme in CHECKIN_THEMES.values():
+            price = "免费" if theme.free else f"{theme_cost} 金币"
+            lines.append(f"/购买主题 {theme.theme_id} - {theme.name}，{price}")
+        lines.append("使用 /查看主题 <编号> 预览，/签到主题 查看购买状态")
+        lines.append("已购买主题可使用 /切换主题 <编号> 切换")
         return "\n".join(lines)
 
+    async def _handle_checkin_themes(self, event: AstrMessageEvent) -> str:
+        if self.checkin_store is None:
+            return "签到数据尚未初始化，请稍后再试"
+        user_id = str(event.get_sender_id() or "")
+        preference = await self.checkin_store.get_user_preference(user_id)
+        owned = set(await self.checkin_store.list_owned_theme_ids(user_id))
+        current = get_checkin_theme(preference.selected_theme_id)
+        lines = [f"签到主题（当前：{current.name}）"]
+        for theme in CHECKIN_THEMES.values():
+            if theme.theme_id == current.theme_id:
+                state = "当前"
+            elif theme.theme_id in owned:
+                state = "已购"
+            else:
+                state = "未购"
+            lines.append(
+                f"[{state}] {theme.theme_id} · {theme.name} - {theme.description}"
+            )
+        lines.append("使用 /查看主题 <编号> 预览，/购买主题 <编号> 购买")
+        lines.append("已购买主题可使用 /切换主题 <编号> 切换")
+        return "\n".join(lines)
 
+    async def _handle_checkin_theme_preview(self, event: AstrMessageEvent, value: str):
+        theme = resolve_checkin_theme(value)
+        if theme is None:
+            return event.plain_result("用法：/查看主题 <编号>\n示例：/查看主题 1")
+        preview_path = theme.preview_path(PLUGIN_ROOT)
+        if not preview_path.is_file():
+            logger.error(
+                f"{LOG_PREFIX} 签到主题预览图不存在: "
+                f"theme_id={theme.theme_id} file={preview_path.name}"
+            )
+            return event.plain_result("主题预览图缺失，请联系管理员重新安装插件")
+        return event.chain_result(
+            [
+                Plain(
+                    f"主题预览：{theme.theme_id} · {theme.name}\n{theme.description}"
+                ),
+                Image.fromFileSystem(str(preview_path)),
+            ]
+        )
+
+    async def _handle_buy_checkin_theme(
+        self, event: AstrMessageEvent, value: str
+    ) -> str:
+        if self.checkin_store is None:
+            return "签到数据尚未初始化，请稍后再试"
+        theme = resolve_checkin_theme(value)
+        if theme is None:
+            return "未知主题。使用 /签到主题 查看主题编号。"
+        if theme.free:
+            return await self._handle_select_checkin_theme(event, theme.theme_id)
+        user_id = str(event.get_sender_id() or "")
+        cost = self._cfg_int("checkin_theme_price", 1500, 0, 1000000)
+        try:
+            purchase = await self.checkin_store.purchase_theme(
+                user_id=user_id,
+                theme_id=theme.theme_id,
+                cost=cost,
+                template_version=theme.template_version,
+            )
+        except Exception as exc:
+            logger.warning(f"{LOG_PREFIX} 购买签到主题失败: {exc}")
+            return "购买主题失败，请稍后再试"
+        return "\n".join(
+            [
+                purchase.message,
+                f"主题: {theme.name}",
+                f"当前金币: {purchase.profile.coins}",
+                "今天已经签到时，可重新发送 /签到 查看新主题。",
+            ]
+        )
+
+    async def _handle_select_checkin_theme(
+        self, event: AstrMessageEvent, value: str
+    ) -> str:
+        if self.checkin_store is None:
+            return "签到数据尚未初始化，请稍后再试"
+        theme = resolve_checkin_theme(value)
+        if theme is None:
+            return "未知主题。使用 /签到主题 查看主题编号。"
+        user_id = str(event.get_sender_id() or "")
+        try:
+            await self.checkin_store.select_theme(
+                user_id=user_id,
+                theme_id=theme.theme_id,
+                template_version=theme.template_version,
+            )
+        except ValueError as exc:
+            return str(exc)
+        return (
+            f"已切换签到主题：{theme.name}\n"
+            "今天已经签到时，可重新发送 /签到 查看新主题。"
+        )
+
+    async def _handle_refresh_checkin_background(
+        self,
+        event: AstrMessageEvent,
+        *,
+        _flow_locked: bool = False,
+    ):
+        if not self._cfg_bool("checkin_enabled", True):
+            yield event.plain_result("签到功能已关闭")
+            return
+        if self.checkin_store is None:
+            yield event.plain_result("签到数据尚未初始化，请稍后再试")
+            return
+        if self._cfg_str("checkin_background_mode", "pixiv_daily") != "pixiv_daily":
+            yield event.plain_result("只有 Pixiv 每日背景模式支持付费更新背景")
+            return
+        user_id = str(event.get_sender_id() or "")
+        if not user_id:
+            yield event.plain_result("无法识别用户 ID")
+            return
+        if not _flow_locked:
+            locks = getattr(self, "_checkin_flow_locks", None)
+            if locks is None:
+                locks = {}
+                self._checkin_flow_locks = locks
+            lock = locks.setdefault(user_id, asyncio.Lock())
+            async with lock:
+                outputs = [
+                    item
+                    async for item in self._handle_refresh_checkin_background(
+                        event, _flow_locked=True
+                    )
+                ]
+            for output in outputs:
+                yield output
+            return
+
+        record = await self.checkin_store.get_today_record(user_id)
+        if record is None:
+            yield event.plain_result("请先完成今天的签到，再更新背景")
+            return
+        cost = self._cfg_int("checkin_background_refresh_cost", 100, 0, 100000)
+        profile = await self.checkin_store.get_profile(user_id)
+        if profile.coins < cost:
+            yield event.plain_result(
+                f"金币不足，需要 {cost}，当前只有 {profile.coins}。"
+            )
+            return
+
+        background: CardBackground | None = None
+        claim_held = False
+        renderer_source_path = ""
+        try:
+            background = await self._prepare_checkin_background(
+                event,
+                record,
+                refresh_preview=True,
+            )
+            claim_held = bool(
+                background is not None
+                and background.mode == "pixiv_daily"
+                and background.illust_id
+            )
+            if (
+                not claim_held
+                or background is None
+                or background.illust_id == record.background_illust_id
+            ):
+                yield event.plain_result("暂时没有找到新的合适背景，本次不扣金币")
+                return
+            purchase = await self.checkin_store.purchase_background_refresh(
+                user_id=user_id,
+                cost=cost,
+                mode=background.mode,
+                source=background.source,
+                illust_id=background.illust_id,
+                title=background.title,
+                author=background.author,
+            )
+            if not purchase.success or purchase.record is None:
+                yield event.plain_result(purchase.message)
+                return
+
+            record = purchase.record
+            profile = purchase.profile
+            bot_name = self._cfg_str("checkin_bot_name", "neko") or "neko"
+            user_title = await self._get_checkin_user_title(user_id)
+            cache = getattr(self, "checkin_cache", None)
+
+            async def render_card() -> str:
+                nonlocal renderer_source_path
+                renderer_source_path = await self._render_checkin_card(
+                    event,
+                    profile=profile,
+                    record=record,
+                    background=background,
+                    bot_name=bot_name,
+                    user_title=user_title,
+                )
+                return renderer_source_path
+
+            if cache is not None:
+                cache_key = self._checkin_card_cache_key(
+                    event,
+                    profile=profile,
+                    record=record,
+                    background=background,
+                    bot_name=bot_name,
+                    user_title=user_title,
+                )
+                card_path = await cache.store(record.date_key, cache_key, render_card)
+            else:
+                card_path = Path(await render_card())
+            content = [Plain(purchase.message), Image.fromFileSystem(str(card_path))]
+            if background.pixiv_caption:
+                content.append(Plain(background.pixiv_caption))
+            await event.send(event.chain_result(content))
+            await self._record_checkin_background(event, background)
+            claim_held = False
+            return
+        except Exception as exc:
+            logger.warning(f"{LOG_PREFIX} 更新签到背景失败: {exc}")
+            yield event.plain_result(
+                "更新背景失败；若金币已经扣除，重新发送 /签到 可查看已保存的新背景"
+            )
+        finally:
+            cleanup(renderer_source_path)
+            if claim_held:
+                await self._release_checkin_background_claim(event, background)
+            if (
+                background is not None
+                and background.image_path
+                and background.mode == "pixiv_daily"
+            ):
+                cleanup(background.image_path)
 
     @staticmethod
     def _format_checkin_plain_text(result) -> str:

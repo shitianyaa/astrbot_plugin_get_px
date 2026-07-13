@@ -12,6 +12,7 @@ from .models import (
     CHECKIN_SNAPSHOT_SCHEMA_VERSION,
     CHECKIN_SNAPSHOT_SCOPE,
 )
+from .themes import CHECKIN_THEMES, DEFAULT_CHECKIN_THEME_ID
 
 
 def dump_checkin_snapshot_json(snapshot: dict[str, Any]) -> str:
@@ -39,10 +40,10 @@ def validate_checkin_snapshot(snapshot: dict[str, Any]) -> dict[str, Any]:
     if (
         isinstance(schema_version, bool)
         or not isinstance(schema_version, int)
-        or schema_version not in (1, 2, CHECKIN_SNAPSHOT_SCHEMA_VERSION)
+        or schema_version not in range(1, CHECKIN_SNAPSHOT_SCHEMA_VERSION + 1)
     ):
         raise ValueError(
-            f"不支持的签到备份版本: {schema_version!r}，当前支持 1、2 和 "
+            f"不支持的签到备份版本: {schema_version!r}，当前支持 1 至 "
             f"{CHECKIN_SNAPSHOT_SCHEMA_VERSION}"
         )
 
@@ -68,10 +69,14 @@ def validate_checkin_snapshot(snapshot: dict[str, Any]) -> dict[str, Any]:
     preferences = snapshot.get("preferences") if schema_version >= 3 else []
     global_events = snapshot.get("global_events") if schema_version >= 3 else []
     achievements = snapshot.get("achievements") if schema_version >= 3 else []
+    theme_purchases = snapshot.get("theme_purchases") if schema_version >= 4 else []
+    group_presence = snapshot.get("group_presence") if schema_version >= 5 else []
     for key, value in (
         ("preferences", preferences),
         ("global_events", global_events),
         ("achievements", achievements),
+        ("theme_purchases", theme_purchases),
+        ("group_presence", group_presence),
     ):
         if not isinstance(value, list):
             raise ValueError(f"签到备份 {key} 必须是数组")
@@ -81,8 +86,7 @@ def validate_checkin_snapshot(snapshot: dict[str, Any]) -> dict[str, Any]:
         for index, row in enumerate(profiles)
     ]
     normalized_records = [
-        _normalize_record_snapshot_row(row, index)
-        for index, row in enumerate(records)
+        _normalize_record_snapshot_row(row, index) for index, row in enumerate(records)
     ]
     normalized_preferences = [
         _normalize_preference_snapshot_row(row, index)
@@ -95,6 +99,14 @@ def validate_checkin_snapshot(snapshot: dict[str, Any]) -> dict[str, Any]:
     normalized_achievements = [
         _normalize_achievement_snapshot_row(row, index)
         for index, row in enumerate(achievements)
+    ]
+    normalized_theme_purchases = [
+        _normalize_theme_purchase_snapshot_row(row, index)
+        for index, row in enumerate(theme_purchases)
+    ]
+    normalized_group_presence = [
+        _normalize_group_presence_snapshot_row(row, index)
+        for index, row in enumerate(group_presence)
     ]
 
     profile_user_ids: set[str] = set()
@@ -115,8 +127,7 @@ def validate_checkin_snapshot(snapshot: dict[str, Any]) -> dict[str, Any]:
         record_keys.add(record_key)
         if record["user_id"] not in profile_user_ids:
             raise ValueError(
-                f"records[{index}].user_id has no matching profile: "
-                f"{record['user_id']}"
+                f"records[{index}].user_id has no matching profile: {record['user_id']}"
             )
 
     preference_ids: set[str] = set()
@@ -133,9 +144,7 @@ def validate_checkin_snapshot(snapshot: dict[str, Any]) -> dict[str, Any]:
             raise ValueError(f"achievements[{index}] duplicate")
         achievement_keys.add(key)
         if achievement["user_id"] not in profile_user_ids:
-            raise ValueError(
-                f"achievements[{index}].user_id has no matching profile"
-            )
+            raise ValueError(f"achievements[{index}].user_id has no matching profile")
 
     event_ids: set[int] = set()
     event_dates: set[tuple[str, str]] = set()
@@ -146,10 +155,40 @@ def validate_checkin_snapshot(snapshot: dict[str, Any]) -> dict[str, Any]:
         event_ids.add(event["event_id"])
         event_dates.add(event_key)
 
+    theme_purchase_keys: set[tuple[str, str]] = set()
+    for index, purchase in enumerate(normalized_theme_purchases):
+        key = (purchase["user_id"], purchase["theme_id"])
+        if key in theme_purchase_keys:
+            raise ValueError(f"theme_purchases[{index}] duplicate")
+        theme_purchase_keys.add(key)
+        if purchase["user_id"] not in profile_user_ids:
+            raise ValueError(
+                f"theme_purchases[{index}].user_id has no matching profile"
+            )
+
     for index, preference in enumerate(normalized_preferences):
         selected = preference["selected_title_id"]
         if selected and (preference["user_id"], selected) not in achievement_keys:
             raise ValueError(f"preferences[{index}].selected_title_id 未解锁")
+        selected_theme = preference["selected_theme_id"]
+        if (
+            selected_theme != DEFAULT_CHECKIN_THEME_ID
+            and (preference["user_id"], selected_theme) not in theme_purchase_keys
+        ):
+            raise ValueError(f"preferences[{index}].selected_theme_id 未购买")
+
+    presence_keys: set[tuple[str, str, str]] = set()
+    for index, presence in enumerate(normalized_group_presence):
+        key = (
+            presence["date_key"],
+            presence["group_id"],
+            presence["user_id"],
+        )
+        if key in presence_keys:
+            raise ValueError(f"group_presence[{index}] duplicate")
+        presence_keys.add(key)
+        if presence["user_id"] not in profile_user_ids:
+            raise ValueError(f"group_presence[{index}].user_id has no matching profile")
 
     return {
         "schema_version": CHECKIN_SNAPSHOT_SCHEMA_VERSION,
@@ -161,6 +200,8 @@ def validate_checkin_snapshot(snapshot: dict[str, Any]) -> dict[str, Any]:
         "preferences": normalized_preferences,
         "global_events": normalized_events,
         "achievements": normalized_achievements,
+        "theme_purchases": normalized_theme_purchases,
+        "group_presence": normalized_group_presence,
     }
 
 
@@ -204,18 +245,12 @@ def _normalize_record_snapshot_row(row: Any, index: int) -> dict[str, Any]:
         "base_coins": _require_int(row, "base_coins", f"records[{index}]"),
         "bonus_coins": _require_int(row, "bonus_coins", f"records[{index}]"),
         "coins_reward": _require_int(row, "coins_reward", f"records[{index}]"),
-        "base_affection": _require_float(
-            row, "base_affection", f"records[{index}]"
-        ),
-        "bonus_affection": _require_float(
-            row, "bonus_affection", f"records[{index}]"
-        ),
+        "base_affection": _require_float(row, "base_affection", f"records[{index}]"),
+        "bonus_affection": _require_float(row, "bonus_affection", f"records[{index}]"),
         "affection_reward": _require_float(
             row, "affection_reward", f"records[{index}]"
         ),
-        "boost_active": _require_boolish_int(
-            row, "boost_active", f"records[{index}]"
-        ),
+        "boost_active": _require_boolish_int(row, "boost_active", f"records[{index}]"),
         "boost_multiplier": _require_float(
             row, "boost_multiplier", f"records[{index}]"
         ),
@@ -225,9 +260,7 @@ def _normalize_record_snapshot_row(row: Any, index: int) -> dict[str, Any]:
         "total_affection_after": _require_float(
             row, "total_affection_after", f"records[{index}]"
         ),
-        "total_days_after": _require_int(
-            row, "total_days_after", f"records[{index}]"
-        ),
+        "total_days_after": _require_int(row, "total_days_after", f"records[{index}]"),
         "streak_days_after": _require_int(
             row, "streak_days_after", f"records[{index}]"
         ),
@@ -242,6 +275,10 @@ def _normalize_record_snapshot_row(row: Any, index: int) -> dict[str, Any]:
         "greeting_attribution": _optional_text(row, "greeting_attribution", ""),
         "secondary_note": _optional_text(row, "secondary_note", ""),
         "template_version": _optional_text(row, "template_version", "v2"),
+        "theme_id": _validated_theme_id(
+            _optional_text(row, "theme_id", DEFAULT_CHECKIN_THEME_ID),
+            f"records[{index}].theme_id",
+        ),
         "background_mode": _require_text(
             row, "background_mode", f"records[{index}]", allow_blank=True
         ),
@@ -275,6 +312,10 @@ def _normalize_preference_snapshot_row(row: Any, index: int) -> dict[str, Any]:
     selected = _optional_text(row, "selected_title_id", "")
     if selected and selected not in ACHIEVEMENTS:
         raise ValueError(f"preferences[{index}].selected_title_id 无效")
+    selected_theme = _validated_theme_id(
+        _optional_text(row, "selected_theme_id", DEFAULT_CHECKIN_THEME_ID),
+        f"preferences[{index}].selected_theme_id",
+    )
     return {
         "user_id": _require_text(row, "user_id", f"preferences[{index}]"),
         "birthday_month": month,
@@ -284,8 +325,57 @@ def _normalize_preference_snapshot_row(row: Any, index: int) -> dict[str, Any]:
             row, "qq_birthday_checked", f"preferences[{index}]"
         ),
         "selected_title_id": selected,
+        "selected_theme_id": selected_theme,
         "created_at": _require_text(row, "created_at", f"preferences[{index}]"),
         "updated_at": _require_text(row, "updated_at", f"preferences[{index}]"),
+    }
+
+
+def _normalize_theme_purchase_snapshot_row(row: Any, index: int) -> dict[str, Any]:
+    if not isinstance(row, dict):
+        raise ValueError(f"theme_purchases[{index}] 必须是对象")
+    theme_id = _validated_theme_id(
+        _require_text(row, "theme_id", f"theme_purchases[{index}]"),
+        f"theme_purchases[{index}].theme_id",
+    )
+    if theme_id == DEFAULT_CHECKIN_THEME_ID:
+        raise ValueError(f"theme_purchases[{index}] 不应记录默认主题")
+    cost = _require_int(row, "cost", f"theme_purchases[{index}]")
+    if cost < 0:
+        raise ValueError(f"theme_purchases[{index}].cost 不能为负数")
+    return {
+        "user_id": _require_text(row, "user_id", f"theme_purchases[{index}]"),
+        "theme_id": theme_id,
+        "cost": cost,
+        "purchased_at": _require_text(row, "purchased_at", f"theme_purchases[{index}]"),
+    }
+
+
+def _validated_theme_id(value: str, location: str) -> str:
+    theme_id = str(value or "")
+    if theme_id not in CHECKIN_THEMES:
+        raise ValueError(f"{location} 无效")
+    return theme_id
+
+
+def _normalize_group_presence_snapshot_row(row: Any, index: int) -> dict[str, Any]:
+    if not isinstance(row, dict):
+        raise ValueError(f"group_presence[{index}] 必须是对象")
+    location = f"group_presence[{index}]"
+    date_key = _require_text(row, "date_key", location)
+    try:
+        date.fromisoformat(date_key)
+    except ValueError as exc:
+        raise ValueError(f"{location}.date_key 无效") from exc
+    return {
+        "date_key": date_key,
+        "group_id": _require_text(row, "group_id", location),
+        "group_name": _optional_text(row, "group_name", ""),
+        "platform": _optional_text(row, "platform", ""),
+        "user_id": _require_text(row, "user_id", location),
+        "username": _require_text(row, "username", location),
+        "first_seen_at": _require_text(row, "first_seen_at", location),
+        "last_seen_at": _require_text(row, "last_seen_at", location),
     }
 
 
@@ -300,9 +390,7 @@ def _normalize_global_event_snapshot_row(row: Any, index: int) -> dict[str, Any]
         "event_id": _require_int(row, "event_id", f"global_events[{index}]"),
         "event_type": event_type,
         "date_value": date_value,
-        "name": clean_event_name(
-            _require_text(row, "name", f"global_events[{index}]")
-        ),
+        "name": clean_event_name(_require_text(row, "name", f"global_events[{index}]")),
         "created_by": _optional_text(row, "created_by", ""),
         "created_at": _require_text(row, "created_at", f"global_events[{index}]"),
         "updated_at": _require_text(row, "updated_at", f"global_events[{index}]"),
@@ -312,17 +400,13 @@ def _normalize_global_event_snapshot_row(row: Any, index: int) -> dict[str, Any]
 def _normalize_achievement_snapshot_row(row: Any, index: int) -> dict[str, Any]:
     if not isinstance(row, dict):
         raise ValueError(f"achievements[{index}] 必须是对象")
-    achievement_id = _require_text(
-        row, "achievement_id", f"achievements[{index}]"
-    )
+    achievement_id = _require_text(row, "achievement_id", f"achievements[{index}]")
     if achievement_id not in ACHIEVEMENTS:
         raise ValueError(f"achievements[{index}].achievement_id 无效")
     return {
         "user_id": _require_text(row, "user_id", f"achievements[{index}]"),
         "achievement_id": achievement_id,
-        "unlocked_at": _require_text(
-            row, "unlocked_at", f"achievements[{index}]"
-        ),
+        "unlocked_at": _require_text(row, "unlocked_at", f"achievements[{index}]"),
     }
 
 

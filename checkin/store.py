@@ -8,11 +8,13 @@ from .backup_store import BackupStoreMixin
 from .feature_store import FeatureStoreMixin
 from .models import SHANGHAI_TZ
 from .record_store import RecordStoreMixin
+from .ranking_store import RankingStoreMixin
 from .schema import SchemaMixin
 
 
 class CheckinStore(
     RecordStoreMixin,
+    RankingStoreMixin,
     FeatureStoreMixin,
     BackupStoreMixin,
     SchemaMixin,

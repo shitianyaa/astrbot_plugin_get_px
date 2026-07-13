@@ -3,6 +3,7 @@ from __future__ import annotations
 import base64
 from dataclasses import asdict, dataclass
 from datetime import date
+from functools import lru_cache
 from html import escape
 from pathlib import Path
 from typing import Any, Iterable
@@ -12,30 +13,43 @@ from astrbot.api import logger
 from .content import CheckinContent, MILESTONES
 from .models import ACHIEVEMENTS, CheckinProfile, CheckinRecord
 from .rules import affection_level, boost_remaining_days
+from .themes import DEFAULT_CHECKIN_THEME_ID, get_checkin_theme
 
 
 CHECKIN_CARD_WIDTH = 960
 CHECKIN_CARD_HEIGHT = 540
 
 _TEMPLATE_DIR = Path(__file__).resolve().parents[1] / "templates" / "checkin_card_v2"
+_PLUGIN_ROOT = Path(__file__).resolve().parents[1]
 _CSS_MARKER = "/*__CHECKIN_CARD_CSS__*/"
 _FONT_DATA_MARKER = "__CHECKIN_CARD_FONT_DATA__"
 _FONT_PATH = _TEMPLATE_DIR / "fonts" / "LXGWWenKaiLite-GB2312.woff2"
 
 
-def _load_checkin_card_template() -> str:
-    html = (_TEMPLATE_DIR / "index.html").read_text(encoding="utf-8")
-    css = (_TEMPLATE_DIR / "style.css").read_text(encoding="utf-8")
+@lru_cache(maxsize=16)
+def get_checkin_card_template(theme_id: str = DEFAULT_CHECKIN_THEME_ID) -> str:
+    theme = get_checkin_theme(theme_id)
+    template_dir = theme.template_dir(_PLUGIN_ROOT)
+    html = (template_dir / "index.html").read_text(encoding="utf-8")
+    css = (template_dir / "style.css").read_text(encoding="utf-8")
     if _CSS_MARKER not in html:
-        raise RuntimeError("check-in card template is missing its CSS marker")
+        raise RuntimeError(
+            f"check-in card theme {theme.theme_id} is missing its CSS marker"
+        )
     if _FONT_DATA_MARKER not in css:
-        raise RuntimeError("check-in card stylesheet is missing its font marker")
+        raise RuntimeError(
+            f"check-in card theme {theme.theme_id} is missing its font marker"
+        )
     font_data = base64.b64encode(_FONT_PATH.read_bytes()).decode("ascii")
     css = css.replace(_FONT_DATA_MARKER, font_data)
     return html.replace(_CSS_MARKER, css)
 
 
-CHECKIN_CARD_TEMPLATE = _load_checkin_card_template()
+def _load_checkin_card_template() -> str:
+    return get_checkin_card_template(DEFAULT_CHECKIN_THEME_ID)
+
+
+CHECKIN_CARD_TEMPLATE = get_checkin_card_template()
 
 
 @dataclass(frozen=True)
@@ -161,7 +175,7 @@ def _milestone_next_text(total_days: int) -> str:
             continue
         threshold = int(definition["threshold"])
         if threshold > total_days:
-            return f'{definition["title"]} · 还差 {threshold - total_days} 天'
+            return f"{definition['title']} · 还差 {threshold - total_days} 天"
     return "已解锁全部签到成就"
 
 
@@ -256,6 +270,7 @@ def build_checkin_card_data(
     content: CheckinContent | None = None,
     width: int = CHECKIN_CARD_WIDTH,
     height: int = CHECKIN_CARD_HEIGHT,
+    background_refresh_cost: int = 100,
 ) -> dict[str, object]:
     if (width, height) != (CHECKIN_CARD_WIDTH, CHECKIN_CARD_HEIGHT):
         raise ValueError(
@@ -275,6 +290,7 @@ def build_checkin_card_data(
         if isinstance(value, str):
             data[key] = escape(value)
     data["badges"] = tuple(escape(badge) for badge in view_model.badges)
+    theme = get_checkin_theme(getattr(record, "theme_id", DEFAULT_CHECKIN_THEME_ID))
     data.update(
         {
             "width": int(width),
@@ -287,6 +303,9 @@ def build_checkin_card_data(
             "affection_reward_label": f"{view_model.affection_reward:.2f}",
             "boost_multiplier_label": f"{view_model.boost_multiplier:g}",
             "artwork_credit": escape(_artwork_credit(view_model)),
+            "theme_id": escape(theme.theme_id),
+            "theme_name": escape(theme.name),
+            "background_refresh_cost": max(0, int(background_refresh_cost)),
         }
     )
     return data

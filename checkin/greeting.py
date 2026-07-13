@@ -16,9 +16,7 @@ DEFAULT_CHECKIN_GREETING_PROMPT = (
     "</checkin_data>\n"
     "只输出正文；最多44个中文字符、最多两句话、不换行，不输出标题、引号、解释、Markdown或标签。"
 )
-HARD_OUTPUT_CONSTRAINT = (
-    "只输出正文；最多44个中文字符、最多两句话、不换行，不输出标题、引号、解释、Markdown或标签。"
-)
+HARD_OUTPUT_CONSTRAINT = "只输出正文；最多44个中文字符、最多两句话、不换行，不输出标题、引号、解释、Markdown或标签。"
 HITOKOTO_API_URL = "https://v1.hitokoto.cn/"
 HITOKOTO_MAX_LENGTH = 24
 HITOKOTO_CATEGORY_CODES = {
@@ -119,9 +117,7 @@ class CheckinGreetingGenerator:
             ("encode", "json"),
             ("max_length", str(HITOKOTO_MAX_LENGTH)),
         ]
-        params.extend(
-            ("c", code) for code in self._hitokoto_category_codes(categories)
-        )
+        params.extend(("c", code) for code in self._hitokoto_category_codes(categories))
         try:
             async with aiohttp.ClientSession(timeout=request_timeout) as session:
                 async with session.get(
@@ -229,7 +225,9 @@ class CheckinGreetingGenerator:
                     text = text[len(left) : -len(right)].strip()
                     changed = True
         sentence_segments = [
-            segment.strip() for segment in _SENTENCE_END_RE.split(text) if segment.strip()
+            segment.strip()
+            for segment in _SENTENCE_END_RE.split(text)
+            if segment.strip()
         ]
         if len(sentence_segments) > 2:
             return ""

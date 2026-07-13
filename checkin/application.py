@@ -12,6 +12,8 @@ from .birthday import birthday_matches, parse_qq_birthday
 from .card import CardBackground, build_checkin_card_data
 from .content import CheckinContent, resolve_checkin_content
 from .greeting import DEFAULT_CHECKIN_GREETING_PROMPT
+from .themes import get_checkin_theme
+
 try:
     from ..pixiv.downloader import cleanup
 except ImportError:  # Direct imports used by the test suite.
@@ -42,6 +44,30 @@ class CheckinApplicationMixin:
                 return str(value)
         return default
 
+    @staticmethod
+    def _event_group_context(event: AstrMessageEvent) -> tuple[str, str, str]:
+        try:
+            group_id = str(event.get_group_id() or "").strip()
+        except Exception:
+            group_id = ""
+        if not group_id:
+            return "", "", ""
+        message_obj = getattr(event, "message_obj", None)
+        group_name = ""
+        for source in (message_obj, getattr(message_obj, "raw_message", None)):
+            if isinstance(source, dict):
+                value = source.get("group_name") or source.get("groupName")
+            else:
+                value = getattr(source, "group_name", None)
+            if value:
+                group_name = str(value).strip()
+                break
+        try:
+            platform = str(event.get_platform_name() or "").strip()
+        except Exception:
+            platform = ""
+        return group_id, group_name or group_id, platform
+
     async def _handle_checkin(
         self,
         event: AstrMessageEvent,
@@ -64,6 +90,7 @@ class CheckinApplicationMixin:
             return
         username = self._event_username(event, user_id)
         bot_name = self._cfg_str("checkin_bot_name", "neko") or "neko"
+        group_id, group_name, platform = self._event_group_context(event)
 
         if not _flow_locked:
             locks = getattr(self, "_checkin_flow_locks", None)
@@ -86,10 +113,22 @@ class CheckinApplicationMixin:
             return
 
         try:
+            theme = get_checkin_theme("default")
+            get_preference = getattr(self.checkin_store, "get_user_preference", None)
+            if callable(get_preference):
+                preference = await get_preference(user_id)
+                theme = get_checkin_theme(
+                    getattr(preference, "selected_theme_id", "default")
+                )
             result = await self.checkin_store.checkin(
                 user_id=user_id,
                 username=username,
                 bot_name=bot_name,
+                theme_id=theme.theme_id,
+                template_version=theme.template_version,
+                group_id=group_id,
+                group_name=group_name,
+                platform=platform,
             )
         except Exception as e:
             logger.error(f"{LOG_PREFIX} 签到写入失败: {e}")
@@ -206,8 +245,6 @@ class CheckinApplicationMixin:
                     cleanup(background.image_path)
         yield event.plain_result(self._format_checkin_plain_text(result))
 
-
-
     async def _prepare_checkin_record_content(
         self,
         event: AstrMessageEvent,
@@ -263,9 +300,13 @@ class CheckinApplicationMixin:
         store = self.checkin_store
         preference = None
         unlocked_ids: tuple[str, ...] = ()
-        if store is not None and mutate_features and all(
-            hasattr(store, name)
-            for name in ("get_user_preference", "unlock_achievements")
+        if (
+            store is not None
+            and mutate_features
+            and all(
+                hasattr(store, name)
+                for name in ("get_user_preference", "unlock_achievements")
+            )
         ):
             preference = await self._ensure_checkin_birthday(event, record.user_id)
             unlocked_ids = await store.unlock_achievements(profile)
@@ -275,13 +316,16 @@ class CheckinApplicationMixin:
 
         title = (
             str(ACHIEVEMENTS[preference.selected_title_id]["title"])
-            if preference is not None
-            and preference.selected_title_id in ACHIEVEMENTS
+            if preference is not None and preference.selected_title_id in ACHIEVEMENTS
             else ""
         )
         birthday_label = ""
-        if preference is not None and preference.birthday_label and birthday_matches(
-            record.date_key, preference.birthday_month, preference.birthday_day
+        if (
+            preference is not None
+            and preference.birthday_label
+            and birthday_matches(
+                record.date_key, preference.birthday_month, preference.birthday_day
+            )
         ):
             birthday_label = "生日"
 
@@ -317,12 +361,8 @@ class CheckinApplicationMixin:
         if greeting_mode == "hitokoto":
             return await self.checkin_greeting.generate_hitokoto(
                 content.context,
-                timeout=self._cfg_float(
-                    "checkin_hitokoto_timeout", 5.0, 1.0, 15.0
-                ),
-                categories=self.config.get(
-                    "checkin_hitokoto_categories", ["全部"]
-                ),
+                timeout=self._cfg_float("checkin_hitokoto_timeout", 5.0, 1.0, 15.0),
+                categories=self.config.get("checkin_hitokoto_categories", ["全部"]),
             )
         greeting, source = await self.checkin_greeting.generate(
             event,
@@ -332,18 +372,13 @@ class CheckinApplicationMixin:
             prompt=self._cfg_str(
                 "checkin_ai_greeting_prompt", DEFAULT_CHECKIN_GREETING_PROMPT
             ),
-            timeout=self._cfg_float(
-                "checkin_ai_greeting_timeout", 8.0, 1.0, 30.0
-            ),
+            timeout=self._cfg_float("checkin_ai_greeting_timeout", 8.0, 1.0, 30.0),
         )
         return greeting, source, ""
-
 
     def _checkin_greeting_mode(self) -> str:
         mode = self._cfg_str("checkin_greeting_mode", "hitokoto").lower()
         return mode if mode in ("local", "hitokoto", "ai") else "hitokoto"
-
-
 
     async def _ensure_checkin_birthday(self, event: AstrMessageEvent, user_id: str):
         preference = await self.checkin_store.get_user_preference(user_id)
@@ -357,8 +392,6 @@ class CheckinApplicationMixin:
             )
         return await self.checkin_store.get_user_preference(user_id)
 
-
-
     async def _get_checkin_user_title(self, user_id: str) -> str:
         store = self.checkin_store
         if store is None or not hasattr(store, "get_user_preference"):
@@ -367,8 +400,6 @@ class CheckinApplicationMixin:
         if preference.selected_title_id not in ACHIEVEMENTS:
             return ""
         return str(ACHIEVEMENTS[preference.selected_title_id]["title"])
-
-
 
     @staticmethod
     async def _fetch_qq_birthday(
@@ -382,7 +413,9 @@ class CheckinApplicationMixin:
                 return None
             bot = getattr(event, "bot", None)
             if bot is None or not hasattr(bot, "call_action"):
-                logger.warning(f"{LOG_PREFIX} QQ 生日读取失败: 当前事件不支持 call_action")
+                logger.warning(
+                    f"{LOG_PREFIX} QQ 生日读取失败: 当前事件不支持 call_action"
+                )
                 return None
             payload = await asyncio.wait_for(
                 bot.call_action(
@@ -408,8 +441,6 @@ class CheckinApplicationMixin:
             logger.warning(f"{LOG_PREFIX} QQ 生日读取异常: {exc}", exc_info=True)
             return None
 
-
-
     @staticmethod
     def _checkin_profile_from_record(record: CheckinRecord) -> CheckinProfile:
         return CheckinProfile(
@@ -427,8 +458,6 @@ class CheckinApplicationMixin:
             updated_at=record.updated_at,
         )
 
-
-
     @staticmethod
     def _checkin_background_from_record(record: CheckinRecord) -> CardBackground:
         return CardBackground(
@@ -438,8 +467,6 @@ class CheckinApplicationMixin:
             title=record.background_title,
             author=record.background_author,
         )
-
-
 
     def _checkin_card_cache_key(
         self,
@@ -471,6 +498,9 @@ class CheckinApplicationMixin:
             avatar_url=avatar_url,
             background=identity_background,
             user_title=user_title,
+            background_refresh_cost=self._cfg_int(
+                "checkin_background_refresh_cost", 100, 0, 100000
+            ),
         )
         view_model["background_mode"] = identity_background.mode
         view_model["background_source"] = identity_background.source

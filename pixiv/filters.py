@@ -7,10 +7,14 @@ from astrbot.api.all import logger
 from astrbot.api.event import AstrMessageEvent
 
 from .index import ordered_by_unused
+from .safety import (
+    illustration_texts,
+    match_safety_term,
+    normalized_builtin_terms,
+)
 
 
 LOG_PREFIX = "[GetPx]"
-DEFAULT_BLACKLIST_TAGS = "furry,裸体,全裸,触手,露出,nsfw"
 
 
 class FiltersMixin:
@@ -26,80 +30,68 @@ class FiltersMixin:
             if tag.strip()
         ]
 
-    def _blacklist_tags(self) -> set[str]:
-        configured = self._split_config_tags(self._cfg_str("blacklist_tags", ""))
-        tags = configured or self._split_config_tags(DEFAULT_BLACKLIST_TAGS)
-        return {tag.casefold() for tag in tags}
+    async def _safety_terms(self) -> set[str]:
+        terms = set(normalized_builtin_terms())
+        if self.image_index is None:
+            return terms
+        try:
+            terms.update(await self.image_index.get_custom_safety_terms())
+        except Exception as exc:
+            logger.error(f"{LOG_PREFIX} 读取自定义安全词失败: {type(exc).__name__}")
+            raise RuntimeError("内容安全服务暂不可用") from exc
+        return terms
+
+    async def _blocked_query_term(self, query: str) -> str:
+        return match_safety_term(query, await self._safety_terms())
 
     @staticmethod
-    def _illust_tag_names(illust: dict) -> set[str]:
-        names: set[str] = set()
-        for tag in illust.get("tags") or []:
-            if not isinstance(tag, dict):
-                continue
-            for key in ("name", "translated_name"):
-                value = str(tag.get(key) or "").strip()
-                if value:
-                    names.add(value.casefold())
-        return names
-
-    def _matched_blacklist_tag(self, illust: dict) -> str:
-        matched = self._illust_tag_names(illust) & self._blacklist_tags()
-        return sorted(matched)[0] if matched else ""
+    def _matched_safety_term(illust: dict, terms: set[str]) -> str:
+        for value in illustration_texts(illust):
+            if matched := match_safety_term(value, terms):
+                return matched
+        return ""
 
     async def _blacklist_reason_for_illust(
         self, illust: dict, illust_id: str = ""
     ) -> str:
         illust_id = str(illust_id or illust.get("id") or "")
-        matched_tag = self._matched_blacklist_tag(illust)
+        if int(illust.get("x_restrict", 0) or 0) != 0:
+            return f"作品 {illust_id or '-'} 不符合内容安全要求"
+        matched_tag = self._matched_safety_term(illust, await self._safety_terms())
         if matched_tag:
-            return f"作品 {illust_id or '-'} 命中拉黑标签 {matched_tag}"
+            return f"作品 {illust_id or '-'} 命中内容安全词 {matched_tag}"
         if await self._is_blacklisted_illust(illust_id):
             return f"作品 {illust_id} 已在黑名单中"
         return ""
 
     @staticmethod
-    def _filter_r18(illusts: list[dict], mode: int) -> list[dict]:
-        """根据 R18 模式过滤作品。mode: 0=仅非R18, 1=仅R18, 2=混合。"""
-
-        def keep(illust: dict) -> bool:
-            xr = int(illust.get("x_restrict", 0) or 0)
-            if mode == 0:
-                return xr == 0
-            if mode == 1:
-                return xr > 0
-            return True
-
-        return [i for i in illusts if keep(i)]
-
+    def _filter_safe_rating(illusts: list[dict]) -> list[dict]:
+        """Only allow Pixiv works explicitly marked as general audience."""
+        return [i for i in illusts if int(i.get("x_restrict", 0) or 0) == 0]
 
     @staticmethod
     def _filter_manga(illusts: list[dict]) -> list[dict]:
         """Filter out every Pixiv manga item."""
         return [il for il in illusts if il.get("type") != "manga"]
 
-
     async def _filter_blacklisted_illusts(self, illusts: list[dict]) -> list[dict]:
         if not illusts:
             return illusts
-        blacklist_tags = self._blacklist_tags()
+        safety_terms = await self._safety_terms()
         blacklisted: set[str] = set()
-        if self.image_index is None and not blacklist_tags:
-            return illusts
         try:
             if self.image_index is not None:
                 blacklisted = await self.image_index.get_blacklisted_illust_ids()
-        except Exception as e:
-            logger.warning(f"{LOG_PREFIX} 读取图片黑名单失败: {e}")
-        if not blacklisted and not blacklist_tags:
-            return illusts
+        except Exception as exc:
+            logger.error(f"{LOG_PREFIX} 读取图片黑名单失败: {type(exc).__name__}")
+            raise RuntimeError("内容安全服务暂不可用") from exc
         return [
             illust
             for illust in illusts
             if str(illust.get("id") or "") not in blacklisted
-            and not self._matched_blacklist_tag(illust)
+            and int(illust.get("x_restrict", 0) or 0) == 0
+            and not self._matched_safety_term(illust, safety_terms)
         ]
-
 
     async def _is_blacklisted_illust(self, illust_id: str) -> bool:
         if self.image_index is None or not illust_id:
@@ -107,8 +99,8 @@ class FiltersMixin:
         try:
             return await self.image_index.is_blacklisted(illust_id)
         except Exception as e:
-            logger.warning(f"{LOG_PREFIX} 读取图片黑名单失败: {e}")
-            return False
+            logger.error(f"{LOG_PREFIX} 读取图片黑名单失败: {type(e).__name__}")
+            return True
 
     async def _pick_illusts(
         self,
@@ -127,9 +119,7 @@ class FiltersMixin:
         source_key = self._source_key(tag, ranking_mode)
         scope = self._event_scope(event)
         try:
-            used_ids = await self.image_index.get_used_illust_ids(
-                scope, source_key
-            )
+            used_ids = await self.image_index.get_used_illust_ids(scope, source_key)
         except Exception as e:
             logger.warning(f"{LOG_PREFIX} 读取当天发图索引失败: {e}")
             return []
@@ -141,9 +131,7 @@ class FiltersMixin:
         # 若整页全被用过，推进分页游标供下次翻页
         if not fresh and raw_count > 0:
             try:
-                await self.image_index.advance_page_offset(
-                    scope, source_key, raw_count
-                )
+                await self.image_index.advance_page_offset(scope, source_key, raw_count)
             except Exception as e:
                 logger.warning(f"{LOG_PREFIX} 分页游标更新失败: {e}")
 
