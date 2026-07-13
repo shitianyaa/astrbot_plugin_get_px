@@ -164,3 +164,74 @@ async def test_manual_blacklist_fetches_metadata_and_safe_thumbnail() -> None:
             assert not (Path(tmp) / "downloaded-thumb.jpg").exists()
         finally:
             plugin.image_index.close()
+
+
+@pytest.mark.asyncio
+async def test_management_api_lists_and_updates_checkin_members() -> None:
+    with tempfile.TemporaryDirectory() as tmp:
+        plugin = build_plugin(tmp)
+        await plugin.checkin_store.checkin(
+            user_id="10001",
+            username="Alice",
+            bot_name="neko",
+        )
+        api = PluginWebApi(
+            plugin,
+            plugin_name="astrbot_plugin_get_px",
+            log_prefix="[GetPx]",
+            internal_error_message="internal",
+        )
+        app = Quart(__name__)
+        app.add_url_rule("/members", view_func=api.checkin_members, methods=["GET"])
+        app.add_url_rule(
+            "/members/update",
+            view_func=api.checkin_member_update,
+            methods=["POST"],
+        )
+        try:
+            async with app.test_app():
+                client = app.test_client()
+                listed_response = await client.get("/members?query=Alice&limit=10")
+                listed = await listed_response.get_json()
+                updated_response = await client.post(
+                    "/members/update",
+                    json={
+                        "user_id": "10001",
+                        "coins": 800,
+                        "affection": 66.6,
+                        "total_days": 20,
+                        "streak_days": 7,
+                    },
+                )
+                updated = await updated_response.get_json()
+                invalid_response = await client.post(
+                    "/members/update",
+                    json={
+                        "user_id": "10001",
+                        "coins": 800,
+                        "affection": 66.6,
+                        "total_days": 2,
+                        "streak_days": 7,
+                    },
+                )
+                missing_response = await client.post(
+                    "/members/update",
+                    json={
+                        "user_id": "404",
+                        "coins": 0,
+                        "affection": 0,
+                        "total_days": 0,
+                        "streak_days": 0,
+                    },
+                )
+
+            assert listed_response.status_code == 200
+            assert listed["total"] == 1
+            assert listed["members"][0]["username"] == "Alice"
+            assert updated_response.status_code == 200
+            assert updated["member"]["coins"] == 800
+            assert updated["member"]["streak_days"] == 7
+            assert invalid_response.status_code == 400
+            assert missing_response.status_code == 404
+        finally:
+            plugin.image_index.close()

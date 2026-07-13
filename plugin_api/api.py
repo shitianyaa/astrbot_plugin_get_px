@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import base64
 from datetime import datetime
+import math
 from pathlib import Path
 from typing import Any
 
@@ -61,6 +62,18 @@ class PluginWebApi:
                 "Get group check-in ranking",
             ),
             ("checkin-trend", self.checkin_trend, ["GET"], "Get group check-in trend"),
+            (
+                "checkin-members",
+                self.checkin_members,
+                ["GET"],
+                "List check-in member profiles",
+            ),
+            (
+                "checkin-members/update",
+                self.checkin_member_update,
+                ["POST"],
+                "Update check-in member profile values",
+            ),
             (
                 "content-safety",
                 self.content_safety,
@@ -200,6 +213,68 @@ class PluginWebApi:
             return jsonify({"success": False, "error": str(exc)}), 400
         except Exception as exc:
             return self.internal_error("读取签到趋势", exc)
+
+    async def checkin_members(self):
+        if self.plugin.checkin_store is None:
+            return self._unavailable("签到数据尚未初始化")
+        try:
+            limit = self._parse_int(request.args.get("limit", "50"), 1, 100)
+            offset = self._parse_int(request.args.get("offset", "0"), 0, 1_000_000)
+            query = str(request.args.get("query", "") or "").strip()
+            result = await self.plugin.checkin_store.list_checkin_members(
+                query=query,
+                limit=limit,
+                offset=offset,
+            )
+            return jsonify(
+                {
+                    "success": True,
+                    "query": query,
+                    "limit": limit,
+                    "offset": offset,
+                    **result,
+                }
+            )
+        except ValueError as exc:
+            return jsonify({"success": False, "error": str(exc)}), 400
+        except Exception as exc:
+            return self.internal_error("读取签到成员", exc)
+
+    async def checkin_member_update(self):
+        if self.plugin.checkin_store is None:
+            return self._unavailable("签到数据尚未初始化")
+        payload = await request.get_json(silent=True) or {}
+        if not isinstance(payload, dict):
+            return jsonify({"success": False, "error": "请求内容必须是对象"}), 400
+        user_id = str(payload.get("user_id") or "").strip()
+        try:
+            result = await self.plugin.checkin_store.update_checkin_member(
+                user_id=user_id,
+                coins=self._parse_profile_integer(payload.get("coins"), "金币"),
+                affection=self._parse_profile_affection(payload.get("affection")),
+                total_days=self._parse_profile_integer(
+                    payload.get("total_days"), "累计签到"
+                ),
+                streak_days=self._parse_profile_integer(
+                    payload.get("streak_days"), "连续签到"
+                ),
+            )
+            before = result["before"]
+            member = result["member"]
+            logger.info(
+                f"{self.log_prefix} 管理页调整签到成员数值: user_id={user_id} "
+                f"coins={before['coins']}->{member['coins']} "
+                f"affection={before['affection']}->{member['affection']} "
+                f"total_days={before['total_days']}->{member['total_days']} "
+                f"streak_days={before['streak_days']}->{member['streak_days']}"
+            )
+            return jsonify({"success": True, "member": member})
+        except LookupError as exc:
+            return jsonify({"success": False, "error": str(exc)}), 404
+        except ValueError as exc:
+            return jsonify({"success": False, "error": str(exc)}), 400
+        except Exception as exc:
+            return self.internal_error("调整签到成员数值", exc)
 
     async def content_safety(self):
         if self.plugin.image_index is None:
@@ -527,6 +602,32 @@ class PluginWebApi:
         if not minimum <= parsed <= maximum:
             raise ValueError(f"参数范围必须是 {minimum} 至 {maximum}")
         return parsed
+
+    @staticmethod
+    def _parse_profile_integer(value: object, label: str) -> int:
+        try:
+            if isinstance(value, bool):
+                raise ValueError
+            parsed = int(str(value))
+        except (TypeError, ValueError) as exc:
+            raise ValueError(f"{label}必须是整数") from exc
+        if not 0 <= parsed <= 2_147_483_647:
+            raise ValueError(f"{label}必须在 0 至 2147483647 之间")
+        return parsed
+
+    @staticmethod
+    def _parse_profile_affection(value: object) -> float:
+        try:
+            if isinstance(value, bool):
+                raise ValueError
+            parsed = float(str(value))
+        except (TypeError, ValueError) as exc:
+            raise ValueError("好感度必须是数字") from exc
+        if not math.isfinite(parsed):
+            raise ValueError("好感度必须是有限数字")
+        if not -10 <= parsed <= 1_000_000:
+            raise ValueError("好感度必须在 -10 至 1000000 之间")
+        return round(parsed, 2)
 
     @staticmethod
     def _normalize_request_ids(value: object) -> list[str]:

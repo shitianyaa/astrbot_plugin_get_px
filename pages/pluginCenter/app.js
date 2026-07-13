@@ -9,12 +9,21 @@ const state = {
   safety: { builtin_terms: [], custom_terms: [] },
   blacklist: [],
   thumbs: {},
+  members: [],
+  memberQuery: "",
+  memberTotal: 0,
+  memberOffset: 0,
+  memberPageSize: 50,
+  membersLoading: false,
+  selectedMember: null,
+  memberDialogTrigger: null,
   loading: false,
   loaded: {
     overview: false,
     groups: false,
     safety: false,
     blacklist: false,
+    members: false,
   },
 };
 
@@ -36,6 +45,19 @@ const els = {
   activityTrack: $("activityTrack"),
   trendCaption: $("trendCaption"),
   rankingContent: $("rankingContent"),
+  memberCount: $("memberCount"),
+  memberSearch: $("memberSearch"),
+  memberList: $("memberList"),
+  memberLoadMore: $("memberLoadMore"),
+  memberDialog: $("memberDialog"),
+  memberForm: $("memberForm"),
+  memberDialogIdentity: $("memberDialogIdentity"),
+  memberUserId: $("memberUserId"),
+  memberCoins: $("memberCoins"),
+  memberAffection: $("memberAffection"),
+  memberTotalDays: $("memberTotalDays"),
+  memberStreakDays: $("memberStreakDays"),
+  memberFormError: $("memberFormError"),
   builtinTerms: $("builtinTerms"),
   builtinCount: $("builtinCount"),
   builtinSearch: $("builtinSearch"),
@@ -237,6 +259,14 @@ async function reloadAll() {
 
     if (shouldLoadRanking) await loadRanking();
 
+    if (state.loaded.members) {
+      try {
+        await loadMembers({ reset: true });
+      } catch (error) {
+        failures.push(errorMessage(error, "成员资料读取失败"));
+      }
+    }
+
     if (failures.length) {
       showGlobalError(failures);
       showToast("部分数据加载失败，可重试", "error");
@@ -374,6 +404,114 @@ function renderTrend(trend) {
         <b>${count}</b><div class="track-bar" style="height:${height}%"></div><small>${escapeHtml(label)}</small>
       </div>`;
   }).join("");
+}
+
+function renderMembers() {
+  els.memberCount.textContent = `${formatCount(state.members.length)} / ${formatCount(state.memberTotal)} 位`;
+  els.memberLoadMore.hidden = state.members.length >= state.memberTotal;
+  if (!state.members.length) {
+    els.memberList.innerHTML = state.memberQuery
+      ? '<div class="empty">没有找到匹配的签到成员</div>'
+      : '<div class="empty">目前还没有签到成员资料</div>';
+    return;
+  }
+  els.memberList.innerHTML = state.members.map((member) => `
+    <article class="member-row">
+      <div class="member-identity">
+        <strong>${escapeHtml(member.username || member.user_id)}</strong>
+        <small>${escapeHtml(member.user_id)} · 最后签到 ${escapeHtml(member.last_checkin_date || "尚无记录")}</small>
+      </div>
+      <div class="member-metric"><small>金币</small><strong>${formatCount(member.coins)}</strong></div>
+      <div class="member-metric"><small>好感度</small><strong>${Number(member.affection || 0).toFixed(2)}</strong></div>
+      <div class="member-metric"><small>累计签到</small><strong>${formatCount(member.total_days)} 天</strong></div>
+      <div class="member-metric"><small>连续签到</small><strong>${formatCount(member.streak_days)} 天</strong></div>
+      <button class="member-edit" type="button" data-edit-member="${escapeHtml(member.user_id)}"
+        aria-label="编辑 ${escapeHtml(member.username || member.user_id)} 的签到数值">编辑</button>
+    </article>
+  `).join("");
+  els.memberList.querySelectorAll("[data-edit-member]").forEach((button) => {
+    button.addEventListener("click", () => {
+      const member = state.members.find((item) => item.user_id === button.dataset.editMember);
+      if (member) openMemberEditor(member, button);
+    });
+  });
+}
+
+function renderMembersError(message = "成员资料读取失败，请重新加载。") {
+  els.memberCount.textContent = "读取失败";
+  els.memberList.innerHTML = `<div class="empty error">${escapeHtml(message)}</div>`;
+  els.memberLoadMore.hidden = true;
+}
+
+async function loadMembers({ reset = false } = {}) {
+  if (state.membersLoading) return;
+  state.membersLoading = true;
+  if (reset) {
+    state.memberOffset = 0;
+    state.members = [];
+    els.memberList.innerHTML = '<div class="empty">正在读取成员资料…</div>';
+  }
+  try {
+    const result = await apiGet("checkin-members", {
+      query: state.memberQuery,
+      limit: state.memberPageSize,
+      offset: state.memberOffset,
+    });
+    const incoming = Array.isArray(result.members) ? result.members : [];
+    state.members = reset ? incoming : state.members.concat(incoming);
+    state.memberTotal = Number(result.total || 0);
+    state.memberOffset = state.members.length;
+    state.loaded.members = true;
+    renderMembers();
+  } catch (error) {
+    renderMembersError(error.message);
+    throw error;
+  } finally {
+    state.membersLoading = false;
+  }
+}
+
+function openMemberEditor(member, trigger) {
+  state.selectedMember = member;
+  state.memberDialogTrigger = trigger || null;
+  els.memberDialogIdentity.textContent = `${member.username || member.user_id} · ${member.user_id}`;
+  els.memberUserId.value = member.user_id;
+  els.memberCoins.value = String(member.coins ?? 0);
+  els.memberAffection.value = Number(member.affection ?? 0).toFixed(2);
+  els.memberTotalDays.value = String(member.total_days ?? 0);
+  els.memberStreakDays.value = String(member.streak_days ?? 0);
+  els.memberFormError.textContent = "";
+  els.memberDialog.showModal();
+  els.memberCoins.focus();
+  els.memberCoins.select();
+}
+
+function readMemberForm() {
+  const values = {
+    user_id: els.memberUserId.value,
+    coins: Number(els.memberCoins.value),
+    affection: Number(els.memberAffection.value),
+    total_days: Number(els.memberTotalDays.value),
+    streak_days: Number(els.memberStreakDays.value),
+  };
+  const integers = [
+    ["金币", values.coins],
+    ["累计签到", values.total_days],
+    ["连续签到", values.streak_days],
+  ];
+  for (const [label, value] of integers) {
+    if (!Number.isInteger(value) || value < 0 || value > 2147483647) {
+      throw new Error(`${label}必须是 0 至 2147483647 之间的整数`);
+    }
+  }
+  if (!Number.isFinite(values.affection) || values.affection < -10 || values.affection > 1000000) {
+    throw new Error("好感度必须在 -10 至 1000000 之间");
+  }
+  if (values.streak_days > values.total_days) {
+    throw new Error("连续签到不能大于累计签到");
+  }
+  values.affection = Math.round(values.affection * 100) / 100;
+  return values;
 }
 
 function renderSafety() {
@@ -522,7 +660,7 @@ function backupFileError(file) {
 }
 
 function switchView(name) {
-  const validNames = new Set(["ranking", "safety", "data"]);
+  const validNames = new Set(["ranking", "members", "safety", "data"]);
   if (!validNames.has(name)) name = "ranking";
   document.querySelectorAll(".workspace-nav [data-view]").forEach((button) =>
     button.classList.toggle("active", button.dataset.view === name));
@@ -532,6 +670,11 @@ function switchView(name) {
     button.setAttribute("aria-current", button.dataset.view === name ? "page" : "false");
   });
   history.replaceState(null, "", `#${name}`);
+  if (name === "members" && !state.loaded.members) {
+    loadMembers({ reset: true }).catch((error) => {
+      showGlobalError([errorMessage(error, "成员资料读取失败")]);
+    });
+  }
 }
 
 function confirmAction(title, message) {
@@ -570,6 +713,66 @@ function bindEvents() {
   $("refreshBtn").addEventListener("click", reloadAll);
   $("retryAllBtn").addEventListener("click", reloadAll);
   els.builtinSearch.addEventListener("input", renderSafety);
+
+  $("memberSearchForm").addEventListener("submit", async (event) => {
+    event.preventDefault();
+    state.memberQuery = els.memberSearch.value.trim();
+    try {
+      await loadMembers({ reset: true });
+    } catch (error) {
+      showToast(error.message || "搜索成员失败", "error");
+    }
+  });
+
+  $("memberClearBtn").addEventListener("click", async () => {
+    els.memberSearch.value = "";
+    state.memberQuery = "";
+    try {
+      await loadMembers({ reset: true });
+      els.memberSearch.focus();
+    } catch (error) {
+      showToast(error.message || "成员资料读取失败", "error");
+    }
+  });
+
+  els.memberLoadMore.addEventListener("click", async () => {
+    setButtonBusy(els.memberLoadMore, true, "正在加载…", "加载更多成员");
+    try {
+      await loadMembers();
+    } catch (error) {
+      showToast(error.message || "加载更多成员失败", "error");
+    } finally {
+      setButtonBusy(els.memberLoadMore, false, "正在加载…", "加载更多成员");
+    }
+  });
+
+  $("memberCancelBtn").addEventListener("click", () => els.memberDialog.close());
+  els.memberDialog.addEventListener("close", () => {
+    state.selectedMember = null;
+    state.memberDialogTrigger?.focus();
+    state.memberDialogTrigger = null;
+  });
+  els.memberForm.addEventListener("submit", async (event) => {
+    event.preventDefault();
+    if (!els.memberForm.reportValidity()) return;
+    const submitButton = $("memberSaveBtn");
+    els.memberFormError.textContent = "";
+    try {
+      const payload = readMemberForm();
+      setButtonBusy(submitButton, true, "正在保存…", "保存修改");
+      const result = await apiPost("checkin-members/update", payload);
+      const index = state.members.findIndex((item) => item.user_id === result.member?.user_id);
+      if (index >= 0) state.members[index] = result.member;
+      renderMembers();
+      els.memberDialog.close();
+      showToast("成员签到数值已更新");
+    } catch (error) {
+      els.memberFormError.textContent = error.message || "保存失败，请检查输入后重试。";
+      showToast(els.memberFormError.textContent, "error");
+    } finally {
+      setButtonBusy(submitButton, false, "正在保存…", "保存修改");
+    }
+  });
 
   $("termForm").addEventListener("submit", async (event) => {
     event.preventDefault();

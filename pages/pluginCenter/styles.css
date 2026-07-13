@@ -662,6 +662,141 @@ h1 {
   font-weight: 700;
 }
 
+.member-notice {
+  display: flex;
+  gap: 12px;
+  align-items: center;
+  margin-bottom: 18px;
+  padding: 13px 16px;
+  border: 1px solid #f5cf9b;
+  border-radius: var(--radius-sm);
+  background: var(--warn-soft);
+  color: #7c4308;
+  font-size: 13px;
+}
+
+.member-notice strong {
+  flex: 0 0 auto;
+  color: var(--warn);
+}
+
+.member-panel {
+  border-color: var(--border-blue);
+  box-shadow: var(--shadow-blue);
+}
+
+.member-search-form {
+  display: grid;
+  grid-template-columns: minmax(180px, 1fr) auto auto;
+  gap: 8px;
+  margin-bottom: 16px;
+}
+
+.member-search-form input,
+.member-value-grid input {
+  width: 100%;
+  min-width: 0;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--surface);
+  color: var(--text);
+  padding: 10px 14px;
+}
+
+.member-search-form input:focus,
+.member-value-grid input:focus {
+  border-color: var(--border-focus);
+  box-shadow: 0 0 0 3px var(--primary-soft);
+}
+
+.member-search-form button,
+.member-edit,
+.member-load-more {
+  border: 0;
+  border-radius: var(--radius-sm);
+  background: var(--primary);
+  color: #fff;
+  padding: 9px 15px;
+  font-weight: 700;
+  cursor: pointer;
+}
+
+.member-search-form button:hover,
+.member-edit:hover,
+.member-load-more:hover {
+  background: var(--primary-hover);
+}
+
+.member-search-form button.secondary {
+  border: 1px solid var(--border-blue);
+  background: var(--secondary-soft);
+  color: var(--secondary);
+}
+
+.member-search-form button.secondary:hover {
+  background: #d7edff;
+}
+
+.member-list {
+  display: grid;
+  gap: 9px;
+}
+
+.member-row {
+  display: grid;
+  grid-template-columns: minmax(190px, 1.35fr) repeat(4, minmax(82px, .58fr)) auto;
+  gap: 12px;
+  align-items: center;
+  padding: 13px 14px;
+  border: 1px solid var(--border-soft);
+  border-radius: var(--radius-sm);
+  background: linear-gradient(90deg, var(--surface), #fffafd);
+}
+
+.member-identity,
+.member-metric {
+  min-width: 0;
+}
+
+.member-identity strong,
+.member-identity small,
+.member-metric strong,
+.member-metric small {
+  display: block;
+}
+
+.member-identity strong {
+  overflow: hidden;
+  color: var(--text);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.member-identity small,
+.member-metric small {
+  color: var(--muted);
+  font-size: 11px;
+}
+
+.member-metric strong {
+  margin-top: 2px;
+  font: 700 15px/1.2 ui-monospace, monospace;
+}
+
+.member-load-more {
+  display: block;
+  margin: 16px auto 0;
+  background: var(--secondary);
+}
+
+.member-load-more[hidden] {
+  display: none;
+}
+
+.member-load-more:hover {
+  background: #066b8d;
+}
+
 .count {
   color: var(--primary);
   font: 700 12px/1 ui-monospace, monospace;
@@ -932,9 +1067,41 @@ h1 {
   border-radius: 999px;
 }
 
-.data-action input {
-  margin: 4px 0 12px;
+.data-action input[type="file"] {
+  width: 100%;
   max-width: 100%;
+  margin: 4px 0 12px;
+  padding: 7px;
+  border: 1px dashed var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--surface-hover);
+  color: var(--muted);
+  font-size: 13px;
+  cursor: pointer;
+}
+
+.data-action input[type="file"]::file-selector-button {
+  margin-right: 12px;
+  padding: 9px 15px;
+  border: 0;
+  border-radius: 8px;
+  background: var(--primary);
+  color: #fff;
+  font: 700 13px/1.2 "Noto Sans SC", "Microsoft YaHei", sans-serif;
+  cursor: pointer;
+  transition: background-color .2s, box-shadow .2s;
+}
+
+.data-action input[type="file"]:hover::file-selector-button {
+  background: var(--primary-hover);
+  box-shadow: 0 4px 10px rgba(201, 47, 98, .18);
+}
+
+.data-action input[type="file"]:focus-visible {
+  border-style: solid;
+  border-color: var(--border-focus);
+  outline: 3px solid var(--primary-soft);
+  outline-offset: 1px;
 }
 
 button.danger, .danger {
@@ -1084,6 +1251,55 @@ dialog p:not(.kicker) {
   margin: 0;
 }
 
+.member-dialog {
+  width: min(620px, calc(100% - 32px));
+}
+
+.member-dialog-identity {
+  padding-bottom: 14px;
+  border-bottom: 1px dashed var(--border);
+}
+
+.member-value-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 14px;
+  margin-top: 18px;
+}
+
+.member-value-grid label {
+  color: var(--text);
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.member-value-grid input {
+  display: block;
+  margin-top: 5px;
+}
+
+dialog p.member-history-note {
+  margin-top: 14px;
+  padding: 10px 12px;
+  border-radius: var(--radius-sm);
+  background: var(--warn-soft);
+  color: #7c4308;
+}
+
+.member-dialog .form-error {
+  margin-top: 10px;
+}
+
+.member-dialog .dialog-actions button[type="submit"] {
+  border-color: var(--primary);
+  background: var(--primary);
+  color: #fff;
+}
+
+.member-dialog .dialog-actions button[type="submit"]:hover {
+  background: var(--primary-hover);
+}
+
 .dialog-actions {
   display: flex;
   justify-content: flex-end;
@@ -1119,6 +1335,9 @@ dialog p:not(.kicker) {
   .group-list { display: flex; overflow-x: auto; padding-bottom: 8px; scrollbar-width: thin; }
   .group-button { min-width: 180px; flex-shrink: 0; }
   .safety-columns, .data-grid { grid-template-columns: 1fr; }
+  .member-row { grid-template-columns: repeat(4, minmax(0, 1fr)); }
+  .member-identity { grid-column: 1 / -1; }
+  .member-edit { grid-column: 1 / -1; }
   .blacklist-form { grid-template-columns: 1fr; }
   .blacklist-item { flex-direction: column; align-items: stretch; gap: 8px; }
   .blacklist-item button { align-self: flex-end; }
@@ -1133,7 +1352,7 @@ dialog p:not(.kicker) {
   }
   .status-line { grid-template-columns: repeat(2, 1fr); gap: 8px; }
   .global-error { align-items: stretch; flex-direction: column; }
-  .workspace-nav { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 8px; }
+  .workspace-nav { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 8px; }
   .workspace-nav button { min-width: 0; padding: 8px 4px; font-size: 13px; text-align: center; }
   .workspace-nav .refresh { grid-column: 1 / -1; margin: 0; }
   .ranking-toolbar { flex-direction: column; align-items: stretch; }
@@ -1141,6 +1360,10 @@ dialog p:not(.kicker) {
   .segmented button { flex: 1; text-align: center; }
   .inline-form { grid-template-columns: 1fr; }
   .inline-form button { width: 100%; }
+  .member-notice { align-items: flex-start; flex-direction: column; gap: 4px; }
+  .member-search-form { grid-template-columns: 1fr 1fr; }
+  .member-search-form input { grid-column: 1 / -1; }
+  .member-value-grid { grid-template-columns: 1fr; }
   .policy-strip { grid-template-columns: 1fr; }
   .policy-strip > div { border-right: 0; border-bottom: 1px solid var(--border); }
   .policy-strip > div:last-child { border-bottom: 0; }

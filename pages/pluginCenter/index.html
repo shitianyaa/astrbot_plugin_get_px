@@ -5,7 +5,7 @@
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <meta name="color-scheme" content="light" />
     <meta name="theme-color" content="#fdfbfc" />
-    <meta name="description" content="AstrBot 插件 GetPx 插件管理中心 - 管理群签到排行、内容安全过滤和签到备份数据。" />
+    <meta name="description" content="AstrBot 插件 GetPx 插件管理中心 - 管理群签到排行、成员数值、内容安全过滤和签到备份数据。" />
     <title>插件管理中心</title>
     <link rel="stylesheet" href="./styles.css" />
   </head>
@@ -16,7 +16,7 @@
         <div>
           <p class="kicker">GET PX / CONTROL CONSOLE</p>
           <h1>插件管理中心</h1>
-          <p class="subtitle">查看群签到活动，管理内置与自定义安全策略，备份与恢复签到数据。</p>
+          <p class="subtitle">查看群签到活动，调整成员当前数值，管理安全策略并备份签到数据。</p>
         </div>
         <div class="safety-lock" role="status" aria-label="内容安全状态">
           <span class="pulse" aria-hidden="true"></span>
@@ -33,6 +33,7 @@
 
       <nav class="workspace-nav" aria-label="功能模块导航">
         <button class="active" data-view="ranking" type="button">群排行</button>
+        <button data-view="members" type="button">成员数值</button>
         <button data-view="safety" type="button">内容安全</button>
         <button data-view="data" type="button">数据管理</button>
         <button id="refreshBtn" class="refresh" type="button">刷新数据</button>
@@ -78,6 +79,40 @@
               <div id="rankingContent" class="ranking-content"></div>
             </div>
           </div>
+        </section>
+
+        <!-- 成员数值管理模块 -->
+        <section id="membersView" class="workspace" aria-labelledby="membersTitle">
+          <div class="section-heading wide">
+            <p>MEMBER VALUES</p>
+            <h2 id="membersTitle">签到成员数值</h2>
+            <span>搜索已有签到成员并调整当前资料。历史签到记录、群排行和已生成卡片不会被改写。</span>
+          </div>
+
+          <div class="member-notice" role="note">
+            <strong>修改立即生效</strong>
+            <span>金币与签到天数不能小于 0；好感度最低为 -10；连续签到不能大于累计签到。</span>
+          </div>
+
+          <section class="panel member-panel">
+            <div class="panel-title">
+              <div>
+                <p>PROFILE DIRECTORY</p>
+                <h3>成员资料</h3>
+              </div>
+              <span id="memberCount" class="count" aria-live="polite">尚未加载</span>
+            </div>
+            <form id="memberSearchForm" class="member-search-form" role="search">
+              <label for="memberSearch" class="sr-only">搜索成员昵称或用户 ID</label>
+              <input id="memberSearch" name="checkin_member_search" type="search" maxlength="64" autocomplete="off" spellcheck="false" placeholder="输入昵称或用户 ID…" />
+              <button type="submit">搜索成员</button>
+              <button id="memberClearBtn" class="secondary" type="button">清除</button>
+            </form>
+            <div id="memberList" class="member-list" aria-live="polite">
+              <div class="empty">打开本模块后将加载签到成员</div>
+            </div>
+            <button id="memberLoadMore" class="member-load-more" type="button" hidden>加载更多成员</button>
+          </section>
         </section>
 
         <!-- 内容安全模块 -->
@@ -207,6 +242,36 @@
         <div class="dialog-actions">
           <button value="cancel" type="submit">取消</button>
           <button id="dialogConfirm" class="danger" value="confirm" type="submit">确认执行</button>
+        </div>
+      </form>
+    </dialog>
+
+    <!-- 成员数值编辑对话框 -->
+    <dialog id="memberDialog" class="member-dialog" aria-labelledby="memberDialogTitle">
+      <form id="memberForm">
+        <p class="kicker">EDIT MEMBER PROFILE</p>
+        <h2 id="memberDialogTitle">调整成员数值</h2>
+        <p id="memberDialogIdentity" class="member-dialog-identity"></p>
+        <input id="memberUserId" name="user_id" type="hidden" />
+        <div class="member-value-grid">
+          <label for="memberCoins">金币
+            <input id="memberCoins" name="coins" type="number" min="0" max="2147483647" step="1" inputmode="numeric" required />
+          </label>
+          <label for="memberAffection">好感度
+            <input id="memberAffection" name="affection" type="number" min="-10" max="1000000" step="0.01" inputmode="decimal" required />
+          </label>
+          <label for="memberTotalDays">累计签到
+            <input id="memberTotalDays" name="total_days" type="number" min="0" max="2147483647" step="1" inputmode="numeric" required />
+          </label>
+          <label for="memberStreakDays">连续签到
+            <input id="memberStreakDays" name="streak_days" type="number" min="0" max="2147483647" step="1" inputmode="numeric" required />
+          </label>
+        </div>
+        <p class="member-history-note">这里只修改成员当前资料，不会篡改过去的签到奖励或排行榜记录。</p>
+        <p id="memberFormError" class="form-error" aria-live="polite"></p>
+        <div class="dialog-actions">
+          <button id="memberCancelBtn" type="button">取消</button>
+          <button id="memberSaveBtn" type="submit">保存修改</button>
         </div>
       </form>
     </dialog>

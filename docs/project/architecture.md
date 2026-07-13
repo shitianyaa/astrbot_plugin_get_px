@@ -40,7 +40,7 @@ plugin_api/
 
 ## 前端页面
 
-`pages/pluginCenter/` 使用原生 HTML、CSS 和 ES module，集中提供群排行、内容安全和签到数据管理。前端不持久化业务数据；SQLite 和签到备份仍是后端唯一数据源。
+`pages/pluginCenter/` 使用原生 HTML、CSS 和 ES module，集中提供群排行、成员当前数值编辑、内容安全和签到数据管理。前端不持久化业务数据；SQLite 和签到备份仍是后端唯一数据源。成员编辑只更新 `checkin_profiles`，不回写 `checkin_records` 或 `checkin_group_presence`。
 
 ## 依赖方向
 

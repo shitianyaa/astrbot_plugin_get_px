@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 from contextlib import closing
 from datetime import date, timedelta
+import math
 import sqlite3
 
 from .models import (
@@ -28,6 +29,32 @@ from .rules import (
 from .snapshot import validate_greeting_source as _validate_greeting_source
 
 
+_MAX_PROFILE_INTEGER = 2_147_483_647
+_MIN_PROFILE_AFFECTION = -10.0
+_MAX_PROFILE_AFFECTION = 1_000_000.0
+_MEMBER_SELECT = """
+    SELECT p.*,
+        COALESCE(
+            NULLIF((
+                SELECT recent_name.username
+                FROM (
+                    SELECT r.username, r.updated_at AS seen_at, 0 AS source_priority
+                    FROM checkin_records AS r
+                    WHERE r.user_id = p.user_id AND TRIM(r.username) != ''
+                    UNION ALL
+                    SELECT g.username, g.last_seen_at AS seen_at, 1 AS source_priority
+                    FROM checkin_group_presence AS g
+                    WHERE g.user_id = p.user_id AND TRIM(g.username) != ''
+                ) AS recent_name
+                ORDER BY recent_name.seen_at DESC, recent_name.source_priority DESC
+                LIMIT 1
+            ), ''),
+            p.user_id
+        ) AS username
+    FROM checkin_profiles AS p
+"""
+
+
 class RecordStoreMixin:
     async def find_profile(self, user_id: str) -> CheckinProfile | None:
         user_id = str(user_id or "")
@@ -40,6 +67,75 @@ class RecordStoreMixin:
         user_id = str(user_id or "")
         async with self._lock:
             return await asyncio.to_thread(self._get_or_create_profile_sync, user_id)
+
+    async def list_checkin_members(
+        self,
+        *,
+        query: str = "",
+        limit: int = 50,
+        offset: int = 0,
+    ) -> dict[str, object]:
+        query = str(query or "").strip()
+        if len(query) > 64:
+            raise ValueError("搜索内容不能超过 64 个字符")
+        if not 1 <= limit <= 100:
+            raise ValueError("limit must be between 1 and 100")
+        if not 0 <= offset <= 1_000_000:
+            raise ValueError("offset must be between 0 and 1000000")
+        async with self._lock:
+            return await asyncio.to_thread(
+                self._list_checkin_members_sync,
+                query,
+                int(limit),
+                int(offset),
+            )
+
+    async def update_checkin_member(
+        self,
+        *,
+        user_id: str,
+        coins: int,
+        affection: float,
+        total_days: int,
+        streak_days: int,
+    ) -> dict[str, dict[str, object]]:
+        user_id = str(user_id or "").strip()
+        if not user_id:
+            raise ValueError("缺少用户 ID")
+        if len(user_id) > 128:
+            raise ValueError("用户 ID 不能超过 128 个字符")
+        integer_values = {
+            "金币": coins,
+            "累计签到": total_days,
+            "连续签到": streak_days,
+        }
+        for label, value in integer_values.items():
+            if isinstance(value, bool) or not isinstance(value, int):
+                raise ValueError(f"{label}必须是整数")
+            if not 0 <= value <= _MAX_PROFILE_INTEGER:
+                raise ValueError(f"{label}必须在 0 至 {_MAX_PROFILE_INTEGER} 之间")
+        if isinstance(affection, bool) or not isinstance(affection, (int, float)):
+            raise ValueError("好感度必须是数字")
+        affection = float(affection)
+        if not math.isfinite(affection):
+            raise ValueError("好感度必须是有限数字")
+        if not _MIN_PROFILE_AFFECTION <= affection <= _MAX_PROFILE_AFFECTION:
+            raise ValueError(
+                f"好感度必须在 {_MIN_PROFILE_AFFECTION:g} 至 "
+                f"{_MAX_PROFILE_AFFECTION:g} 之间"
+            )
+        if streak_days > total_days:
+            raise ValueError("连续签到不能大于累计签到")
+        async with self._lock:
+            return await asyncio.to_thread(
+                self._update_checkin_member_sync,
+                user_id,
+                coins,
+                round(affection, 2),
+                total_days,
+                streak_days,
+                self.now_iso(),
+            )
 
     async def get_today_record(self, user_id: str) -> CheckinRecord | None:
         user_id = str(user_id or "")
@@ -209,6 +305,86 @@ class RecordStoreMixin:
                 "SELECT * FROM checkin_profiles WHERE user_id = ?", (user_id,)
             ).fetchone()
         return self._row_to_profile(row) if row is not None else None
+
+    def _list_checkin_members_sync(
+        self,
+        query: str,
+        limit: int,
+        offset: int,
+    ) -> dict[str, object]:
+        escaped = query.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
+        pattern = f"%{escaped}%"
+        where_sql = """
+            WHERE ? = ''
+                OR p.user_id LIKE ? ESCAPE '\\'
+                OR EXISTS (
+                    SELECT 1 FROM checkin_records AS r
+                    WHERE r.user_id = p.user_id
+                        AND r.username LIKE ? ESCAPE '\\'
+                )
+                OR EXISTS (
+                    SELECT 1 FROM checkin_group_presence AS g
+                    WHERE g.user_id = p.user_id
+                        AND g.username LIKE ? ESCAPE '\\'
+                )
+        """
+        params = (query, pattern, pattern, pattern)
+        with closing(self._connect()) as conn:
+            total_row = conn.execute(
+                f"SELECT COUNT(*) AS count FROM checkin_profiles AS p {where_sql}",
+                params,
+            ).fetchone()
+            rows = conn.execute(
+                f"""
+                {_MEMBER_SELECT}
+                {where_sql}
+                ORDER BY p.updated_at DESC, p.user_id ASC
+                LIMIT ? OFFSET ?
+                """,
+                (*params, limit, offset),
+            ).fetchall()
+        return {
+            "total": int(total_row["count"] or 0),
+            "members": [self._row_to_member(row) for row in rows],
+        }
+
+    def _update_checkin_member_sync(
+        self,
+        user_id: str,
+        coins: int,
+        affection: float,
+        total_days: int,
+        streak_days: int,
+        now: str,
+    ) -> dict[str, dict[str, object]]:
+        with closing(self._connect()) as conn:
+            conn.execute("BEGIN IMMEDIATE")
+            try:
+                before_row = conn.execute(
+                    f"{_MEMBER_SELECT} WHERE p.user_id = ?", (user_id,)
+                ).fetchone()
+                if before_row is None:
+                    raise LookupError("指定成员不存在")
+                conn.execute(
+                    """
+                    UPDATE checkin_profiles
+                    SET coins = ?, affection = ?, total_days = ?, streak_days = ?,
+                        updated_at = ?
+                    WHERE user_id = ?
+                    """,
+                    (coins, affection, total_days, streak_days, now, user_id),
+                )
+                after_row = conn.execute(
+                    f"{_MEMBER_SELECT} WHERE p.user_id = ?", (user_id,)
+                ).fetchone()
+                conn.commit()
+            except Exception:
+                conn.rollback()
+                raise
+        return {
+            "before": self._row_to_member(before_row),
+            "member": self._row_to_member(after_row),
+        }
 
     def _checkin_sync(
         self,
@@ -669,6 +845,20 @@ class RecordStoreMixin:
             created_at=str(row["created_at"] or ""),
             updated_at=str(row["updated_at"] or ""),
         )
+
+    @staticmethod
+    def _row_to_member(row: sqlite3.Row) -> dict[str, object]:
+        return {
+            "user_id": str(row["user_id"]),
+            "username": str(row["username"] or row["user_id"]),
+            "coins": int(row["coins"] or 0),
+            "affection": round(float(row["affection"] or 0), 2),
+            "total_days": int(row["total_days"] or 0),
+            "streak_days": int(row["streak_days"] or 0),
+            "last_checkin_date": str(row["last_checkin_date"] or ""),
+            "boost_until_date": str(row["boost_until_date"] or ""),
+            "updated_at": str(row["updated_at"] or ""),
+        }
 
     @staticmethod
     def _row_to_record(row: sqlite3.Row) -> CheckinRecord:
