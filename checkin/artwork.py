@@ -426,7 +426,15 @@ class CheckinArtworkMixin:
             illust_id = str(illust.get("id") or "")
             if not illust_id:
                 continue
-            reason = await self._blacklist_reason_for_illust(illust, illust_id)
+            try:
+                reason = await self._blacklist_reason_for_illust(illust, illust_id)
+            except RuntimeError as exc:
+                # 自定义安全词/黑名单读取失败时 fail-closed：不放过该候选，
+                # 跳过去试下一个；若所有候选都不可用则回退占位图。
+                logger.warning(
+                    f"{LOG_PREFIX} 签到背景安全检查不可用，跳过作品 {illust_id}: {exc}"
+                )
+                continue
             if reason:
                 logger.info(f"{LOG_PREFIX} 签到背景跳过\uff1a{reason}")
                 continue

@@ -837,8 +837,11 @@ class CheckinCommandMixin:
             if background.pixiv_caption:
                 content.append(Plain(background.pixiv_caption))
             await event.send(event.chain_result(content))
-            await self._record_checkin_background(event, background)
             claim_held = False
+            try:
+                await self._record_checkin_background(event, background)
+            except Exception as exc:
+                logger.warning(f"{LOG_PREFIX} 记录签到背景使用状态失败: {exc}")
             return
         except Exception as exc:
             logger.warning(f"{LOG_PREFIX} 更新签到背景失败: {exc}")
