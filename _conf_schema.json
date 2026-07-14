@@ -35,7 +35,7 @@
     "description": "当天去重开关",
     "type": "float",
     "default": 24.0,
-    "slider": {"min": 0, "max": 720, "step": 1},
+    "slider": {"min": 0, "max": 24, "step": 1},
     "hint": "大于 0 时开启去重：同一群聊/私聊同一标签或排行榜按北京时间当天记录已发作品，重启后仍有效，次日自动清理。设为 0 则关闭，每次都可能发重复作品。"
   },
   "request_timeout": {
@@ -94,14 +94,14 @@
     "description": "签到背景刷新价格",
     "type": "int",
     "default": 100,
-    "slider": {"min": 0, "max": 5000, "step": 10},
+    "slider": {"min": 0, "max": 500, "step": 10},
     "hint": "用户完成当天签到后，使用 /刷新签到背景 重新抽取 Pixiv 背景所需金币。设为 0 表示免费。"
   },
   "checkin_theme_price": {
     "description": "签到主题统一价格",
     "type": "int",
     "default": 1500,
-    "slider": {"min": 0, "max": 50000, "step": 100},
+    "slider": {"min": 0, "max": 5000, "step": 100},
     "hint": "每套非默认签到主题的购买价格。默认米白始终免费。"
   },
   "checkin_background_tag": {
@@ -187,58 +187,6 @@
     "default": 3,
     "slider": {"min": 0, "max": 60, "step": 1},
     "hint": "同一用户两次请求的最小间隔，设为 0 禁用。防止刷屏。"
-  },
-  "ai_enabled": {
-    "description": "AI 识图开关",
-    "type": "bool",
-    "default": false,
-    "hint": "开启后发送图片时有概率触发 AI 识图评论。需要 AstrBot 已配置大模型。"
-  },
-  "ai_probability": {
-    "description": "AI 识图触发概率（%）",
-    "type": "int",
-    "default": 30,
-    "slider": {"min": 0, "max": 100, "step": 5},
-    "hint": "每次发送图片时触发 AI 识图的概率，0=永不触发，100=每次都触发。触发后会同时调用识图模型和评论模型。"
-  },
-  "ai_max_images": {
-    "description": "AI 识图最大数量",
-    "type": "int",
-    "default": 3,
-    "slider": {"min": 1, "max": 20, "step": 1},
-    "hint": "触发 AI 识图时最多分析几张图片（从第一张开始）。设为 1 则只分析第一张。"
-  },
-  "ai_pre_message": {
-    "description": "AI 识图预回复消息",
-    "type": "string",
-    "default": "让我先品鉴一番，你稍等喵~",
-    "hint": "触发 AI 识图后先发送的提示消息。留空则不发送预回复。"
-  },
-  "ai_vision_provider_id": {
-    "description": "识图模型",
-    "type": "string",
-    "default": "",
-    "_special": "select_provider",
-    "hint": "用于分析图片内容的视觉模型。留空时优先使用 AstrBot 全局图片描述模型，再回退到当前会话模型。"
-  },
-  "ai_comment_provider_id": {
-    "description": "评论模型",
-    "type": "string",
-    "default": "",
-    "_special": "select_provider",
-    "hint": "用于根据识图结果生成评论的文本模型。留空时使用当前会话模型。"
-  },
-  "ai_vision_prompt": {
-    "description": "识图提示词",
-    "type": "text",
-    "default": "请详细描述这张插画的内容，包括画风、构图、配色、角色特征、表情、姿势、背景等。用简洁的中文描述。",
-    "hint": "发送给视觉模型的提示词，用于分析图片内容。"
-  },
-  "ai_comment_prompt": {
-    "description": "评论提示词",
-    "type": "text",
-    "default": "你是一个 Pixiv 插画鉴赏专家。根据以下图片描述，用轻松有趣的语气写一句简短评论（50字以内）。\n\n图片描述：{description}",
-    "hint": "发送给评论模型的提示词。用 {description} 代表识图结果的占位符。"
   },
   "webui_font_source": {
     "description": "WebUI 字体来源",

@@ -613,8 +613,8 @@ class CheckinCommandMixin:
         yield event.plain_result("\n".join(lines))
 
     def _build_checkin_shop(self) -> str:
-        refresh_cost = self._cfg_int("checkin_background_refresh_cost", 100, 0, 100000)
-        theme_cost = self._cfg_int("checkin_theme_price", 1500, 0, 1000000)
+        refresh_cost = self._cfg_int("checkin_background_refresh_cost", 100, 0, 500)
+        theme_cost = self._cfg_int("checkin_theme_price", 1500, 0, 5000)
         lines = [
             "签到商店",
             "金币可购买好感度加持、更新当天背景和解锁签到主题。",
@@ -682,7 +682,7 @@ class CheckinCommandMixin:
         if theme.free:
             return await self._handle_select_checkin_theme(event, theme.theme_id)
         user_id = str(event.get_sender_id() or "")
-        cost = self._cfg_int("checkin_theme_price", 1500, 0, 1000000)
+        cost = self._cfg_int("checkin_theme_price", 1500, 0, 5000)
         try:
             purchase = await self.checkin_store.purchase_theme(
                 user_id=user_id,
@@ -760,7 +760,7 @@ class CheckinCommandMixin:
         if record is None:
             yield event.plain_result("请先完成今天的签到，再更新背景")
             return
-        cost = self._cfg_int("checkin_background_refresh_cost", 100, 0, 100000)
+        cost = self._cfg_int("checkin_background_refresh_cost", 100, 0, 500)
         profile = await self.checkin_store.get_profile(user_id)
         if profile.coins < cost:
             yield event.plain_result(

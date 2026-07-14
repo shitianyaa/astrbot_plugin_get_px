@@ -40,7 +40,6 @@ from .checkin.greeting import CheckinGreetingGenerator
 from .checkin.holiday import HolidayCalendar
 from .pixiv import DeliveryMixin, FiltersMixin, SearchMixin
 from .pixiv.client import PixivClient
-from .pixiv.commenter import AiCommenter
 from .pixiv.downloader import ImageDownloader
 from .pixiv.index import ImageIndexStore
 from .pixiv.safety import normalized_builtin_terms, normalize_safety_text
@@ -103,7 +102,6 @@ class GetPxPlugin(
         self.config = config
         self.client: PixivClient | None = None
         self.downloader = ImageDownloader()
-        self.ai = AiCommenter(context)
         self._last_request: dict[str, float] = {}
         self.data_dir: Path | None = None
         self.image_index: ImageIndexStore | None = None

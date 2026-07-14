@@ -101,6 +101,32 @@ class CheckinBackgroundSelectionTest(unittest.IsolatedAsyncioTestCase):
         self.assertIn("动画", categories["options"])
         self.assertIn("诗词", categories["options"])
 
+    def test_economy_and_dedupe_schema_limits_are_bounded(self):
+        schema_path = Path(__file__).resolve().parents[1] / "_conf_schema.json"
+        schema = json.loads(schema_path.read_text(encoding="utf-8"))
+
+        self.assertEqual(schema["dedupe_ttl_hours"]["slider"]["max"], 24)
+        self.assertEqual(
+            schema["checkin_background_refresh_cost"]["slider"]["max"], 500
+        )
+        self.assertEqual(schema["checkin_theme_price"]["slider"]["max"], 5000)
+
+    def test_pixiv_ai_comment_settings_are_removed(self):
+        schema_path = Path(__file__).resolve().parents[1] / "_conf_schema.json"
+        schema = json.loads(schema_path.read_text(encoding="utf-8"))
+
+        for key in (
+            "ai_enabled",
+            "ai_probability",
+            "ai_max_images",
+            "ai_pre_message",
+            "ai_vision_provider_id",
+            "ai_comment_provider_id",
+            "ai_vision_prompt",
+            "ai_comment_prompt",
+        ):
+            self.assertNotIn(key, schema)
+
     def test_custom_background_schema_recommends_portrait_contain_display(self):
         schema_path = Path(__file__).resolve().parents[1] / "_conf_schema.json"
         schema = json.loads(schema_path.read_text(encoding="utf-8"))

@@ -170,7 +170,7 @@ class CheckinArtworkMixin:
             width=width,
             height=height,
             background_refresh_cost=self._cfg_int(
-                "checkin_background_refresh_cost", 100, 0, 100000
+                "checkin_background_refresh_cost", 100, 0, 500
             ),
         )
         return await self.html_render(

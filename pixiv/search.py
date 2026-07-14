@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import asyncio
-import random
 import re
 
 from astrbot.api.all import Image, Plain, logger
@@ -140,20 +139,6 @@ class SearchMixin:
             100.0,
         )
         downgrade_limit_bytes = int(downgrade_limit_mb * 1024 * 1024)
-        ai_enabled = self._cfg_bool("ai_enabled", False)
-        ai_prob = self._cfg_int("ai_probability", 30, 0, 100)
-        ai_max = self._cfg_int("ai_max_images", 3, 1, 20)
-        ai_pre_msg = self._cfg_str("ai_pre_message", "让我先品鉴一番，你稍等喵~")
-        ai_vision_pid = self._cfg_str("ai_vision_provider_id", "")
-        ai_comment_pid = self._cfg_str("ai_comment_provider_id", "")
-        ai_vision_prompt = self._cfg_str(
-            "ai_vision_prompt",
-            "请详细描述这张插画的内容，包括画风、构图、配色、角色特征、表情、姿势、背景等。用简洁的中文描述。",
-        )
-        ai_comment_prompt = self._cfg_str(
-            "ai_comment_prompt",
-            "你是一个 Pixiv 插画鉴赏专家。根据以下图片描述，用轻松有趣的语气写一句简短评论（50字以内）。\n\n图片描述：{description}",
-        )
         filter_manga = self._cfg_bool("filter_manga", True)
 
         if ranking_mode not in RANKING_MODES:
@@ -194,7 +179,7 @@ class SearchMixin:
             return
 
         pick_count = min(count, len(illusts))
-        dedupe_ttl_hours = self._cfg_float("dedupe_ttl_hours", 24.0, 0.0, 720.0)
+        dedupe_ttl_hours = self._cfg_float("dedupe_ttl_hours", 24.0, 0.0, 24.0)
 
         chosen = await self._pick_illusts(
             event,
@@ -252,51 +237,6 @@ class SearchMixin:
                         f"{LOG_PREFIX} [{idx}/{pick_count}] 作品 {illust_id} 下载失败: {e}"
                     )
 
-            # AI 识图（每张图片单独评论）
-            ai_comments: dict[int, str] = {}  # illust_id -> comment
-            if ai_enabled and ai_prob > 0 and downloaded:
-                if random.randint(1, 100) <= ai_prob:
-                    logger.info(f"{LOG_PREFIX} 触发 AI 识图 (概率 {ai_prob}%)")
-                    if ai_pre_msg:
-                        await event.send(event.plain_result(ai_pre_msg))
-                    # 并发分析图片（受 ai_max 限制）
-                    to_analyze = downloaded[:ai_max]
-                    if len(downloaded) > ai_max:
-                        logger.info(
-                            f"{LOG_PREFIX} [AI] 共 {len(downloaded)} 张图，仅分析前 {ai_max} 张"
-                        )
-
-                    async def _analyze(idx: int, illust: dict, path: str):
-                        try:
-                            comment = await self.ai.comment(
-                                event,
-                                path,
-                                ai_vision_pid,
-                                ai_comment_pid,
-                                ai_vision_prompt,
-                                ai_comment_prompt,
-                            )
-                            if comment:
-                                ai_comments[illust.get("id", 0)] = comment
-                                logger.info(
-                                    f"{LOG_PREFIX} [AI] 作品 {illust.get('id')} 评论完成: {comment[:40]}..."
-                                )
-                        except Exception as e:
-                            illust_id = illust.get("id", 0)
-                            logger.warning(
-                                f"{LOG_PREFIX} [AI] 作品 {illust_id} 识图失败: {e}，已降级跳过"
-                            )
-                            ai_comments[illust_id] = "羞死啦 羞死啦 ~"
-
-                    await asyncio.gather(
-                        *[
-                            _analyze(i, il, p)
-                            for i, (il, p, _actual_q, _file_size) in enumerate(
-                                to_analyze
-                            )
-                        ]
-                    )
-
             # 统一发送（避免 yield 和 send 混用导致消息拆分）
             if not downloaded:
                 yield event.plain_result("😢 所有图片均下载失败，请稍后再试")
@@ -320,10 +260,6 @@ class SearchMixin:
                         Plain(f"🎨 {title} (ID: {illust_id})"),
                         Image.fromFileSystem(path),
                     ]
-                    # AI 评论和图片放在同一个 Node 里
-                    comment = ai_comments.get(illust_id, "")
-                    if comment:
-                        content.append(Plain(f"🐱： {comment}"))
                     nodes.nodes.append(
                         Node(
                             uin=self_id,
@@ -387,9 +323,6 @@ class SearchMixin:
                             Plain(f"🎨 {title} (ID: {illust_id})"),
                             Image.fromFileSystem(path),
                         ]
-                        comment = ai_comments.get(illust_id, "")
-                        if comment:
-                            content.append(Plain(f"🐱： {comment}"))
                         # 逐条发送（带重试机制）
                         for attempt in range(1, max_retries + 1):
                             try:
@@ -441,9 +374,6 @@ class SearchMixin:
                         Plain(f"🎨 {title} (ID: {illust_id})"),
                         Image.fromFileSystem(path),
                     ]
-                    comment = ai_comments.get(illust_id, "")
-                    if comment:
-                        content.append(Plain(f"🐱： {comment}"))
                     # 逐条发送（带重试机制）
                     max_retries = 3
                     for attempt in range(1, max_retries + 1):

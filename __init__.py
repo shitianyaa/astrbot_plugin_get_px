@@ -9,7 +9,6 @@ import sys
 
 
 _LEGACY_MODULES = {
-    "ai_commenter": ".pixiv.commenter",
     "checkin_background": ".checkin.background",
     "checkin_birthday": ".checkin.birthday",
     "checkin_cache": ".checkin.cache",

@@ -537,7 +537,7 @@ class CheckinApplicationMixin:
             background=identity_background,
             user_title=user_title,
             background_refresh_cost=self._cfg_int(
-                "checkin_background_refresh_cost", 100, 0, 100000
+                "checkin_background_refresh_cost", 100, 0, 500
             ),
         )
         view_model["background_mode"] = identity_background.mode

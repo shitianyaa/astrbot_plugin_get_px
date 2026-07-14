@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import asyncio
 import os
-import random
 
 from astrbot.api.all import Image, Plain, logger
 from astrbot.api.event import AstrMessageEvent
@@ -169,39 +168,6 @@ class DeliveryMixin:
                 Plain(f"🎨 {title} (ID: {illust_id}, 第 {page}/{total_pages} 页)"),
                 Image.fromFileSystem(path),
             ]
-
-            # AI 识图
-            ai_enabled = self._cfg_bool("ai_enabled", False)
-            ai_prob = self._cfg_int("ai_probability", 30, 0, 100)
-            if ai_enabled and ai_prob > 0 and random.randint(1, 100) <= ai_prob:
-                ai_pre_msg = self._cfg_str(
-                    "ai_pre_message", "让我先品鉴一番，你稍等喵~"
-                )
-                if ai_pre_msg:
-                    await event.send(event.plain_result(ai_pre_msg))
-                try:
-                    ai_vision_pid = self._cfg_str("ai_vision_provider_id", "")
-                    ai_comment_pid = self._cfg_str("ai_comment_provider_id", "")
-                    ai_vision_prompt = self._cfg_str(
-                        "ai_vision_prompt",
-                        "请详细描述这张插画的内容，包括画风、构图、配色、角色特征、表情、姿势、背景等。用简洁的中文描述。",
-                    )
-                    ai_comment_prompt = self._cfg_str(
-                        "ai_comment_prompt",
-                        "你是一个 Pixiv 插画鉴赏专家。根据以下图片描述，用轻松有趣的语气写一句简短评论（50字以内）。\n\n图片描述：{description}",
-                    )
-                    comment = await self.ai.comment(
-                        event,
-                        path,
-                        ai_vision_pid,
-                        ai_comment_pid,
-                        ai_vision_prompt,
-                        ai_comment_prompt,
-                    )
-                    if comment:
-                        content.append(Plain(f"🐱： {comment}"))
-                except Exception as e:
-                    logger.warning(f"{LOG_PREFIX} [AI] 识图失败: {e}")
 
             # 发送（带重试机制，最多3次）
             max_retries = 3

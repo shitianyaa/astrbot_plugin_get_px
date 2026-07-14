@@ -29,7 +29,6 @@ pixiv/
 │  ├─ client.py          Pixiv API 客户端
 │  ├─ downloader.py      图片下载与质量降级
 │  ├─ index.py           去重索引、安全词与作品黑名单
-│  └─ commenter.py       AI 识图与评论
 plugin_api/
 └─ api.py                Plugin Pages 后端 API
 ```

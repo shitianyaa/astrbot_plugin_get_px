@@ -39,7 +39,6 @@
 | 内容安全 | 强制普通分级、不可关闭的内置安全词、自定义安全词、作品 ID 黑名单 |
 | 每日签到 | H 纸张画册卡片、严格竖向 Pixiv 作品、金币、好感度、连续签到、加持商店 |
 | 管理中心 | 按群查看签到排行和趋势，调整成员当前签到数值，管理安全词、作品黑名单及签到备份 |
-| AI 评论 | 可选视觉模型识图，再由文本模型生成一句插画评论 |
 | 稳定性 | 请求频率限制、当天去重、发送失败重试、临时文件自动清理 |
 
 > 主要面向 QQ OneBot / aiocqhttp。其他平台会按 AstrBot 能力尽量降级为逐条发送，兼容性请自行测试。
@@ -197,7 +196,6 @@ AstrBot WebUI 插件页提供「pluginCenter」管理页面：
 | `checkin_card_quality` | 推荐 `95`；文字仍显模糊时可提高到 `97–100` |
 | `dedupe_ttl_hours` | 保持默认即可，同群同标签当天尽量不重复 |
 | `auto_trigger_enabled` | 想让「来张图」生效时再开启 |
-| `ai_enabled` | AstrBot 已配置视觉模型和文本模型后再开启 |
 
 <details>
 <summary>完整配置项</summary>
@@ -209,7 +207,7 @@ AstrBot WebUI 插件页提供「pluginCenter」管理页面：
 | `filter_manga` | 过滤漫画作品；主动请求 `day_manga` 时保留后门 | `true` |
 | `pixiv_ranking_mode` | 无标签时使用的默认排行榜类型 | `week` |
 | `max_count` | 单次最大发送数量，范围 1-20 | `5` |
-| `dedupe_ttl_hours` | 普通发图当天去重；设为 `0` 关闭普通发图去重；当前按自然日去重，不按小时滚动过期 | `24` |
+| `dedupe_ttl_hours` | 普通发图当天去重；范围 `0–24`，设为 `0` 关闭；当前按自然日去重，不按小时滚动过期 | `24` |
 | `request_timeout` | 单张图片下载超时，单位秒 | `30` |
 | `image_quality` | 图片质量：`original`、`large`、`medium` | `original` |
 | `auto_downgrade_original_mb` | 原图超过该大小时自动降级，单位 MiB；`0` 为禁用 | `3.0` |
@@ -218,8 +216,8 @@ AstrBot WebUI 插件页提供「pluginCenter」管理页面：
 | `checkin_enabled` | 签到开关 | `true` |
 | `checkin_bot_name` | 签到卡片中的 bot 角色名 | `neko` |
 | `checkin_background_mode` | 签到背景模式：`pixiv_daily` 或 `custom`；自定义背景不可用时会继续尝试 Pixiv 背景 | `pixiv_daily` |
-| `checkin_background_refresh_cost` | 用户更新当天 Pixiv 签到背景所需金币；`0` 为免费 | `100` |
-| `checkin_theme_price` | 每套非默认签到主题的统一购买价格；`0` 为免费 | `1500` |
+| `checkin_background_refresh_cost` | 用户更新当天 Pixiv 签到背景所需金币；范围 `0–500`，`0` 为免费 | `100` |
+| `checkin_theme_price` | 每套非默认签到主题的统一购买价格；范围 `0–5000`，`0` 为免费 | `1500` |
 | `checkin_background_tag` | 签到 Pixiv 背景标签，多个标签可用逗号、顿号、分号或换行分隔；每次随机确定尝试顺序，一个标签无可用候选时继续尝试下一个 | 空 |
 | `checkin_custom_background` | 本地图片路径；V2 仍按竖向作品相框完整显示 | 空 |
 | `checkin_avatar_enabled` | 签到卡片显示用户头像 | `true` |
@@ -231,14 +229,6 @@ AstrBot WebUI 插件页提供「pluginCenter」管理页面：
 | `checkin_ai_greeting_timeout` | 单次问候模型调用超时秒数；失败后回退本地文案 | `8.0` |
 | `checkin_hitokoto_timeout` | 一言 API 请求超时秒数；失败后回退本地文案 | `5.0` |
 | `rate_limit_seconds` | 同一用户请求频率限制，单位秒；`0` 为禁用 | `3` |
-| `ai_enabled` | AI 识图评论开关 | `false` |
-| `ai_probability` | AI 识图触发概率，范围 0-100 | `30` |
-| `ai_max_images` | 每次最多分析的图片数量 | `3` |
-| `ai_pre_message` | AI 识图前发送的提示消息 | `让我先品鉴一番，你稍等喵~` |
-| `ai_vision_provider_id` | 视觉模型 ID，留空时自动选择 | 空 |
-| `ai_comment_provider_id` | 评论模型 ID，留空时使用当前会话模型 | 空 |
-| `ai_vision_prompt` | 发送给视觉模型的提示词 | 见配置页 |
-| `ai_comment_prompt` | 评论模型提示词，使用 `{description}` 注入识图结果 | 见配置页 |
 | `webui_font_source` | WebUI 字体来源：`mirror`、`official`、`none` | `mirror` |
 
 </details>
