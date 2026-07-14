@@ -37,6 +37,7 @@ from .checkin.cache import CheckinCardCache
 from .checkin.commands import CheckinCommandMixin
 from .checkin.greeting import CheckinGreetingGenerator
 from .checkin.holiday import HolidayCalendar
+from .checkin.legacy_migration import detect_legacy_checkin_tables
 from .pixiv import DeliveryMixin, FiltersMixin, SearchMixin
 from .pixiv.client import PixivClient
 from .pixiv.downloader import ImageDownloader
@@ -129,8 +130,36 @@ class GetPxPlugin(
         self._init_client()
         self.image_index = ImageIndexStore(data_dir)
         await self.image_index.cleanup_old_days()
-        checkin_database_existed = (self.data_dir / "checkin.sqlite3").exists()
-        self.checkin_store = CheckinStore(data_dir)
+        checkin_database_path = self.data_dir / "checkin.sqlite3"
+        checkin_database_existed = checkin_database_path.exists()
+        legacy_tables = detect_legacy_checkin_tables(checkin_database_path)
+        if legacy_tables:
+            logger.warning(
+                f"{LOG_PREFIX} 检测到旧版签到数据，开始迁移: "
+                f"tables={','.join(legacy_tables)}"
+            )
+        try:
+            self.checkin_store = CheckinStore(data_dir)
+        except Exception:
+            if legacy_tables:
+                logger.error(
+                    f"{LOG_PREFIX} 旧版签到数据迁移失败，事务已回滚，"
+                    "旧数据表未删除",
+                    exc_info=True,
+                )
+            raise
+        migration = self.checkin_store.legacy_migration_summary
+        if migration is not None:
+            logger.info(
+                f"{LOG_PREFIX} 旧版签到数据导入完成: users={migration.users}, "
+                f"records={migration.records}, preferences={migration.preferences}, "
+                f"purchases={migration.purchases}, "
+                f"backup={migration.backup_path.name}"
+            )
+            logger.warning(
+                f"{LOG_PREFIX} 旧版签到数据表已删除: "
+                f"tables={','.join(migration.removed_tables)}"
+            )
         database_action = "已加载" if checkin_database_existed else "已创建"
         logger.info(
             f"{LOG_PREFIX} 签到数据库{database_action}: "

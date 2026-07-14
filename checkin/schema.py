@@ -3,6 +3,12 @@ from __future__ import annotations
 from contextlib import closing
 import sqlite3
 
+from .legacy_migration import (
+    LegacyMigrationSummary,
+    backup_legacy_checkin_database,
+    detect_legacy_checkin_tables,
+    migrate_legacy_checkin_data,
+)
 from .themes import CHECKIN_THEMES
 
 
@@ -17,6 +23,7 @@ class SchemaMixin:
         return conn
 
     def _init_db(self) -> None:
+        self.legacy_migration_summary: LegacyMigrationSummary | None = None
         with closing(self._connect()) as conn:
             conn.execute("PRAGMA journal_mode = WAL")
             schema_version = int(conn.execute("PRAGMA user_version").fetchone()[0])
@@ -24,10 +31,25 @@ class SchemaMixin:
                 raise RuntimeError(
                     f"unsupported check-in database schema: {schema_version}"
                 )
-            self._create_checkin_schema(conn)
-            self._sync_builtin_themes(conn)
-            conn.execute(f"PRAGMA user_version = {CHECKIN_DB_SCHEMA_VERSION}")
-            conn.commit()
+            legacy_tables = detect_legacy_checkin_tables(self._db_path)
+            backup_path = None
+            if legacy_tables:
+                backup_path = backup_legacy_checkin_database(conn, self._db_path)
+            try:
+                conn.execute("BEGIN IMMEDIATE")
+                self._create_checkin_schema(conn)
+                self._sync_builtin_themes(conn)
+                if legacy_tables and backup_path is not None:
+                    self.legacy_migration_summary = migrate_legacy_checkin_data(
+                        conn,
+                        legacy_tables=legacy_tables,
+                        backup_path=backup_path,
+                    )
+                conn.execute(f"PRAGMA user_version = {CHECKIN_DB_SCHEMA_VERSION}")
+                conn.commit()
+            except Exception:
+                conn.rollback()
+                raise
 
     @staticmethod
     def _create_checkin_schema(conn: sqlite3.Connection) -> None:
