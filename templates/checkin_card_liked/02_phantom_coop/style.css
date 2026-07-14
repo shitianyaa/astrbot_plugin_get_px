@@ -16,6 +16,10 @@
   --p5-dark-grey: #1a1a1a;
   --p5-white: #ffffff;
 
+  /* 弱化文字：P5 红黑底上的半透明白，未解析时会回退成纯白导致弱化失效 */
+  --text-muted: rgba(255, 255, 255, 0.62);
+  --text-faint: rgba(255, 255, 255, 0.40);
+
   --font-cn: "LXGW WenKai Lite", "Noto Serif CJK SC", "Source Han Serif SC", "Songti SC", serif;
   --font-ui: "Segoe UI", "DIN Alternate", "Helvetica Neue", "Microsoft YaHei", sans-serif;
   --font-num: "Consolas", "SF Mono", monospace;

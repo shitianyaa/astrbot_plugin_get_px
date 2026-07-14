@@ -94,6 +94,7 @@
 | `/签到称号` | 查看已解锁称号 | `/签到称号` |
 | `/佩戴称号 <ID或名称>` | 切换卡片称号 | `/佩戴称号 七日同行` |
 | `/签到事件 ...` | 管理员维护年度或单次全局事件 | `/签到事件 添加年度 07-11 相遇纪念日` |
+| `/签到导出` | 管理员导出签到完整备份 | `/签到导出` |
 | `/ph` | 查看插件帮助 | `/ph` |
 
 ## 自然语言触发
@@ -239,7 +240,7 @@ AstrBot WebUI 插件页提供「pluginCenter」管理页面：
 - 签到 Pixiv 背景参考当天 SQLite 索引；正式签到会预占用索引，失败时释放占用，当前页候选全用过时自动翻页。
 - 作品黑名单、自定义安全词和签到数据保存在 AstrBot 插件数据目录中。
 - 发送用原图或大图是临时文件，发送完成后会自动清理。
-- 插件每次加载都会清理已废弃的图片历史目录和签到卡片缓存，但不会删除数据库、黑名单和备份。
+- 插件每次加载都会清理已废弃的图片历史目录；签到卡片 JPEG 缓存由签到缓存模块按天自行过期，重启时不会被整目录清空，当天重复签到仍可复用。不会删除数据库、黑名单和备份。
 
 ## 开发与架构
 
@@ -255,6 +256,7 @@ AstrBot WebUI 插件页提供「pluginCenter」管理页面：
 pixivpy-async
 aiohttp
 Pillow
+lunar-python
 ```
 
 ## 致谢
@@ -262,4 +264,5 @@ Pillow
 - Pixiv 图片获取基于 [pixivpy-async](https://github.com/Mikubill/pixivpy-async)
 - 历史缩略图生成基于 [Pillow](https://python-pillow.org/)
 - 签到每日一言由 [Hitokoto API](https://github.com/hitokoto-osc/hitokoto-api) 提供，感谢一言开源社区和公共 API 服务
+- 签到卡片内置字体由 [霞鹜文楷轻便版](https://github.com/lxgw/LxgwWenKai-Lite) 生成，采用 SIL Open Font License 1.1 授权
 - 每日签到设计参考 [zhenxun_bot](https://github.com/zhenxun-org/zhenxun_bot)
