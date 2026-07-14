@@ -87,7 +87,7 @@ async def test_group_rankings_and_trend_use_only_current_group() -> None:
 
 
 @pytest.mark.asyncio
-async def test_snapshot_v5_round_trip_preserves_group_presence() -> None:
+async def test_snapshot_round_trip_preserves_group_presence() -> None:
     with tempfile.TemporaryDirectory() as src, tempfile.TemporaryDirectory() as dst:
         source = FrozenCheckinStore(src, date_key="2026-07-13")
         await source.checkin(
@@ -100,7 +100,7 @@ async def test_snapshot_v5_round_trip_preserves_group_presence() -> None:
         )
         snapshot = await source.export_snapshot()
 
-        assert snapshot["schema_version"] == 5
+        assert snapshot["schema_version"] == 6
         assert len(snapshot["group_presence"]) == 1
 
         target = FrozenCheckinStore(dst, date_key="2026-07-13")

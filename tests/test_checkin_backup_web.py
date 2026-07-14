@@ -138,7 +138,7 @@ class CheckinBackupWebTest(unittest.IsolatedAsyncioTestCase):
 
             self.assertEqual(response.status_code, 200)
             self.assertTrue(payload["success"])
-            self.assertEqual(payload["profiles"], 1)
+            self.assertEqual(payload["users"], 1)
             self.assertEqual(payload["records"], 1)
             self.assertTrue(payload["rollback_file"].endswith(".json"))
             self.assertNotIn("rollback_path", payload)
@@ -148,7 +148,7 @@ class CheckinBackupWebTest(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(imported.total_days, 1)
             self.assertEqual(replaced.total_days, 0)
 
-    async def test_web_checkin_import_accepts_version_one_snapshot(self):
+    async def test_web_checkin_import_rejects_old_snapshot_version(self):
         with (
             tempfile.TemporaryDirectory() as src_tmp,
             tempfile.TemporaryDirectory() as dst_tmp,
@@ -156,17 +156,7 @@ class CheckinBackupWebTest(unittest.IsolatedAsyncioTestCase):
             source = FrozenCheckinStore(src_tmp, date_key="2026-05-26")
             await source.checkin(user_id="20002", username="source", bot_name="neko")
             legacy = await source.export_snapshot()
-            legacy["schema_version"] = 1
-            for key in (
-                "event_key",
-                "event_label",
-                "greeting",
-                "greeting_source",
-                "greeting_attribution",
-                "secondary_note",
-                "template_version",
-            ):
-                legacy["records"][0].pop(key, None)
+            legacy["schema_version"] = 5
             snapshot_text = json.dumps(legacy, ensure_ascii=False)
 
             plugin = object.__new__(GetPxPlugin)
@@ -174,7 +164,7 @@ class CheckinBackupWebTest(unittest.IsolatedAsyncioTestCase):
             plugin.checkin_store = FrozenCheckinStore(dst_tmp, date_key="2026-05-26")
             app = Quart(__name__)
             app.add_url_rule(
-                "/checkin-import-v1",
+                "/checkin-import-old",
                 view_func=plugin._web_checkin_import,
                 methods=["POST"],
             )
@@ -182,11 +172,11 @@ class CheckinBackupWebTest(unittest.IsolatedAsyncioTestCase):
             async with app.test_app():
                 client = app.test_client()
                 response = await client.post(
-                    "/checkin-import-v1",
+                    "/checkin-import-old",
                     files={
                         "file": FileStorage(
                             stream=io.BytesIO(snapshot_text.encode("utf-8")),
-                            filename="checkin-export-v1.json",
+                            filename="checkin-export-old.json",
                             name="file",
                             content_type="application/json",
                         )
@@ -194,14 +184,9 @@ class CheckinBackupWebTest(unittest.IsolatedAsyncioTestCase):
                 )
                 payload = await response.get_json()
 
-            self.assertEqual(response.status_code, 200)
-            self.assertTrue(payload["success"])
-            self.assertEqual(payload["records"], 1)
-            imported = await plugin.checkin_store.get_today_record("20002")
-            self.assertIsNotNone(imported)
-            self.assertEqual(imported.greeting_source, "local")
-            self.assertEqual(imported.greeting_attribution, "")
-            self.assertEqual(imported.template_version, "v2")
+            self.assertEqual(response.status_code, 400)
+            self.assertFalse(payload["success"])
+            self.assertIn("不支持的签到备份版本", payload["error"])
 
     async def test_web_checkin_import_rejects_invalid_snapshot(self):
         with tempfile.TemporaryDirectory() as tmp:

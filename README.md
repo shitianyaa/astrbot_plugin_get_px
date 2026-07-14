@@ -25,11 +25,11 @@
 
 ## 界面展示
 
-| `default` · 米白 | `01` · 浅蓝 |
+| `00` · 米白 | `01` · 浅蓝 |
 | :---: | :---: |
-| ![米白](docs/images/checkin-card-v2-template-preview.png) | ![浅蓝](templates/checkin_card_liked/01_stellar_ticket/preview.png) |
+| ![米白](templates/checkin_themes/default/preview.png) | ![浅蓝](templates/checkin_themes/blue/preview.png) |
 | `02` · 红黑 | `03` · 黄黑 |
-| ![红黑](templates/checkin_card_liked/02_phantom_coop/preview.png) | ![黄黑](templates/checkin_card_liked/03_proxy_license/preview.png) |
+| ![红黑](templates/checkin_themes/red/preview.png) | ![黄黑](templates/checkin_themes/yellow/preview.png) |
 
 签到卡 `960 × 540`。`/查看主题 <编号>` 可免费看预览（如 `/查看主题 1`），不扣金币、不切换主题。
 
@@ -121,7 +121,7 @@ AstrBot WebUI 插件页的「pluginCenter」可：
 
 - 奖励全局一天一次；群榜按实际签到的群分别记录，不重复发金币。
 - 重复签到不重奖，重发当天缓存卡片。
-- 商店：加持 200/500/1000；背景刷新默认 100（可配）；非默认主题默认每套 1500（可配）。默认「米白」免费。
+- 商店：加持 200/500/1000；背景刷新默认 100（可配）；非默认主题每套 1500。默认「米白」免费。
 
 细则（好感等级、卡片规格、问候 24/32 字、生日事件、称号、节假日等）见 [签到说明](docs/user/checkin.md)。
 
@@ -157,9 +157,8 @@ AstrBot WebUI 插件页的「pluginCenter」可：
 | `checkin_bot_name` | 签到卡片中的 bot 角色名 | `neko` |
 | `checkin_background_mode` | 签到背景模式：`pixiv_daily` 或 `custom`；自定义背景不可用时会继续尝试 Pixiv 背景 | `pixiv_daily` |
 | `checkin_background_refresh_cost` | 用户更新当天 Pixiv 签到背景所需金币；范围 `0–500`，`0` 为免费 | `100` |
-| `checkin_theme_price` | 每套非默认签到主题的统一购买价格；范围 `0–5000`，`0` 为免费 | `1500` |
 | `checkin_background_tag` | 签到 Pixiv 背景标签，多个标签可用逗号、顿号、分号或换行分隔；每次随机确定尝试顺序，一个标签无可用候选时继续尝试下一个 | 空 |
-| `checkin_custom_background` | 本地图片路径；V2 仍按竖向作品相框完整显示 | 空 |
+| `checkin_custom_background` | 本地图片路径；默认主题按竖向作品相框完整显示 | 空 |
 | `checkin_avatar_enabled` | 签到卡片显示用户头像 | `true` |
 | `checkin_card_quality` | 签到卡片 JPEG 清晰度，范围 60–100；修改后自动生成新的当天缓存 | `95` |
 | `checkin_greeting_mode` | 签到问候来源：`local` / `hitokoto` / `ai` | `hitokoto` |

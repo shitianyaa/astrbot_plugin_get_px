@@ -136,17 +136,22 @@ async def test_theme_shop_purchase_and_switch_commands() -> None:
         plugin = make_plugin(tmp)
         plugin.config = {
             "checkin_enabled": True,
-            "checkin_theme_price": 10,
             "checkin_background_refresh_cost": 5,
         }
         event = FakeEvent()
         await plugin.checkin_store.checkin(
             user_id="10001", username="测试用户", bot_name="neko"
         )
+        with closing(sqlite3.connect(plugin.checkin_store._db_path)) as conn:
+            conn.execute(
+                "UPDATE checkin_users SET coins = 2000 WHERE user_id = ?",
+                ("10001",),
+            )
+            conn.commit()
 
         shop = plugin._build_checkin_shop()
         assert "/刷新签到背景 - 5 金币" in shop
-        assert "/购买主题 01 - 浅蓝，10 金币" in shop
+        assert "/购买主题 01 - 浅蓝，1500 金币" in shop
 
         purchased = await plugin._handle_buy_checkin_theme(event, "01")
         assert "购买成功" in purchased
@@ -154,10 +159,10 @@ async def test_theme_shop_purchase_and_switch_commands() -> None:
         themes = await plugin._handle_checkin_themes(event)
         assert "[当前] 01 · 浅蓝" in themes
 
-        switched = await plugin._handle_select_checkin_theme(event, "默认")
+        switched = await plugin._handle_select_checkin_theme(event, "00")
         assert "米白" in switched
         preference = await plugin.checkin_store.get_user_preference("10001")
-        assert preference.selected_theme_id == "default"
+        assert preference.current_theme_id == "default"
 
 
 @pytest.mark.asyncio
@@ -174,7 +179,7 @@ async def test_theme_preview_is_available_without_purchase_or_database_write() -
         assert result[0].text.startswith("主题预览：01 · 浅蓝")
         preview_path = Path(result[1].path)
         assert preview_path.name == "preview.png"
-        assert preview_path.parent.name == "01_stellar_ticket"
+        assert preview_path.parent.name == "blue"
         assert before == after
 
         usage = await plugin._handle_checkin_theme_preview(event, "unknown")
@@ -224,7 +229,7 @@ async def test_background_refresh_refreshes_hitokoto_greeting() -> None:
             greeting="原始一言",
             greeting_source="local",
             secondary_note="",
-            template_version="v2",
+            template_version="default:1",
         )
         record = await plugin.checkin_store.get_today_record("10001")
 
@@ -246,7 +251,7 @@ async def test_old_user_achievements_are_backfilled_and_highest_title_is_equippe
         await plugin.checkin_store.get_profile("10001")
         with closing(sqlite3.connect(plugin.checkin_store._db_path)) as conn:
             conn.execute(
-                "UPDATE checkin_profiles SET total_days = 30, streak_days = 7 WHERE user_id = ?",
+                "UPDATE checkin_users SET total_days = 30, streak_days = 7 WHERE user_id = ?",
                 ("10001",),
             )
             conn.commit()

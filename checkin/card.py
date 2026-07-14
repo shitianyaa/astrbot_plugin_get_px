@@ -19,11 +19,17 @@ from .themes import DEFAULT_CHECKIN_THEME_ID, get_checkin_theme
 CHECKIN_CARD_WIDTH = 960
 CHECKIN_CARD_HEIGHT = 540
 
-_TEMPLATE_DIR = Path(__file__).resolve().parents[1] / "templates" / "checkin_card_v2"
 _PLUGIN_ROOT = Path(__file__).resolve().parents[1]
 _CSS_MARKER = "/*__CHECKIN_CARD_CSS__*/"
 _FONT_DATA_MARKER = "__CHECKIN_CARD_FONT_DATA__"
-_FONT_PATH = _TEMPLATE_DIR / "fonts" / "LXGWWenKaiLite-GB2312.woff2"
+_FONT_PATH = (
+    _PLUGIN_ROOT
+    / "templates"
+    / "checkin_themes"
+    / "default"
+    / "fonts"
+    / "LXGWWenKaiLite-GB2312.woff2"
+)
 
 
 @lru_cache(maxsize=16)
@@ -303,7 +309,7 @@ def build_checkin_card_data(
             "affection_reward_label": f"{view_model.affection_reward:.2f}",
             "boost_multiplier_label": f"{view_model.boost_multiplier:g}",
             "artwork_credit": escape(_artwork_credit(view_model)),
-            "theme_id": escape(theme.theme_id),
+            "theme_code": escape(theme.code),
             "theme_name": escape(theme.name),
             "background_refresh_cost": max(0, int(background_refresh_cost)),
         }

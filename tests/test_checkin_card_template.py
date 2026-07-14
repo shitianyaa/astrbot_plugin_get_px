@@ -6,7 +6,7 @@ from PIL import Image
 
 
 ROOT = Path(__file__).resolve().parents[1]
-TEMPLATE_DIR = ROOT / "templates" / "checkin_card_v2"
+TEMPLATE_DIR = ROOT / "templates" / "checkin_themes" / "default"
 
 
 def _css_rule(css: str, selector: str) -> str:
@@ -15,7 +15,7 @@ def _css_rule(css: str, selector: str) -> str:
     return match.group("body")
 
 
-class CheckinCardTemplateV2Test(unittest.TestCase):
+class CheckinCardTemplateTest(unittest.TestCase):
     def test_static_checkin_help_image_is_bundled(self):
         from astrbot_plugin_get_px.main import CHECKIN_HELP_IMAGE, GetPxPlugin
 

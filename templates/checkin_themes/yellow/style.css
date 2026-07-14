@@ -6,18 +6,14 @@
   font-display: block;
 }
 
-/* Proxy License · 绝区零工控绳网终端 V3 (Polished)
-   以《绝区零》(Zenless Zone Zero) 的都市异能世界观为灵魂设计。
-   融入了「黄黑工业终端 + 录像媒介」的核心隐喻，
-   采用极具识别度的粗粝水泥灰墙面、黄黑警示警戒带、
-   不完整/带缺口的工控边框、CRT扫描电子监视荧屏与信誉数据分色。 */
+/* 黄黑主题 */
 :root {
-  --zzz-yellow: #e6c300;   /* 降明度、深饱和的工业警戒黄 */
-  --zzz-cyan: #00e5ff;     /* 正常数据青 */
-  --zzz-pink: #d60565;     /* 视觉冲击力更强、更深的品红/洋红 */
-  --zzz-black: #101115;    /* 监视器屏幕底色 */
-  --zzz-grey: #1a1c22;     /* 工控模块底色 */
-  --zzz-white: #e2e8f0;    /* 白灰文字 */
+  --theme-yellow: #e6c300;   /* 降明度、深饱和的工业警戒黄 */
+  --theme-cyan: #00e5ff;     /* 正常数据青 */
+  --theme-pink: #d60565;     /* 视觉冲击力更强、更深的品红/洋红 */
+  --theme-black: #101115;    /* 监视器屏幕底色 */
+  --theme-grey: #1a1c22;     /* 工控模块底色 */
+  --theme-white: #e2e8f0;    /* 白灰文字 */
 
   /* 弱化文字：工控终端上的次级说明，未解析时会回退成纯白灰导致弱化失效 */
   --text-muted: #9aa3b2;
@@ -38,7 +34,7 @@ body {
 }
 
 body {
-  color: var(--zzz-white);
+  color: var(--theme-white);
   background: #090a0d;
   font-family: var(--font-ui);
   font-size: 14px;
@@ -55,8 +51,8 @@ body {
   justify-content: center;
 }
 
-/* 绝区零工控警示风背景 */
-.zzz-bg {
+/* 黄黑工控警示背景 */
+.theme-bg {
   position: absolute;
   inset: 0;
   background: #090a0d;
@@ -98,8 +94,8 @@ body {
   height: 24px;
   background: repeating-linear-gradient(
     -45deg,
-    var(--zzz-yellow),
-    var(--zzz-yellow) 8px,
+    var(--theme-yellow),
+    var(--theme-yellow) 8px,
     #000000 8px,
     #000000 16px
   );
@@ -120,7 +116,7 @@ body {
 }
 
 /* 终端口腔卡片 */
-.zzz-card {
+.theme-card {
   position: relative;
   z-index: 5;
   display: grid;
@@ -128,7 +124,7 @@ body {
   width: 928px;
   height: 508px;
   border: 3px solid #2d313c;
-  background: var(--zzz-black);
+  background: var(--theme-black);
   border-radius: 8px;
   box-shadow:
     0 25px 75px rgba(0, 0, 0, 0.85),
@@ -146,25 +142,25 @@ body {
   height: 100%;
   overflow: hidden;
   border-right: 3px solid #2d313c;
-  background: var(--zzz-black);
+  background: var(--theme-black);
   position: relative;
 }
 
-.zzz-header {
+.theme-header {
   display: flex;
   flex-direction: column;
   gap: 8px;
   padding-left: 102px;
 }
 
-/* 03 代理人许可 封条角标 */
+/* 主题封条角标 */
 .pass-stamp {
   position: absolute;
   z-index: 10;
   top: 30px;
   left: -45px;
   width: 180px;
-  background: var(--zzz-yellow);
+  background: var(--theme-yellow);
   padding: 4px 0 6px 0;
   text-align: center;
   transform: rotate(-45deg);
@@ -201,7 +197,7 @@ body {
 }
 
 .pass-stamp .stamp-seal {
-  color: var(--zzz-yellow);
+  color: var(--theme-yellow);
   background: #000000;
   font-family: var(--font-cn);
   font-size: 9px;
@@ -235,8 +231,8 @@ body {
   width: 7px;
   height: 7px;
   border-radius: 50%;
-  background: var(--zzz-pink);
-  box-shadow: 0 0 6px var(--zzz-pink);
+  background: var(--theme-pink);
+  box-shadow: 0 0 6px var(--theme-pink);
   animation: pulse-dot 1.5s infinite ease-in-out;
 }
 
@@ -248,7 +244,7 @@ body {
 .vhs-rec-text {
   font-family: var(--font-num);
   font-size: 10px;
-  color: var(--zzz-white);
+  color: var(--theme-white);
   letter-spacing: 0.08em;
   font-weight: 700;
 }
@@ -257,7 +253,7 @@ body {
   margin-left: auto;
   font-family: var(--font-num);
   font-size: 11px;
-  color: var(--zzz-yellow);
+  color: var(--theme-yellow);
   letter-spacing: 0.05em;
   font-weight: 700;
 }
@@ -272,14 +268,14 @@ body {
 
 .skew-title {
   margin: 0;
-  background: var(--zzz-yellow);
+  background: var(--theme-yellow);
   color: #000000;
   padding: 4px 16px;
   transform: skewX(-12deg);
   position: relative;
   display: flex;
   align-items: center;
-  border: 1.5px solid var(--zzz-white);
+  border: 1.5px solid var(--theme-white);
 }
 
 .title-slash {
@@ -300,10 +296,10 @@ body {
   letter-spacing: 0.04em;
 }
 
-.zzz-badge {
-  background: var(--zzz-black);
-  color: var(--zzz-yellow);
-  border: 2px solid var(--zzz-yellow);
+.theme-badge {
+  background: var(--theme-black);
+  color: var(--theme-yellow);
+  border: 2px solid var(--theme-yellow);
   padding: 3px 8px;
   font-family: var(--font-num);
   font-size: 11px;
@@ -312,7 +308,7 @@ body {
   border-radius: 4px;
 }
 
-.zzz-body {
+.theme-body {
   display: flex;
   flex-direction: column;
   gap: 10px;
@@ -325,7 +321,7 @@ body {
   align-items: center;
   gap: 12px;
   padding: 8px 12px;
-  background: var(--zzz-grey);
+  background: var(--theme-grey);
   border: 1px solid rgba(255, 255, 255, 0.05);
   border-radius: 4px;
 }
@@ -338,8 +334,8 @@ body {
   padding: 2.5px;
   background: repeating-linear-gradient(
     -45deg,
-    var(--zzz-yellow),
-    var(--zzz-yellow) 2px,
+    var(--theme-yellow),
+    var(--theme-yellow) 2px,
     #000000 2px,
     #000000 4px
   );
@@ -348,7 +344,7 @@ body {
 .avatar-box {
   width: 100%;
   height: 100%;
-  background: var(--zzz-black);
+  background: var(--theme-black);
   border-radius: 2px;
   overflow: hidden;
 }
@@ -363,7 +359,7 @@ body {
   font-family: var(--font-num);
   font-size: 18px;
   font-weight: 900;
-  color: var(--zzz-yellow);
+  color: var(--theme-yellow);
   display: grid;
   place-items: center;
   height: 100%;
@@ -381,12 +377,12 @@ body {
   font-family: var(--font-num);
   font-size: 10px;
   font-weight: 900;
-  color: var(--zzz-cyan);
+  color: var(--theme-cyan);
   letter-spacing: 0.08em;
 }
 
 .username {
-  color: var(--zzz-white);
+  color: var(--theme-white);
   font-family: var(--font-cn);
   font-size: 17px;
   font-weight: 900;
@@ -396,7 +392,7 @@ body {
 }
 
 .title-tag {
-  color: var(--zzz-yellow);
+  color: var(--theme-yellow);
   font-size: 12px;
   font-weight: 700;
   overflow: hidden;
@@ -416,8 +412,8 @@ body {
   position: relative;
   /* 上下渐变：模拟信号读取的不完美 */
   background: linear-gradient(180deg, rgba(0, 229, 255, 0.03) 0%, rgba(0, 229, 255, 0.005) 100%);
-  border-left: 3px solid var(--zzz-cyan);
-  border-right: 3px solid var(--zzz-cyan);
+  border-left: 3px solid var(--theme-cyan);
+  border-right: 3px solid var(--theme-cyan);
   border-radius: 4px;
   box-shadow: inset 0 0 12px rgba(0, 229, 255, 0.06);
   overflow: hidden;
@@ -441,7 +437,7 @@ body {
   display: block;
   font-family: var(--font-num);
   font-size: 10px;
-  color: var(--zzz-cyan);
+  color: var(--theme-cyan);
   font-weight: 900;
   letter-spacing: 0.1em;
   margin-bottom: 4px;
@@ -451,7 +447,7 @@ body {
   margin: 0;
   font-family: var(--font-cn);
   font-size: 19px;
-  color: var(--zzz-white);
+  color: var(--theme-white);
   line-height: 1.25;
   font-weight: 900;
   overflow-wrap: anywhere;
@@ -474,7 +470,7 @@ body {
 
 .bot-signature {
   margin: 2px 0 0;
-  color: var(--zzz-cyan);
+  color: var(--theme-cyan);
   font-family: var(--font-num);
   font-size: 11px;
   font-weight: 900;
@@ -490,7 +486,7 @@ body {
 }
 
 .supplies-box .box-label {
-  color: var(--zzz-white);
+  color: var(--theme-white);
   font-weight: 900;
 }
 
@@ -506,7 +502,7 @@ body {
   flex-direction: column;
   padding: 6px 10px;
   transform: skewX(-10deg);
-  background: var(--zzz-grey);
+  background: var(--theme-grey);
   position: relative;
   /* 下边和右边闭合 */
   border-bottom: 1.5px solid #2d313c;
@@ -526,9 +522,9 @@ body {
   background: #2d313c;
 }
 
-.supply-item.coin-item { border-left: 3px solid var(--zzz-yellow); }
-.supply-item.exp-item { border-left: 3px solid var(--zzz-cyan); }
-.supply-item.streak-item { border-left: 3px solid var(--zzz-pink); }
+.supply-item.coin-item { border-left: 3px solid var(--theme-yellow); }
+.supply-item.exp-item { border-left: 3px solid var(--theme-cyan); }
+.supply-item.streak-item { border-left: 3px solid var(--theme-pink); }
 
 .supply-item .label {
   color: var(--text-muted);
@@ -551,9 +547,9 @@ body {
   transform: skewX(10deg);
 }
 
-.supply-item.coin-item .value { color: var(--zzz-yellow); }
-.supply-item.exp-item .value { color: var(--zzz-cyan); }
-.supply-item.streak-item .value { color: var(--zzz-pink); }
+.supply-item.coin-item .value { color: var(--theme-yellow); }
+.supply-item.exp-item .value { color: var(--theme-cyan); }
+.supply-item.streak-item .value { color: var(--theme-pink); }
 
 .supply-item small {
   font-size: 11px;
@@ -585,7 +581,7 @@ body {
   justify-content: center;
   gap: 1px;
   padding: 5px 6px;
-  background: var(--zzz-black);
+  background: var(--theme-black);
 }
 
 .status-cell:first-child {
@@ -620,10 +616,10 @@ body {
   white-space: nowrap;
 }
 
-.status-cell.text-yellow strong { color: var(--zzz-yellow); }
-.status-cell.text-white strong { color: var(--zzz-white); }
-.status-cell.text-cyan strong { color: var(--zzz-cyan); }
-.status-cell.text-pink strong { color: var(--zzz-pink); }
+.status-cell.text-yellow strong { color: var(--theme-yellow); }
+.status-cell.text-white strong { color: var(--theme-white); }
+.status-cell.text-cyan strong { color: var(--theme-cyan); }
+.status-cell.text-pink strong { color: var(--theme-pink); }
 
 .level-progress-wrap {
   display: flex;
@@ -644,13 +640,13 @@ body {
 }
 
 .level-next {
-  color: var(--zzz-yellow);
+  color: var(--theme-yellow);
   font-family: var(--font-num);
 }
 
 .progress-bar-track {
   height: 5px;
-  background: var(--zzz-black);
+  background: var(--theme-black);
   border: 1px solid #2d313c;
   border-radius: 3px;
   overflow: hidden;
@@ -659,7 +655,7 @@ body {
 .progress-bar-track i {
   display: block;
   height: 100%;
-  background: linear-gradient(90deg, var(--zzz-cyan), var(--zzz-yellow));
+  background: linear-gradient(90deg, var(--theme-cyan), var(--theme-yellow));
   border-radius: 3px;
 }
 
@@ -670,7 +666,7 @@ body {
 }
 
 .milestone-label {
-  color: var(--zzz-yellow);
+  color: var(--theme-yellow);
   font-family: var(--font-num);
   font-size: 11px;
   font-weight: 900;
@@ -712,7 +708,7 @@ body {
   bottom: 0;
   left: 0;
   width: 100%;
-  background: var(--zzz-yellow);
+  background: var(--theme-yellow);
   clip-path: polygon(10% 0%, calc(10% + 3px) 0%, 3px 100%, 0% 100%);
   z-index: 11;
   pointer-events: none;
@@ -735,7 +731,7 @@ body {
   position: absolute;
   width: 14px;
   height: 14px;
-  border: 2.5px solid var(--zzz-cyan);
+  border: 2.5px solid var(--theme-cyan);
   z-index: 10;
   opacity: 0.85;
   pointer-events: none;
@@ -752,10 +748,10 @@ body {
   font-family: var(--font-num);
   font-size: 8px;
   font-weight: 900;
-  color: var(--zzz-pink);
+  color: var(--theme-pink);
   z-index: 10;
   letter-spacing: 0.05em;
-  text-shadow: 0 0 5px var(--zzz-pink);
+  text-shadow: 0 0 5px var(--theme-pink);
 }
 
 .hud-grid-lines {
@@ -807,7 +803,7 @@ body {
 }
 
 .artwork-title-text {
-  color: var(--zzz-white);
+  color: var(--theme-white);
   font-family: var(--font-cn);
   font-size: 11px;
   font-weight: 900;
@@ -816,7 +812,7 @@ body {
   text-overflow: ellipsis;
   white-space: nowrap;
   background: rgba(16, 17, 21, 0.85);
-  border-left: 3px solid var(--zzz-cyan);
+  border-left: 3px solid var(--theme-cyan);
   padding: 3px 8px;
   border-radius: 0 2px 2px 0;
   box-shadow: 0 4px 10px rgba(0, 0, 0, 0.4);
@@ -824,7 +820,7 @@ body {
 }
 
 .artwork-credit-text {
-  color: var(--zzz-cyan);
+  color: var(--theme-cyan);
   font-family: var(--font-num);
   font-size: 9px;
   font-weight: 700;
@@ -832,7 +828,7 @@ body {
   text-overflow: ellipsis;
   white-space: nowrap;
   background: rgba(16, 17, 21, 0.85);
-  border-right: 3px solid var(--zzz-pink);
+  border-right: 3px solid var(--theme-pink);
   padding: 3px 8px;
   border-radius: 2px 0 0 2px;
   box-shadow: 0 4px 10px rgba(0, 0, 0, 0.4);
@@ -870,7 +866,7 @@ body {
   width: 40px;
   height: 40px;
   border-radius: 50%;
-  border: 4px dashed var(--zzz-yellow);
+  border: 4px dashed var(--theme-yellow);
   position: relative;
   animation: star-spin 12s infinite linear;
 }
@@ -879,7 +875,7 @@ body {
   position: absolute;
   width: 12px;
   height: 12px;
-  background: var(--zzz-yellow);
+  background: var(--theme-yellow);
   border-radius: 50%;
   top: 50%;
   left: 50%;
@@ -891,7 +887,7 @@ body {
 }
 
 .placeholder-graphic .title {
-  color: var(--zzz-white);
+  color: var(--theme-white);
   font-family: var(--font-num);
   font-size: 13px;
   font-weight: 900;
@@ -899,7 +895,7 @@ body {
 }
 
 .placeholder-graphic .subtitle {
-  color: var(--zzz-yellow);
+  color: var(--theme-yellow);
   font-family: var(--font-num);
   font-size: 8px;
   font-weight: 900;
@@ -909,6 +905,6 @@ body {
 .grid-line {
   width: 48px;
   height: 2px;
-  background: var(--zzz-yellow);
+  background: var(--theme-yellow);
   margin-top: 4px;
 }

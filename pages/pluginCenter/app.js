@@ -855,11 +855,10 @@ function bindEvents() {
     try {
       const result = apiResult(await bridge.upload("checkin-import", file));
       els.importResult.textContent = `恢复成功！已导入：
-        ${result.profiles || 0} 位用户，
+        ${result.users || 0} 位用户，
         ${result.records || 0} 条签到历史，
         ${result.group_presence || 0} 条群活跃记录，
-        ${result.preferences || 0} 项主题偏好，
-        ${result.theme_purchases || 0} 个购买主题，
+        ${result.user_themes || 0} 个用户主题，
         回滚文件为 ${result.rollback_file || "未知"}。`;
       els.importFile.value = "";
       showToast("签到备份已成功恢复！");

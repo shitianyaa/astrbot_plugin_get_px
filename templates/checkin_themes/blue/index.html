@@ -17,16 +17,16 @@
 
     <!-- pass-stamp moved to stage level to allow bleeding outside card boundaries -->
     <div class="pass-stamp" aria-label="主题 {{ theme_name }}">
-      <strong>{{ theme_id }}</strong>
-      <span>DAILY PASS<br />VALID</span>
+      <strong>{{ theme_code }}</strong>
+      <span>{{ theme_name }}<br />THEME</span>
     </div>
 
     <article class="dossier-card checkin-card" aria-label="{{ title }}">
-      <!-- 左侧：旅行日志信息面板 -->
+      <!-- 左侧信息面板 -->
       <section class="info-panel">
         <div class="route-security-mark" aria-hidden="true">
-          <span class="route-code">ROUTE · 01</span>
-          <span class="route-sequence">01—{{ total_days }}—VALID</span>
+          <span class="route-code">ROUTE · {{ theme_code }}</span>
+          <span class="route-sequence">{{ theme_code }}—{{ total_days }}—VALID</span>
         </div>
         <header class="panel-header">
           <div class="meta-row">
@@ -46,7 +46,7 @@
         </header>
 
         <div class="panel-body">
-          <!-- 旅行乘员身份栏 -->
+          <!-- 用户信息 -->
           <div class="passenger-row">
             <div class="avatar-box">
               {% if avatar_url %}
@@ -62,7 +62,7 @@
             <span class="dossier-tag">ACTIVE TRAVELER</span>
           </div>
 
-          <!-- 每日旅行寄语 -->
+          <!-- 问候 -->
           <div class="broadcast-box">
             <div class="journal-watermark" aria-hidden="true">
               <svg viewBox="0 0 120 120">
@@ -72,9 +72,9 @@
                 <path d="M28 88 C53 66, 78 61, 104 70"></path>
                 <path d="M60 9 L60 111 M9 60 L111 60"></path>
               </svg>
-              <span>ROUTE 01</span>
+              <span>ROUTE {{ theme_code }}</span>
             </div>
-            <span class="box-label">JOURNAL NOTE // 旅行日志</span>
+            <span class="box-label">今日问候</span>
             <blockquote class="greeting-text">{{ greeting }}</blockquote>
             {% if secondary_note %}<p class="note-text">{{ secondary_note }}</p>{% endif %}
             <p class="bot-signature">— {{ bot_name }}</p>
@@ -82,18 +82,18 @@
 
           <!-- 探索收获明细 -->
           <div class="supplies-box">
-            <span class="box-label">EXPLORATION SUPPLIES // 每日补给</span>
+            <span class="box-label">今日奖励</span>
             <div class="supplies-grid">
               <div class="supply-item">
                 <span class="label">金币奖励</span>
                 <strong class="value text-gold">+{{ coins_reward }}</strong>
               </div>
               <div class="supply-item">
-                <span class="label">里程好感</span>
+                <span class="label">好感度</span>
                 <strong class="value text-pink">+{{ affection_reward_label }}{% if boost_multiplier > 1 %}<small>×{{ boost_multiplier_label }}</small>{% endif %}</strong>
               </div>
               <div class="supply-item">
-                <span class="label">连签活跃</span>
+                <span class="label">连签天数</span>
                 <strong class="value text-orange">{{ streak_days }}<small>天</small></strong>
               </div>
             </div>
@@ -117,7 +117,7 @@
             </div>
             <div class="wallet-cell wallet-license">
               <span>主题凭证</span>
-              <strong>{{ theme_id }} · 已拥有</strong>
+              <strong>{{ theme_code }} · 已拥有</strong>
             </div>
           </div>
           <div class="level-progress-wrap">

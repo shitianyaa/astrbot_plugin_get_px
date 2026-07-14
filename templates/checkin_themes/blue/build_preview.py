@@ -6,7 +6,7 @@ from jinja2 import Template
 from playwright.sync_api import sync_playwright
 
 ROOT = Path(__file__).resolve().parent
-ARTWORK_PATH = ROOT.parent / "preview_assets" / "artwork_3x4.jpg"
+ARTWORK_PATH = ROOT.parent / "assets" / "artwork_3x4.jpg"
 
 # Read HTML and CSS
 html_tpl = (ROOT / "index.html").read_text(encoding="utf-8")
@@ -15,7 +15,7 @@ css = (ROOT / "style.css").read_text(encoding="utf-8")
 # Fix font path for browser preview
 css = css.replace(
     'url("data:font/woff2;base64,__CHECKIN_CARD_FONT_DATA__") format("woff2")',
-    'url("../../checkin_card_v2/fonts/LXGWWenKaiLite-GB2312.woff2") format("woff2")',
+    'url("../default/fonts/LXGWWenKaiLite-GB2312.woff2") format("woff2")',
 )
 
 # Insert CSS into HTML
@@ -52,8 +52,8 @@ data = {
     "affection_next_text": "距离“信赖”还需 3.40",
     "affection_progress": 72,
     "milestone_next_text": "累计签到 30 天，还差 18 天",
-    "theme_id": "02",
-    "theme_name": "红黑",
+    "theme_code": "01",
+    "theme_name": "浅蓝",
     "background_refresh_cost": 100,
 }
 

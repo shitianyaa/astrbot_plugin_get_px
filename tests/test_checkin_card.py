@@ -233,8 +233,8 @@ class CheckinCardRenderQualityTest(unittest.IsolatedAsyncioTestCase):
             profile=_profile(),
             record=replace(
                 _record(),
-                theme_id="03",
-                template_version="proxy-v2",
+                theme_id="yellow",
+                template_version="yellow:old",
             ),
             background=None,
             bot_name="neko",
@@ -243,7 +243,7 @@ class CheckinCardRenderQualityTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(result, "cache-key")
         self.assertEqual(
             plugin.checkin_cache.cache_key.call_args.kwargs["template_version"],
-            "proxy-v3",
+            "yellow:1",
         )
 
 
