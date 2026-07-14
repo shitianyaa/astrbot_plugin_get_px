@@ -12,6 +12,11 @@ from quart import jsonify, request, send_file
 
 try:
     from ..checkin import load_checkin_snapshot_json
+    from ..checkin.database_replace import (
+        CHECKIN_DATABASE_SUFFIXES,
+        replace_checkin_database,
+        stage_uploaded_checkin_database,
+    )
     from ..pixiv.downloader import cleanup, pick_image_url_exact
     from ..pixiv.safety import (
         BUILTIN_SAFETY_TERMS,
@@ -22,6 +27,11 @@ try:
     )
 except ImportError:  # Direct imports used by the test suite.
     from checkin import load_checkin_snapshot_json
+    from checkin.database_replace import (
+        CHECKIN_DATABASE_SUFFIXES,
+        replace_checkin_database,
+        stage_uploaded_checkin_database,
+    )
     from pixiv.downloader import cleanup, pick_image_url_exact
     from pixiv.safety import (
         BUILTIN_SAFETY_TERMS,
@@ -123,7 +133,12 @@ class PluginWebApi:
                 "Get blacklist thumbnails",
             ),
             ("checkin-export", self.checkin_export, ["GET"], "Export check-in backup"),
-            ("checkin-import", self.checkin_import, ["POST"], "Import check-in backup"),
+            (
+                "checkin-import",
+                self.checkin_import,
+                ["POST"],
+                "Import check-in backup or replace database",
+            ),
             ("config", self.config, ["GET"], "Get management center configuration"),
         )
         for path, handler, methods, description in routes:
@@ -539,8 +554,33 @@ class PluginWebApi:
                 ), 400
             upload = uploaded[0]
             filename = str(getattr(upload, "filename", "") or "").strip()
-            if not filename.lower().endswith(".json"):
-                return jsonify({"success": False, "error": "只支持 JSON 备份文件"}), 400
+            suffix = Path(filename).suffix.lower()
+            if suffix in CHECKIN_DATABASE_SUFFIXES:
+                candidate = stage_uploaded_checkin_database(
+                    upload, Path(self.plugin.checkin_store._db_path).parent
+                )
+                try:
+                    result = await replace_checkin_database(
+                        self.plugin.checkin_store, candidate
+                    )
+                finally:
+                    candidate.unlink(missing_ok=True)
+                return jsonify(
+                    {
+                        "success": True,
+                        "filename": filename,
+                        **result,
+                        "database_replaced": True,
+                        "old_database_deleted": True,
+                    }
+                )
+            if suffix != ".json":
+                return jsonify(
+                    {
+                        "success": False,
+                        "error": "只支持 JSON 备份或新版 SQLite 数据库",
+                    }
+                ), 400
             raw = await self.plugin._read_uploaded_file_bytes(upload)
             snapshot = load_checkin_snapshot_json(raw)
             rollback_path = await self.plugin._write_checkin_snapshot_backup(

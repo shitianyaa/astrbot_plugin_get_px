@@ -47,6 +47,7 @@ def test_plugin_center_keeps_responsive_and_accessible_states() -> None:
     assert 'name="custom_safety_term"' in html
     assert 'name="pixiv_illust_id"' in html
     assert 'name="checkin_backup"' in html
+    assert ".sqlite3,.db" in html
     assert 'name="checkin_member_search"' in html
     assert 'id="memberDialog"' in html
     assert ":root" in source
@@ -59,6 +60,8 @@ def test_plugin_center_keeps_responsive_and_accessible_states() -> None:
     assert "onerror=" not in script
     assert "Promise.allSettled" in script
     assert "MAX_BACKUP_BYTES" in script
+    assert "MAX_DATABASE_BYTES" in script
+    assert "database_replaced" in script
     assert 'apiGet("checkin-members"' in script
     assert 'apiPost("checkin-members/update"' in script
     assert source.count("/*") == source.count("*/")
