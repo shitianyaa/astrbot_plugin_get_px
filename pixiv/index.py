@@ -309,27 +309,12 @@ class ImageIndexStore:
                 source TEXT NOT NULL DEFAULT '',
                 record_id TEXT NOT NULL DEFAULT '',
                 thumb_id TEXT NOT NULL DEFAULT '',
+                reason TEXT NOT NULL DEFAULT '',
+                added_by TEXT NOT NULL DEFAULT '',
                 added_at TEXT NOT NULL
             )
             """
         )
-        blacklist_columns = {
-            str(row["name"])
-            for row in conn.execute("PRAGMA table_info(image_blacklist)").fetchall()
-        }
-        if "thumb_id" not in blacklist_columns:
-            conn.execute(
-                """
-                ALTER TABLE image_blacklist
-                ADD COLUMN thumb_id TEXT NOT NULL DEFAULT ''
-                """
-            )
-        for name in ("reason", "added_by"):
-            if name not in blacklist_columns:
-                conn.execute(
-                    f"ALTER TABLE image_blacklist ADD COLUMN {name} "
-                    "TEXT NOT NULL DEFAULT ''"
-                )
         conn.execute(
             """
             CREATE TABLE IF NOT EXISTS content_safety_terms (

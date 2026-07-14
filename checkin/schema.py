@@ -24,28 +24,10 @@ class SchemaMixin:
                 raise RuntimeError(
                     f"unsupported check-in database schema: {schema_version}"
                 )
-            if schema_version == 0:
-                self._reset_checkin_schema(conn)
             self._create_checkin_schema(conn)
             self._sync_builtin_themes(conn)
             conn.execute(f"PRAGMA user_version = {CHECKIN_DB_SCHEMA_VERSION}")
             conn.commit()
-
-    @staticmethod
-    def _reset_checkin_schema(conn: sqlite3.Connection) -> None:
-        conn.execute("PRAGMA foreign_keys = OFF")
-        tables = conn.execute(
-            """
-            SELECT name FROM sqlite_master
-            WHERE type = 'table' AND name GLOB 'checkin_*'
-            """
-        ).fetchall()
-        for row in tables:
-            table = str(row["name"])
-            if not table.replace("_", "").isalnum():
-                raise RuntimeError(f"invalid check-in table name: {table}")
-            conn.execute(f'DROP TABLE IF EXISTS "{table}"')
-        conn.execute("PRAGMA foreign_keys = ON")
 
     @staticmethod
     def _create_checkin_schema(conn: sqlite3.Connection) -> None:

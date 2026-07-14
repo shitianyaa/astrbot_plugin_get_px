@@ -102,34 +102,6 @@ def test_theme_and_user_tables_are_separate() -> None:
             assert "checkin_user_themes" in tables
 
 
-def test_schema_zero_rebuild_only_drops_literal_checkin_prefix() -> None:
-    with tempfile.TemporaryDirectory() as tmp:
-        db_path = Path(tmp) / "checkin.sqlite3"
-        with closing(sqlite3.connect(db_path)) as conn:
-            conn.execute("CREATE TABLE checkin_profiles (user_id TEXT PRIMARY KEY)")
-            conn.execute("CREATE TABLE checkinXforeign (value TEXT)")
-            conn.execute("INSERT INTO checkin_profiles VALUES ('old-user')")
-            conn.execute("INSERT INTO checkinXforeign VALUES ('keep')")
-            conn.commit()
-
-        FrozenCheckinStore(tmp, date_key="2026-07-13")
-
-        with closing(sqlite3.connect(db_path)) as conn:
-            tables = {
-                row[0]
-                for row in conn.execute(
-                    "SELECT name FROM sqlite_master WHERE type = 'table'"
-                ).fetchall()
-            }
-            assert "checkin_profiles" not in tables
-            assert "checkin_users" in tables
-            assert "checkinXforeign" in tables
-            assert (
-                conn.execute("SELECT value FROM checkinXforeign").fetchone()[0]
-                == "keep"
-            )
-
-
 @pytest.mark.asyncio
 async def test_theme_purchase_deducts_coins_and_updates_today_record() -> None:
     with tempfile.TemporaryDirectory() as tmp:

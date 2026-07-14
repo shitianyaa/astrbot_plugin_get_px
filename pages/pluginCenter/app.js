@@ -66,7 +66,6 @@ const els = {
   blacklistContent: $("blacklistContent"),
   blacklistCount: $("blacklistCount"),
   latestBackup: $("latestBackup"),
-  cacheStats: $("cacheStats"),
   importFile: $("importFile"),
   importBtn: $("importBtn"),
   importResult: $("importResult"),
@@ -134,16 +133,6 @@ function formatDate(value) {
 function formatCount(value) {
   const number = Number(value);
   return numberFormatter.format(Number.isFinite(number) ? number : 0);
-}
-
-function formatBytes(bytes) {
-  if (bytes === undefined || bytes === null || Number.isNaN(Number(bytes))) return "0 B";
-  const num = Number(bytes);
-  if (num === 0) return "0 B";
-  const k = 1024;
-  const sizes = ["B", "KiB", "MiB", "GiB"];
-  const i = Math.floor(Math.log(num) / Math.log(k));
-  return `${(num / Math.pow(k, i)).toFixed(2)} ${sizes[i]}`;
 }
 
 function currentGroup() {
@@ -637,15 +626,6 @@ async function reloadBlacklist() {
 function renderData() {
   els.latestBackup.textContent = state.overview.latest_backup_at
     ? `最近备份：${formatDate(state.overview.latest_backup_at)}` : "最近备份：尚无备份记录";
-  const stats = state.overview.cache_cleanup || {};
-  const items = [
-    ["已清理目录", stats.cleaned ?? 0],
-    ["已跳过目录", stats.skipped ?? 0],
-    ["清理失败", stats.failed ?? 0],
-    ["已删文件数", stats.files ?? 0],
-    ["释放空间", formatBytes(stats.bytes ?? 0)],
-  ];
-  els.cacheStats.innerHTML = items.map(([label, value]) => `<div><dt>${label}</dt><dd>${value}</dd></div>`).join("");
 }
 
 function backupFileError(file) {

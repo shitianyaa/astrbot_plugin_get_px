@@ -154,9 +154,6 @@ class PluginWebApi:
                     "builtin_term_count": len(BUILTIN_SAFETY_TERMS),
                     "custom_term_count": len(custom_terms),
                     "latest_backup_at": self._latest_backup_at(),
-                    "cache_cleanup": dict(
-                        getattr(self.plugin, "cache_cleanup_summary", {}) or {}
-                    ),
                 }
             )
         except Exception as exc:

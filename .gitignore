@@ -12,5 +12,4 @@ test-results/
 .omo/
 scratch/
 data/
-templates/checkin_themes/*/preview.html
 docs/images/checkin-event-matrix/
