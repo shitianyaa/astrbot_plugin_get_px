@@ -8,7 +8,7 @@ from astrbot.api import logger
 
 
 LOG_PREFIX = "[GetPx]"
-LEGACY_CACHE_TARGETS = ("image_history", "checkin_card_cache")
+LEGACY_CACHE_TARGETS = ("image_history",)
 
 
 @dataclass(frozen=True)

@@ -25,10 +25,13 @@ def test_cleanup_removes_only_allowlisted_cache_directories() -> None:
 
         summary = cleanup_legacy_caches(root)
 
-        assert summary.cleaned == 2
-        assert summary.files == 2
+        assert summary.cleaned == 1
+        assert summary.files == 1
         assert not history.exists()
-        assert not cards.exists()
+        # checkin_card_cache 是当天签到卡片 JPEG 缓存，由 CheckinCardCleanup 自身按日过期，
+        # 启动时清整目录会抹掉当天 warm cache，因此不在遗留清理范围。
+        assert cards.exists()
+        assert (cards / "card.jpg").read_bytes() == b"cache"
         assert database.read_bytes() == b"data"
         assert (blacklist / "keep.jpg").read_bytes() == b"keep"
 
@@ -37,7 +40,7 @@ def test_cleanup_skips_missing_targets() -> None:
     with tempfile.TemporaryDirectory() as tmp:
         summary = cleanup_legacy_caches(tmp)
         assert summary.cleaned == 0
-        assert summary.skipped == 2
+        assert summary.skipped == 1
         assert summary.failed == 0
 
 
@@ -48,7 +51,7 @@ def test_cleanup_unlinks_cache_symlink_without_deleting_target() -> None:
         backups.mkdir()
         backup = backups / "keep.json"
         backup.write_text("{}", encoding="utf-8")
-        cache_link = root / "checkin_card_cache"
+        cache_link = root / "image_history"
         try:
             cache_link.symlink_to(backups, target_is_directory=True)
         except OSError as exc:
