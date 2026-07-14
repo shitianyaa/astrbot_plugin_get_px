@@ -239,7 +239,7 @@ def test_content_limits_badges_and_greeting_and_accepts_plain_birthday_data() ->
 
     assert content.event_key == "birthday"
     assert len(content.badges) <= 2
-    assert len(content.greeting) <= 44
+    assert len(content.greeting) <= 32
     assert content.context.username == "Alice"
     assert content.context.user_id_hint != "10001"
     assert "10001" not in content.context.to_plain_text()

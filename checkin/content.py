@@ -10,7 +10,8 @@ from lunar_python import Solar
 from .models import CheckinProfile, CheckinRecord
 from .holiday import OnlineHoliday
 
-MAX_GREETING_LENGTH = 44
+MAX_GREETING_LENGTH = 32
+MAX_SECONDARY_NOTE_LENGTH = 44
 MILESTONES = (7, 30, 100, 365, 1000)
 
 _SOLAR_EVENTS: dict[tuple[int, int], tuple[str, str, str]] = {
@@ -359,6 +360,8 @@ def resolve_checkin_content(
         event_label=event_label,
         greeting=_truncate(greeting),
         badges=tuple(badges[:1]),
-        secondary_note=_truncate(" · ".join(secondary_notes)),
+        secondary_note=_truncate(
+            " · ".join(secondary_notes), limit=MAX_SECONDARY_NOTE_LENGTH
+        ),
         context=context,
     )

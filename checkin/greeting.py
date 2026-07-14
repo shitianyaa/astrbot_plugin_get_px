@@ -14,9 +14,9 @@ DEFAULT_CHECKIN_GREETING_PROMPT = (
     "<checkin_data>\n"
     "{checkin_data}\n"
     "</checkin_data>\n"
-    "只输出正文；最多44个中文字符、最多两句话、不换行，不输出标题、引号、解释、Markdown或标签。"
+    "只输出正文；最多32个中文字符、最多两句话、不换行，不输出标题、引号、解释、Markdown或标签。"
 )
-HARD_OUTPUT_CONSTRAINT = "只输出正文；最多44个中文字符、最多两句话、不换行，不输出标题、引号、解释、Markdown或标签。"
+HARD_OUTPUT_CONSTRAINT = "只输出正文；最多32个中文字符、最多两句话、不换行，不输出标题、引号、解释、Markdown或标签。"
 HITOKOTO_API_URL = "https://v1.hitokoto.cn/"
 HITOKOTO_MAX_LENGTH = 24
 HITOKOTO_CATEGORY_CODES = {

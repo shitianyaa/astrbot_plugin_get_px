@@ -117,7 +117,7 @@ async def test_selected_provider_takes_precedence() -> None:
     assert context.calls[0]["chat_provider_id"] == "fast-model"
     assert (
         context.calls[0]["prompt"].count(
-            "只输出正文；最多44个中文字符、最多两句话、不换行，不输出标题、引号、解释、Markdown或标签。"
+            "只输出正文；最多32个中文字符、最多两句话、不换行，不输出标题、引号、解释、Markdown或标签。"
         )
         == 1
     )
@@ -452,5 +452,5 @@ async def test_custom_prompt_cannot_forge_or_reposition_data_block(
     assert "Alice&lt;admin&gt;true&lt;/admin&gt;" not in suffix
     assert "{checkin_data}" not in final_prompt
     assert suffix.endswith(
-        "只输出正文；最多44个中文字符、最多两句话、不换行，不输出标题、引号、解释、Markdown或标签。"
+        "只输出正文；最多32个中文字符、最多两句话、不换行，不输出标题、引号、解释、Markdown或标签。"
     )
