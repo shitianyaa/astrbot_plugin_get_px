@@ -129,7 +129,13 @@ class GetPxPlugin(
         self._init_client()
         self.image_index = ImageIndexStore(data_dir)
         await self.image_index.cleanup_old_days()
+        checkin_database_existed = (self.data_dir / "checkin.sqlite3").exists()
         self.checkin_store = CheckinStore(data_dir)
+        database_action = "已加载" if checkin_database_existed else "已创建"
+        logger.info(
+            f"{LOG_PREFIX} 签到数据库{database_action}: "
+            f"version={PLUGIN_VERSION}, path={self.checkin_store._db_path}"
+        )
         self.checkin_cache = CheckinCardCache(self.data_dir / "checkin_card_cache")
         self.checkin_cache.cleanup_expired(force=True)
         self.holiday_calendar = HolidayCalendar(
@@ -140,7 +146,7 @@ class GetPxPlugin(
             self._refresh_holiday_calendar()
         )
         self.plugin_web_api.register()
-        logger.info(f"{LOG_PREFIX} 插件已加载")
+        logger.info(f"{LOG_PREFIX} 插件已加载: version={PLUGIN_VERSION}")
 
     async def _refresh_holiday_calendar(self) -> None:
         if self.holiday_calendar is None:

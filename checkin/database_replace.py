@@ -138,7 +138,9 @@ def stage_uploaded_checkin_database(upload: Any, data_dir: Path) -> Path:
         raise
 
 
-async def replace_checkin_database(store: Any, candidate: Path) -> dict[str, int]:
+async def replace_checkin_database(
+    store: Any, candidate: Path
+) -> dict[str, int | bool]:
     async with store._lock:
         return await asyncio.to_thread(
             _replace_checkin_database_sync,
@@ -236,11 +238,14 @@ def validate_checkin_database(path: Path) -> dict[str, int]:
         raise ValueError("上传文件不是可读取的签到数据库") from exc
 
 
-def _replace_checkin_database_sync(target: Path, candidate: Path) -> dict[str, int]:
+def _replace_checkin_database_sync(
+    target: Path, candidate: Path
+) -> dict[str, int | bool]:
     summary = validate_checkin_database(candidate)
     target.parent.mkdir(parents=True, exist_ok=True)
 
-    if target.exists():
+    old_database_replaced = target.exists()
+    if old_database_replaced:
         with closing(sqlite3.connect(target)) as conn:
             conn.execute("PRAGMA wal_checkpoint(TRUNCATE)")
 
@@ -249,9 +254,16 @@ def _replace_checkin_database_sync(target: Path, candidate: Path) -> dict[str, i
         Path(f"{target}-shm"),
         Path(f"{target}-journal"),
     )
+    old_sidecars_deleted = 0
     for sidecar in sidecars:
+        if sidecar.exists():
+            old_sidecars_deleted += 1
         sidecar.unlink(missing_ok=True)
 
     os.replace(candidate, target)
     validate_checkin_database(target)
-    return summary
+    return {
+        **summary,
+        "old_database_replaced": old_database_replaced,
+        "old_sidecars_deleted": old_sidecars_deleted,
+    }

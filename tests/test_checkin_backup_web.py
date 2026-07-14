@@ -6,6 +6,7 @@ import sys
 import tempfile
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 
 from quart import Quart
 from werkzeug.datastructures import FileStorage
@@ -123,20 +124,21 @@ class CheckinBackupWebTest(unittest.IsolatedAsyncioTestCase):
                 methods=["POST"],
             )
 
-            async with app.test_app():
-                client = app.test_client()
-                response = await client.post(
-                    "/checkin-import",
-                    files={
-                        "file": FileStorage(
-                            stream=io.BytesIO(snapshot_text.encode("utf-8")),
-                            filename="checkin-export.json",
-                            name="file",
-                            content_type="application/json",
-                        )
-                    },
-                )
-                payload = await response.get_json()
+            with patch("astrbot_plugin_get_px.plugin_api.api.logger") as mock_logger:
+                async with app.test_app():
+                    client = app.test_client()
+                    response = await client.post(
+                        "/checkin-import",
+                        files={
+                            "file": FileStorage(
+                                stream=io.BytesIO(snapshot_text.encode("utf-8")),
+                                filename="checkin-export.json",
+                                name="file",
+                                content_type="application/json",
+                            )
+                        },
+                    )
+                    payload = await response.get_json()
 
             self.assertEqual(response.status_code, 200)
             self.assertTrue(payload["success"])
@@ -149,6 +151,14 @@ class CheckinBackupWebTest(unittest.IsolatedAsyncioTestCase):
             replaced = await plugin.checkin_store.get_profile("10001")
             self.assertEqual(imported.total_days, 1)
             self.assertEqual(replaced.total_days, 0)
+            log_text = "\n".join(
+                str(call.args[0])
+                for method in (mock_logger.info, mock_logger.warning)
+                for call in method.call_args_list
+            )
+            self.assertIn("开始导入签到 JSON 备份", log_text)
+            self.assertIn("旧签到数据已备份", log_text)
+            self.assertIn("旧签到数据已由 JSON 备份覆盖", log_text)
 
     async def test_web_checkin_import_replaces_database_and_deletes_old_one(self):
         with (
@@ -176,19 +186,20 @@ class CheckinBackupWebTest(unittest.IsolatedAsyncioTestCase):
                 methods=["POST"],
             )
 
-            async with app.test_app():
-                response = await app.test_client().post(
-                    "/checkin-import-database",
-                    files={
-                        "file": FileStorage(
-                            stream=io.BytesIO(database_bytes),
-                            filename="new-checkin.sqlite3",
-                            name="file",
-                            content_type="application/vnd.sqlite3",
-                        )
-                    },
-                )
-                payload = await response.get_json()
+            with patch("astrbot_plugin_get_px.plugin_api.api.logger") as mock_logger:
+                async with app.test_app():
+                    response = await app.test_client().post(
+                        "/checkin-import-database",
+                        files={
+                            "file": FileStorage(
+                                stream=io.BytesIO(database_bytes),
+                                filename="new-checkin.sqlite3",
+                                name="file",
+                                content_type="application/vnd.sqlite3",
+                            )
+                        },
+                    )
+                    payload = await response.get_json()
 
             self.assertEqual(response.status_code, 200)
             self.assertTrue(payload["success"])
@@ -205,6 +216,14 @@ class CheckinBackupWebTest(unittest.IsolatedAsyncioTestCase):
             self.assertIsNotNone(imported)
             self.assertEqual(imported.affection, source_result.profile.affection)
             self.assertFalse(list(Path(dst_tmp).glob(".checkin-import-*")))
+            log_text = "\n".join(
+                str(call.args[0])
+                for method in (mock_logger.info, mock_logger.warning)
+                for call in method.call_args_list
+            )
+            self.assertIn("开始导入签到数据库", log_text)
+            self.assertIn("签到数据库导入完成", log_text)
+            self.assertIn("旧签到数据库已永久替换", log_text)
 
     async def test_web_checkin_import_rejects_legacy_database_without_replacing(self):
         with tempfile.TemporaryDirectory() as tmp:

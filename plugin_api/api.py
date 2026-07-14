@@ -541,6 +541,7 @@ class PluginWebApi:
     async def checkin_import(self):
         if self.plugin.checkin_store is None:
             return self._unavailable("签到数据尚未初始化")
+        filename = ""
         try:
             files = await request.files
             uploaded = []
@@ -556,6 +557,9 @@ class PluginWebApi:
             filename = str(getattr(upload, "filename", "") or "").strip()
             suffix = Path(filename).suffix.lower()
             if suffix in CHECKIN_DATABASE_SUFFIXES:
+                logger.info(
+                    f"{self.log_prefix} 开始导入签到数据库: file={filename!r}"
+                )
                 candidate = stage_uploaded_checkin_database(
                     upload, Path(self.plugin.checkin_store._db_path).parent
                 )
@@ -565,13 +569,25 @@ class PluginWebApi:
                     )
                 finally:
                     candidate.unlink(missing_ok=True)
+                old_database_replaced = bool(result["old_database_replaced"])
+                logger.info(
+                    f"{self.log_prefix} 签到数据库导入完成: file={filename!r}, "
+                    f"users={result['users']}, records={result['records']}"
+                )
+                if old_database_replaced:
+                    logger.warning(
+                        f"{self.log_prefix} 旧签到数据库已永久替换: "
+                        f"sidecars_deleted={result['old_sidecars_deleted']}"
+                    )
+                else:
+                    logger.info(f"{self.log_prefix} 首次导入，无旧签到数据库需要删除")
                 return jsonify(
                     {
                         "success": True,
                         "filename": filename,
                         **result,
                         "database_replaced": True,
-                        "old_database_deleted": True,
+                        "old_database_deleted": old_database_replaced,
                     }
                 )
             if suffix != ".json":
@@ -581,12 +597,22 @@ class PluginWebApi:
                         "error": "只支持 JSON 备份或新版 SQLite 数据库",
                     }
                 ), 400
+            logger.info(f"{self.log_prefix} 开始导入签到 JSON 备份: file={filename!r}")
             raw = await self.plugin._read_uploaded_file_bytes(upload)
             snapshot = load_checkin_snapshot_json(raw)
             rollback_path = await self.plugin._write_checkin_snapshot_backup(
                 prefix="checkin-import-backup"
             )
+            logger.info(
+                f"{self.log_prefix} 旧签到数据已备份: "
+                f"file={Path(rollback_path).name!r}"
+            )
             result = await self.plugin.checkin_store.import_snapshot(snapshot)
+            logger.warning(
+                f"{self.log_prefix} 旧签到数据已由 JSON 备份覆盖: "
+                f"file={filename!r}, users={result['users']}, "
+                f"records={result['records']}"
+            )
             return jsonify(
                 {
                     "success": True,
@@ -596,6 +622,10 @@ class PluginWebApi:
                 }
             )
         except ValueError as exc:
+            logger.warning(
+                f"{self.log_prefix} 签到数据导入被拒绝: "
+                f"file={filename!r}, reason={exc}"
+            )
             return jsonify({"success": False, "error": str(exc)}), 400
         except Exception as exc:
             return self.internal_error("导入签到备份", exc)
