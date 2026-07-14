@@ -1,0 +1,169 @@
+name: Release plugin archive
+
+on:
+  push:
+    tags:
+      - "v*"
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: Existing v* tag to publish again
+        required: true
+        type: string
+
+permissions:
+  contents: write
+
+concurrency:
+  group: release-plugin-${{ github.event_name == 'workflow_dispatch' && inputs.tag || github.ref_name }}
+  cancel-in-progress: false
+
+jobs:
+  release:
+    name: Package and publish
+    runs-on: ubuntu-latest
+    env:
+      PLUGIN_NAME: astrbot_plugin_get_px
+      RELEASE_TAG: ${{ github.event_name == 'workflow_dispatch' && inputs.tag || github.ref_name }}
+
+    steps:
+      - name: Check out release tag
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ env.RELEASE_TAG }}
+          fetch-depth: 0
+
+      - name: Validate release version
+        shell: bash
+        run: |
+          set -euo pipefail
+          [[ "$RELEASE_TAG" == v* ]] || {
+            echo "Release tag must start with v: $RELEASE_TAG" >&2
+            exit 1
+          }
+
+          metadata_version="$(python3 - <<'PY'
+          from pathlib import Path
+
+          for line in Path("metadata.yaml").read_text(encoding="utf-8").splitlines():
+              key, separator, value = line.partition(":")
+              if separator and key.strip() == "version":
+                  print(value.strip().strip("\"'"))
+                  break
+          PY
+          )"
+          [[ -n "$metadata_version" ]] || {
+            echo "Unable to read version from metadata.yaml" >&2
+            exit 1
+          }
+          [[ "${RELEASE_TAG#v}" == "$metadata_version" ]] || {
+            echo "Tag $RELEASE_TAG does not match metadata version $metadata_version" >&2
+            exit 1
+          }
+
+      - name: Build plugin archive
+        shell: bash
+        run: |
+          set -euo pipefail
+          package_dir="dist/$PLUGIN_NAME"
+          archive="$PLUGIN_NAME-$RELEASE_TAG.zip"
+          mkdir -p "$package_dir"
+
+          rsync -a --prune-empty-dirs \
+            --exclude='/.git/' \
+            --exclude='/.github/' \
+            --exclude='/.gitignore' \
+            --exclude='/.pre-commit-config.yaml' \
+            --exclude='/tests/' \
+            --exclude='/docs/' \
+            --exclude='/scripts/' \
+            --exclude='/dist/' \
+            --exclude='/output/' \
+            --exclude='/data/' \
+            --exclude='/__pycache__/' \
+            --exclude='*.py[cod]' \
+            --exclude='/.pytest_cache/' \
+            --exclude='/.ruff_cache/' \
+            ./ "$package_dir/"
+
+          test -f "$package_dir/main.py"
+          test -f "$package_dir/metadata.yaml"
+          test -f "$package_dir/requirements.txt"
+          (
+            cd dist
+            zip -r -9 "../$archive" "$PLUGIN_NAME"
+          )
+          sha256sum "$archive" > "$archive.sha256"
+
+      - name: Generate release notes
+        shell: bash
+        run: |
+          set -euo pipefail
+          previous_tag="$(git describe --tags --abbrev=0 "${RELEASE_TAG}^" 2>/dev/null || true)"
+          if [[ -n "$previous_tag" ]]; then
+            commit_range="$previous_tag..$RELEASE_TAG"
+            comparison_url="https://github.com/$GITHUB_REPOSITORY/compare/$previous_tag...$RELEASE_TAG"
+          else
+            commit_range="$RELEASE_TAG"
+            comparison_url="https://github.com/$GITHUB_REPOSITORY/commits/$RELEASE_TAG"
+          fi
+
+          awk -v heading="## $RELEASE_TAG" '
+            index($0, heading) == 1 { found = 1; next }
+            found && /^## / { exit }
+            found { print }
+          ' CHANGELOG.md > changelog-section.md
+
+          {
+            echo "## 版本信息"
+            echo
+            echo "- 插件：\`$PLUGIN_NAME\`"
+            echo "- 版本：\`$RELEASE_TAG\`"
+            if [[ -n "$previous_tag" ]]; then
+              echo "- 上一版本：\`$previous_tag\`"
+            fi
+            echo
+            echo "## 改动信息"
+            echo
+            if [[ -s changelog-section.md ]]; then
+              cat changelog-section.md
+            else
+              git log "$commit_range" --no-merges --format='- %s (`%h`)' || true
+            fi
+            echo
+            echo "## 贡献者"
+            echo
+            git log "$commit_range" --format='%aN' | sort -fu | sed 's/^/- /'
+            echo
+            echo "[查看完整改动]($comparison_url)"
+          } > release-notes.md
+
+      - name: Upload workflow artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ env.PLUGIN_NAME }}-${{ env.RELEASE_TAG }}
+          path: |
+            ${{ env.PLUGIN_NAME }}-${{ env.RELEASE_TAG }}.zip
+            ${{ env.PLUGIN_NAME }}-${{ env.RELEASE_TAG }}.zip.sha256
+          if-no-files-found: error
+
+      - name: Create or update GitHub Release
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          archive="$PLUGIN_NAME-$RELEASE_TAG.zip"
+          files=("$archive" "$archive.sha256")
+
+          if gh release view "$RELEASE_TAG" >/dev/null 2>&1; then
+            gh release upload "$RELEASE_TAG" "${files[@]}" --clobber
+            gh release edit "$RELEASE_TAG" \
+              --title "$RELEASE_TAG" \
+              --notes-file release-notes.md
+          else
+            gh release create "$RELEASE_TAG" "${files[@]}" \
+              --verify-tag \
+              --notes-file release-notes.md \
+              --title "$RELEASE_TAG"
+          fi
