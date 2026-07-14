@@ -44,9 +44,19 @@ def test_qq_birthday_parser_accepts_common_shapes_and_leap_day() -> None:
     assert parse_qq_birthday({"birthday": "2000-07-11"}) == (7, 11)
     assert parse_qq_birthday({"birthday": {"month": "10", "day": "1"}}) == (10, 1)
     assert parse_qq_birthday(
-        {"data": {"detail": {"simpleInfo": {"baseInfo": {
-            "birthday_year": 2000, "birthday_month": 12, "birthday_day": 31
-        }}}}}
+        {
+            "data": {
+                "detail": {
+                    "simpleInfo": {
+                        "baseInfo": {
+                            "birthday_year": 2000,
+                            "birthday_month": 12,
+                            "birthday_day": 31,
+                        }
+                    }
+                }
+            }
+        }
     ) == (12, 31)
     assert parse_month_day("07-11") == (7, 11)
     assert parse_month_day(20000711) == (7, 11)
@@ -95,7 +105,10 @@ async def test_achievements_unlock_idempotently_and_titles_require_unlock() -> N
 
 @pytest.mark.asyncio
 async def test_v3_snapshot_preserves_feature_tables() -> None:
-    with tempfile.TemporaryDirectory() as source_tmp, tempfile.TemporaryDirectory() as target_tmp:
+    with (
+        tempfile.TemporaryDirectory() as source_tmp,
+        tempfile.TemporaryDirectory() as target_tmp,
+    ):
         source = CheckinStore(source_tmp)
         await source.get_profile("10001")
         await source.set_birthday(user_id="10001", month=7, day=11, source="manual")
@@ -105,7 +118,7 @@ async def test_v3_snapshot_preserves_feature_tables() -> None:
             event_type="annual", date_value="07-11", name="相遇纪念日", created_by="1"
         )
         snapshot = await source.export_snapshot()
-        assert snapshot["schema_version"] == 3
+        assert snapshot["schema_version"] == 5
 
         target = CheckinStore(target_tmp)
         summary = await target.import_snapshot(snapshot)
@@ -119,7 +132,10 @@ async def test_v3_snapshot_preserves_feature_tables() -> None:
 
 @pytest.mark.asyncio
 async def test_birthday_can_be_backed_up_before_first_checkin() -> None:
-    with tempfile.TemporaryDirectory() as source_tmp, tempfile.TemporaryDirectory() as target_tmp:
+    with (
+        tempfile.TemporaryDirectory() as source_tmp,
+        tempfile.TemporaryDirectory() as target_tmp,
+    ):
         source = CheckinStore(source_tmp)
         await source.set_birthday(user_id="new-user", month=2, day=29, source="manual")
         snapshot = await source.export_snapshot()

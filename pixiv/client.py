@@ -22,6 +22,8 @@ def _is_missing_illust_error(exc: Exception) -> bool:
 class PixivClient:
     refresh_token: str
     proxy: str = ""
+    request_timeout: float = 30.0
+    close_timeout: float = 5.0
 
     _api: object = field(default=None, repr=False)
     _cached_token: str = field(default="", repr=False)
@@ -57,7 +59,14 @@ class PixivClient:
             )
 
         api = AppPixivAPI(proxy=self.proxy) if self.proxy else AppPixivAPI()
-        await api.login(refresh_token=self.refresh_token)
+        try:
+            await self._wait_for(
+                api.login(refresh_token=self.refresh_token),
+                operation="登录",
+            )
+        except BaseException:
+            await self._close_api(api)
+            raise
 
         self._api = api
         self._cached_token = self.refresh_token
@@ -80,14 +89,23 @@ class PixivClient:
     def api(self):
         return self._api
 
+    async def _wait_for(self, awaitable, *, operation: str):
+        try:
+            return await asyncio.wait_for(awaitable, timeout=self.request_timeout)
+        except asyncio.TimeoutError as exc:
+            raise TimeoutError(f"Pixiv {operation}超时") from exc
+
     async def search(self, tag: str, offset: int = 0) -> list[dict]:
         api = await self._acquire_api()
         try:
-            resp = await api.search_illust(
-                tag,
-                search_target="partial_match_for_tags",
-                sort="date_desc",
-                offset=offset,
+            resp = await self._wait_for(
+                api.search_illust(
+                    tag,
+                    search_target="partial_match_for_tags",
+                    sort="date_desc",
+                    offset=offset,
+                ),
+                operation="搜索请求",
             )
         finally:
             await self._release_api()
@@ -96,7 +114,10 @@ class PixivClient:
     async def ranking(self, mode: str = "week", offset: int = 0) -> list[dict]:
         api = await self._acquire_api()
         try:
-            resp = await api.illust_ranking(mode=mode, offset=offset)
+            resp = await self._wait_for(
+                api.illust_ranking(mode=mode, offset=offset),
+                operation="排行榜请求",
+            )
         finally:
             await self._release_api()
         return list(resp.get("illusts") or [])
@@ -104,7 +125,10 @@ class PixivClient:
     async def illust_detail(self, illust_id: int) -> dict | None:
         api = await self._acquire_api()
         try:
-            resp = await api.illust_detail(illust_id)
+            resp = await self._wait_for(
+                api.illust_detail(illust_id),
+                operation="作品详情请求",
+            )
             return resp.get("illust")
         except Exception as e:
             if _is_missing_illust_error(e):
@@ -116,10 +140,24 @@ class PixivClient:
     async def close(self):
         async with self._lock:
             self._closed = True
-            while self._active_calls:
-                await self._idle.wait()
+            try:
+                await asyncio.wait_for(
+                    self._wait_until_idle_locked(), timeout=self.close_timeout
+                )
+            except asyncio.TimeoutError:
+                logger.warning(
+                    f"{LOG_PREFIX} Pixiv 客户端关闭等待超时: "
+                    f"active_calls={self._active_calls}"
+                )
             api = self._api
             self._api = None
+        await self._close_api(api)
+
+    async def _wait_until_idle_locked(self) -> None:
+        while self._active_calls:
+            await self._idle.wait()
+
+    async def _close_api(self, api) -> None:
         if api is None:
             return
         close = getattr(api, "close", None)
@@ -127,6 +165,6 @@ class PixivClient:
             try:
                 result = close()
                 if asyncio.iscoroutine(result):
-                    await result
+                    await asyncio.wait_for(result, timeout=self.close_timeout)
             except Exception:
                 pass

@@ -58,7 +58,9 @@ class CheckinCardCacheTest(unittest.IsolatedAsyncioTestCase):
             ("template_version", "v3"),
             ("view_model", {"badges": ["夏日"], "greeting": "再见"}),
         ):
-            self.assertNotEqual(first, self.cache.cache_key(**{**kwargs, field: changed}))
+            self.assertNotEqual(
+                first, self.cache.cache_key(**{**kwargs, field: changed})
+            )
 
     def test_get_returns_only_valid_960_by_540_jpeg(self):
         expected = self.root / self.date_key / f"{self.key}.jpg"
@@ -87,7 +89,9 @@ class CheckinCardCacheTest(unittest.IsolatedAsyncioTestCase):
 
         stored = await self.cache.store(self.date_key, self.key, render)
 
-        self.assertEqual(stored, (self.root / self.date_key / f"{self.key}.jpg").resolve())
+        self.assertEqual(
+            stored, (self.root / self.date_key / f"{self.key}.jpg").resolve()
+        )
         self.assertTrue(renderer_output.exists())
         self.assertEqual(self.cache.get(self.date_key, self.key), stored)
         self.assertEqual(list(stored.parent.glob("*.tmp")), [])
@@ -151,7 +155,9 @@ class CheckinCardCacheTest(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(store_result.exists())
         self.assertEqual(self.cache.get(self.date_key, self.key), store_result)
 
-    async def test_repeatedly_cancelled_store_waits_for_copy_before_cleanup_and_source_release(self):
+    async def test_repeatedly_cancelled_store_waits_for_copy_before_cleanup_and_source_release(
+        self,
+    ):
         renderer_output = Path(self._tmp.name) / "renderer-output.jpg"
         _write_jpeg(renderer_output)
         copy_started = threading.Event()
@@ -191,12 +197,15 @@ class CheckinCardCacheTest(unittest.IsolatedAsyncioTestCase):
                 except OSError:
                     pass
 
-        with patch(
-            "astrbot_plugin_get_px.checkin.cache.shutil.copyfileobj",
-            side_effect=slow_copy,
-        ), patch(
-            "astrbot_plugin_get_px.checkin.cache.asyncio.shield",
-            side_effect=observed_shield,
+        with (
+            patch(
+                "astrbot_plugin_get_px.checkin.cache.shutil.copyfileobj",
+                side_effect=slow_copy,
+            ),
+            patch(
+                "astrbot_plugin_get_px.checkin.cache.asyncio.shield",
+                side_effect=observed_shield,
+            ),
         ):
             store_task = asyncio.create_task(store_with_caller_cleanup())
             self.assertTrue(await asyncio.to_thread(copy_started.wait, 2))
@@ -232,7 +241,9 @@ class CheckinCardCacheTest(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(final_path.exists())
         self.assertFalse(renderer_output.exists())
 
-    async def test_cleanup_defers_active_expired_store_before_renderer_creates_directory(self):
+    async def test_cleanup_defers_active_expired_store_before_renderer_creates_directory(
+        self,
+    ):
         renderer_output = Path(self._tmp.name) / "renderer-output.jpg"
         _write_jpeg(renderer_output)
         renderer_started = asyncio.Event()

@@ -1,0 +1,914 @@
+@font-face {
+  font-family: "LXGW WenKai Lite";
+  src: url("data:font/woff2;base64,__CHECKIN_CARD_FONT_DATA__") format("woff2");
+  font-style: normal;
+  font-weight: 400;
+  font-display: block;
+}
+
+/* Proxy License · 绝区零工控绳网终端 V3 (Polished)
+   以《绝区零》(Zenless Zone Zero) 的都市异能世界观为灵魂设计。
+   融入了「黄黑工业终端 + 录像媒介」的核心隐喻，
+   采用极具识别度的粗粝水泥灰墙面、黄黑警示警戒带、
+   不完整/带缺口的工控边框、CRT扫描电子监视荧屏与信誉数据分色。 */
+:root {
+  --zzz-yellow: #e6c300;   /* 降明度、深饱和的工业警戒黄 */
+  --zzz-cyan: #00e5ff;     /* 正常数据青 */
+  --zzz-pink: #d60565;     /* 视觉冲击力更强、更深的品红/洋红 */
+  --zzz-black: #101115;    /* 监视器屏幕底色 */
+  --zzz-grey: #1a1c22;     /* 工控模块底色 */
+  --zzz-white: #e2e8f0;    /* 白灰文字 */
+
+  /* 弱化文字：工控终端上的次级说明，未解析时会回退成纯白灰导致弱化失效 */
+  --text-muted: #9aa3b2;
+
+  --font-cn: "LXGW WenKai Lite", "Noto Serif CJK SC", "Source Han Serif SC", "Songti SC", serif;
+  --font-ui: "Segoe UI", "DIN Alternate", "Helvetica Neue", "Microsoft YaHei", sans-serif;
+  --font-num: "Consolas", "SF Mono", monospace;
+}
+
+* { box-sizing: border-box; }
+
+html,
+body {
+  width: 960px;
+  height: 540px;
+  margin: 0;
+  overflow: hidden;
+}
+
+body {
+  color: var(--zzz-white);
+  background: #090a0d;
+  font-family: var(--font-ui);
+  font-size: 14px;
+}
+
+.stage {
+  position: relative;
+  width: 960px;
+  height: 540px;
+  padding: 16px;
+  overflow: hidden;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+/* 绝区零工控警示风背景 */
+.zzz-bg {
+  position: absolute;
+  inset: 0;
+  background: #090a0d;
+  overflow: hidden;
+  z-index: 1;
+}
+
+.concrete-wall {
+  position: absolute;
+  inset: 0;
+  background: radial-gradient(circle at 70% 30%, #151821 0%, #08090d 100%);
+}
+
+/* 全页弱颗粒噪点与横向扫描线，还原 CRT 磨砂感 */
+.vhs-glitch {
+  position: absolute;
+  inset: 0;
+  background: linear-gradient(rgba(18, 18, 18, 0) 50%, rgba(255, 235, 0, 0.02) 50%);
+  background-size: 100% 4px;
+  pointer-events: none;
+  z-index: 3;
+}
+
+/* CRT 荫罩像素网格粒子感 */
+.vhs-glitch::after {
+  content: '';
+  position: absolute;
+  inset: 0;
+  background-image: radial-gradient(rgba(255, 255, 255, 0.08) 1px, transparent 0);
+  background-size: 3px 3px;
+  opacity: 0.45;
+  pointer-events: none;
+}
+
+/* 边缘斜置警示警戒带 */
+.hazard-stripe {
+  position: absolute;
+  width: 180px;
+  height: 24px;
+  background: repeating-linear-gradient(
+    -45deg,
+    var(--zzz-yellow),
+    var(--zzz-yellow) 8px,
+    #000000 8px,
+    #000000 16px
+  );
+  box-shadow: 0 4px 15px rgba(0, 0, 0, 0.6);
+  z-index: 2;
+}
+
+.hazard-stripe.top-left {
+  top: 30px;
+  left: -40px;
+  transform: rotate(-15deg);
+}
+
+.hazard-stripe.bottom-right {
+  bottom: 30px;
+  right: -40px;
+  transform: rotate(-15deg);
+}
+
+/* 终端口腔卡片 */
+.zzz-card {
+  position: relative;
+  z-index: 5;
+  display: grid;
+  grid-template-columns: 512px 1fr;
+  width: 928px;
+  height: 508px;
+  border: 3px solid #2d313c;
+  background: var(--zzz-black);
+  border-radius: 8px;
+  box-shadow:
+    0 25px 75px rgba(0, 0, 0, 0.85),
+    10px 10px 0 rgba(0,0,0,0.5);
+  overflow: hidden;
+}
+
+/* 左侧：数据面板 */
+.info-panel {
+  display: flex;
+  flex-direction: column;
+  justify-content: space-between;
+  min-height: 0;
+  padding: 20px 28px 10px;
+  height: 100%;
+  overflow: hidden;
+  border-right: 3px solid #2d313c;
+  background: var(--zzz-black);
+  position: relative;
+}
+
+.zzz-header {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding-left: 102px;
+}
+
+/* 03 代理人许可 封条角标 */
+.pass-stamp {
+  position: absolute;
+  z-index: 10;
+  top: 30px;
+  left: -45px;
+  width: 180px;
+  background: var(--zzz-yellow);
+  padding: 4px 0 6px 0;
+  text-align: center;
+  transform: rotate(-45deg);
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 1px;
+  border-top: 3px solid #000000;
+  border-bottom: 3px solid #000000;
+  box-shadow: 0 4px 12px rgba(230, 195, 0, 0.35);
+}
+
+.pass-stamp strong {
+  color: #000000;
+  font-family: var(--font-num);
+  font-size: 20px;
+  font-weight: 900;
+  line-height: 1;
+  letter-spacing: 0.05em;
+  transform: rotate(-2deg) scale(1.05);
+  display: inline-block;
+}
+
+.pass-stamp .sub-text {
+  color: #000000;
+  font-family: var(--font-num);
+  font-size: 8px;
+  font-weight: 900;
+  letter-spacing: 0.05em;
+  line-height: 1;
+  text-transform: uppercase;
+  margin: 1px 0;
+}
+
+.pass-stamp .stamp-seal {
+  color: var(--zzz-yellow);
+  background: #000000;
+  font-family: var(--font-cn);
+  font-size: 9px;
+  font-weight: 900;
+  padding: 1px 5px;
+  transform: rotate(-5deg) scale(1.05);
+  display: inline-block;
+  margin-top: 2px;
+  letter-spacing: 0.05em;
+  border-radius: 1px;
+}
+
+.pass-stamp::after {
+  content: '';
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  right: 32px;
+  border-left: 1.5px dashed #000000;
+  opacity: 0.7;
+}
+
+/* 录像带播放状态行 */
+.vhs-header {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.vhs-rec-dot {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: var(--zzz-pink);
+  box-shadow: 0 0 6px var(--zzz-pink);
+  animation: pulse-dot 1.5s infinite ease-in-out;
+}
+
+@keyframes pulse-dot {
+  0%, 100% { opacity: 0.4; }
+  50% { opacity: 1; }
+}
+
+.vhs-rec-text {
+  font-family: var(--font-num);
+  font-size: 10px;
+  color: var(--zzz-white);
+  letter-spacing: 0.08em;
+  font-weight: 700;
+}
+
+.date-tag {
+  margin-left: auto;
+  font-family: var(--font-num);
+  font-size: 11px;
+  color: var(--zzz-yellow);
+  letter-spacing: 0.05em;
+  font-weight: 700;
+}
+
+/* 斜向标题块 */
+.title-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.skew-title {
+  margin: 0;
+  background: var(--zzz-yellow);
+  color: #000000;
+  padding: 4px 16px;
+  transform: skewX(-12deg);
+  position: relative;
+  display: flex;
+  align-items: center;
+  border: 1.5px solid var(--zzz-white);
+}
+
+.title-slash {
+  position: absolute;
+  left: 0;
+  top: 0;
+  bottom: 0;
+  width: 5px;
+  background: #000000;
+}
+
+.skew-title strong {
+  display: block;
+  transform: skewX(12deg);
+  font-family: var(--font-cn);
+  font-size: 23px;
+  font-weight: 900;
+  letter-spacing: 0.04em;
+}
+
+.zzz-badge {
+  background: var(--zzz-black);
+  color: var(--zzz-yellow);
+  border: 2px solid var(--zzz-yellow);
+  padding: 3px 8px;
+  font-family: var(--font-num);
+  font-size: 11px;
+  font-weight: 900;
+  transform: skewX(-12deg);
+  border-radius: 4px;
+}
+
+.zzz-body {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  margin: 6px 0;
+}
+
+/* 乘客身份栏 */
+.passenger-row {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 8px 12px;
+  background: var(--zzz-grey);
+  border: 1px solid rgba(255, 255, 255, 0.05);
+  border-radius: 4px;
+}
+
+/* 头像警示斜纹：加密调细 */
+.avatar-border {
+  width: 44px;
+  height: 44px;
+  border-radius: 4px;
+  padding: 2.5px;
+  background: repeating-linear-gradient(
+    -45deg,
+    var(--zzz-yellow),
+    var(--zzz-yellow) 2px,
+    #000000 2px,
+    #000000 4px
+  );
+}
+
+.avatar-box {
+  width: 100%;
+  height: 100%;
+  background: var(--zzz-black);
+  border-radius: 2px;
+  overflow: hidden;
+}
+
+.avatar-box img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+}
+
+.avatar-placeholder {
+  font-family: var(--font-num);
+  font-size: 18px;
+  font-weight: 900;
+  color: var(--zzz-yellow);
+  display: grid;
+  place-items: center;
+  height: 100%;
+}
+
+.passenger-meta {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  min-width: 0;
+  flex: 1 1 auto;
+}
+
+.net-tag {
+  font-family: var(--font-num);
+  font-size: 10px;
+  font-weight: 900;
+  color: var(--zzz-cyan);
+  letter-spacing: 0.08em;
+}
+
+.username {
+  color: var(--zzz-white);
+  font-family: var(--font-cn);
+  font-size: 17px;
+  font-weight: 900;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.title-tag {
+  color: var(--zzz-yellow);
+  font-size: 12px;
+  font-weight: 700;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.terminal-id {
+  font-family: var(--font-num);
+  font-size: 11px;
+  color: #5d6880;
+  font-weight: 700;
+}
+
+/* CRT 终端广播对话框 */
+.broadcast-box {
+  position: relative;
+  /* 上下渐变：模拟信号读取的不完美 */
+  background: linear-gradient(180deg, rgba(0, 229, 255, 0.03) 0%, rgba(0, 229, 255, 0.005) 100%);
+  border-left: 3px solid var(--zzz-cyan);
+  border-right: 3px solid var(--zzz-cyan);
+  border-radius: 4px;
+  box-shadow: inset 0 0 12px rgba(0, 229, 255, 0.06);
+  overflow: hidden;
+}
+
+.crt-screen {
+  padding: 10px 14px;
+  position: relative;
+}
+
+.crt-scanline {
+  position: absolute;
+  inset: 0;
+  background: linear-gradient(rgba(18, 16, 16, 0) 50%, rgba(0, 229, 255, 0.08) 50%);
+  background-size: 100% 4px;
+  pointer-events: none;
+  z-index: 5;
+}
+
+.box-label {
+  display: block;
+  font-family: var(--font-num);
+  font-size: 10px;
+  color: var(--zzz-cyan);
+  font-weight: 900;
+  letter-spacing: 0.1em;
+  margin-bottom: 4px;
+}
+
+.greeting-text {
+  margin: 0;
+  font-family: var(--font-cn);
+  font-size: 19px;
+  color: var(--zzz-white);
+  line-height: 1.25;
+  font-weight: 900;
+  overflow-wrap: anywhere;
+  /* 增加轻微 RGB 色偏阴影 (红绿蓝微错位) */
+  text-shadow:
+    1.5px 0 rgba(214, 5, 101, 0.65),
+    -1.5px 0 rgba(0, 229, 255, 0.65),
+    0 0 2px rgba(255, 255, 255, 0.4);
+}
+
+.note-text {
+  margin: 6px 0 0;
+  color: var(--text-muted);
+  font-size: 12px;
+  text-align: right;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.bot-signature {
+  margin: 2px 0 0;
+  color: var(--zzz-cyan);
+  font-family: var(--font-num);
+  font-size: 11px;
+  font-weight: 900;
+  text-align: right;
+  letter-spacing: 0.05em;
+}
+
+/* 委托赏金分色格 */
+.supplies-box {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.supplies-box .box-label {
+  color: var(--zzz-white);
+  font-weight: 900;
+}
+
+.supplies-grid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 8px;
+}
+
+/* 破损断边设计 (工业缺口) */
+.supply-item {
+  display: flex;
+  flex-direction: column;
+  padding: 6px 10px;
+  transform: skewX(-10deg);
+  background: var(--zzz-grey);
+  position: relative;
+  /* 下边和右边闭合 */
+  border-bottom: 1.5px solid #2d313c;
+  border-right: 1.5px solid #2d313c;
+  border-top: none;
+  border-left: none;
+}
+
+/* 顶部只画一小段线形成断开效果 */
+.supply-item::before {
+  content: '';
+  position: absolute;
+  top: 0;
+  left: 0;
+  width: 40%;
+  height: 1.5px;
+  background: #2d313c;
+}
+
+.supply-item.coin-item { border-left: 3px solid var(--zzz-yellow); }
+.supply-item.exp-item { border-left: 3px solid var(--zzz-cyan); }
+.supply-item.streak-item { border-left: 3px solid var(--zzz-pink); }
+
+.supply-item .label {
+  color: var(--text-muted);
+  font-size: 11px;
+  font-weight: 900;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+  margin-bottom: 2px;
+  transform: skewX(10deg);
+}
+
+.supply-item .value {
+  font-family: var(--font-num);
+  font-size: 23px;
+  font-weight: 900;
+  line-height: 1;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  transform: skewX(10deg);
+}
+
+.supply-item.coin-item .value { color: var(--zzz-yellow); }
+.supply-item.exp-item .value { color: var(--zzz-cyan); }
+.supply-item.streak-item .value { color: var(--zzz-pink); }
+
+.supply-item small {
+  font-size: 11px;
+  font-weight: 900;
+  margin-left: 1px;
+}
+
+/* 底部数据面板 */
+.panel-footer {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  border-top: 2px solid #2d313c;
+  padding-top: 8px;
+}
+
+.terminal-status {
+  display: grid;
+  grid-template-columns: 0.8fr 0.9fr 1.05fr 1.25fr;
+  gap: 1px;
+  background: #2d313c;
+  border: 1.5px solid rgba(255, 255, 255, 0.1);
+  overflow: hidden;
+}
+
+.status-cell {
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  gap: 1px;
+  padding: 5px 6px;
+  background: var(--zzz-black);
+}
+
+.status-cell:first-child {
+  padding-left: 10px;
+}
+
+.status-cell:last-child {
+  padding-right: 10px;
+}
+
+.status-cell + .status-cell {
+  border-left: 1px dashed rgba(255, 255, 255, 0.12);
+}
+
+.status-cell span {
+  font-family: var(--font-num);
+  font-size: 10px;
+  color: #7b839b;
+  text-transform: uppercase;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.status-cell strong {
+  font-family: var(--font-num);
+  font-size: 14px;
+  font-weight: 900;
+  line-height: 1.05;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.status-cell.text-yellow strong { color: var(--zzz-yellow); }
+.status-cell.text-white strong { color: var(--zzz-white); }
+.status-cell.text-cyan strong { color: var(--zzz-cyan); }
+.status-cell.text-pink strong { color: var(--zzz-pink); }
+
+.level-progress-wrap {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+}
+
+.progress-info {
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
+  font-size: 11px;
+  font-weight: 900;
+}
+
+.level-label {
+  color: var(--text-muted);
+}
+
+.level-next {
+  color: var(--zzz-yellow);
+  font-family: var(--font-num);
+}
+
+.progress-bar-track {
+  height: 5px;
+  background: var(--zzz-black);
+  border: 1px solid #2d313c;
+  border-radius: 3px;
+  overflow: hidden;
+}
+
+.progress-bar-track i {
+  display: block;
+  height: 100%;
+  background: linear-gradient(90deg, var(--zzz-cyan), var(--zzz-yellow));
+  border-radius: 3px;
+}
+
+.milestone-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.milestone-label {
+  color: var(--zzz-yellow);
+  font-family: var(--font-num);
+  font-size: 11px;
+  font-weight: 900;
+  letter-spacing: 0.05em;
+  flex: 0 0 auto;
+}
+
+.milestone-val {
+  color: var(--text-muted);
+  font-size: 11px;
+  font-weight: 700;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* 右侧：战术目镜/观测窗口 (Full-Bleed Viewport) */
+.viewport-panel {
+  width: 100%;
+  height: 100%;
+  background: #0c0d11;
+  position: relative;
+  overflow: hidden;
+}
+
+/* 监视屏幕框 */
+.hud-frame {
+  position: relative;
+  width: 100%;
+  height: 100%;
+  box-shadow: inset 0 0 50px rgba(0, 0, 0, 0.95);
+}
+
+/* 战术黄黑斜切分割线，数学贴合监控画面的 10% 剪裁斜率 */
+.hud-frame::before {
+  content: '';
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  left: 0;
+  width: 100%;
+  background: var(--zzz-yellow);
+  clip-path: polygon(10% 0%, calc(10% + 3px) 0%, 3px 100%, 0% 100%);
+  z-index: 11;
+  pointer-events: none;
+}
+
+/* 纵向信号波段干扰阴影：增强监视画面感 */
+.hud-frame::after {
+  content: '';
+  position: absolute;
+  inset: 0;
+  background:
+    linear-gradient(90deg, rgba(0, 229, 255, 0.02) 20%, transparent 20%, transparent 80%, rgba(214, 5, 101, 0.02) 80%),
+    linear-gradient(180deg, transparent 40%, rgba(0, 229, 255, 0.03) 42%, transparent 45%);
+  pointer-events: none;
+  z-index: 9;
+}
+
+/* 战术定位括号 */
+.hud-bracket {
+  position: absolute;
+  width: 14px;
+  height: 14px;
+  border: 2.5px solid var(--zzz-cyan);
+  z-index: 10;
+  opacity: 0.85;
+  pointer-events: none;
+}
+.hud-bracket.tl { top: 12px; left: 64px; border-right: none; border-bottom: none; }
+.hud-bracket.tr { top: 12px; right: 12px; border-left: none; border-bottom: none; }
+.hud-bracket.bl { bottom: 12px; left: 24px; border-right: none; border-top: none; }
+.hud-bracket.br { bottom: 12px; right: 52px; border-left: none; border-top: none; }
+
+.hud-rec-tag {
+  position: absolute;
+  top: 10px;
+  left: 44px;
+  font-family: var(--font-num);
+  font-size: 8px;
+  font-weight: 900;
+  color: var(--zzz-pink);
+  z-index: 10;
+  letter-spacing: 0.05em;
+  text-shadow: 0 0 5px var(--zzz-pink);
+}
+
+.hud-grid-lines {
+  position: absolute;
+  inset: 0;
+  background-image:
+    linear-gradient(rgba(0, 229, 255, 0.03) 1px, transparent 1px),
+    linear-gradient(90deg, rgba(0, 229, 255, 0.03) 1px, transparent 1px);
+  background-size: 20px 20px;
+  background-position: center;
+  pointer-events: none;
+  z-index: 8;
+}
+
+.image-wrapper {
+  width: 100%;
+  height: 100%;
+  position: relative;
+  clip-path: polygon(10% 0%, 100% 0%, 90% 100%, 0% 100%);
+}
+
+.full-bleed-image {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  object-position: center;
+}
+
+/* 渐变遮罩以保证底部文字清晰 */
+.overlay-gradient {
+  position: absolute;
+  inset: 0;
+  background: linear-gradient(180deg, transparent 60%, rgba(16, 17, 21, 0.98) 100%);
+  pointer-events: none;
+  z-index: 2;
+}
+
+/* 警告黄条署名条 -> 改为监控屏 HUD 叠加卡片信息 */
+.credit-banner {
+  position: absolute;
+  bottom: 20px;
+  left: 28px;
+  right: 52px;
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-end;
+  gap: 12px;
+  z-index: 12;
+}
+
+.artwork-title-text {
+  color: var(--zzz-white);
+  font-family: var(--font-cn);
+  font-size: 11px;
+  font-weight: 900;
+  letter-spacing: 0.05em;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  background: rgba(16, 17, 21, 0.85);
+  border-left: 3px solid var(--zzz-cyan);
+  padding: 3px 8px;
+  border-radius: 0 2px 2px 0;
+  box-shadow: 0 4px 10px rgba(0, 0, 0, 0.4);
+  text-shadow: 0 0 4px rgba(0, 229, 255, 0.4);
+}
+
+.artwork-credit-text {
+  color: var(--zzz-cyan);
+  font-family: var(--font-num);
+  font-size: 9px;
+  font-weight: 700;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  background: rgba(16, 17, 21, 0.85);
+  border-right: 3px solid var(--zzz-pink);
+  padding: 3px 8px;
+  border-radius: 2px 0 0 2px;
+  box-shadow: 0 4px 10px rgba(0, 0, 0, 0.4);
+  text-shadow: 0 0 4px rgba(214, 5, 101, 0.4);
+}
+
+/* 无作品时的占位设计 */
+.placeholder-wrapper {
+  width: 100%;
+  height: 100%;
+  display: grid;
+  place-items: center;
+  background: #08090d;
+  clip-path: polygon(10% 0%, 100% 0%, 90% 100%, 0% 100%);
+  padding: 20px;
+}
+
+.placeholder-graphic {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  text-align: center;
+  gap: 12px;
+  width: 80%;
+  position: relative;
+}
+
+/* 左右磁带盘 */
+.tape-reel-wrap {
+  display: flex;
+  gap: 24px;
+}
+
+.reel {
+  width: 40px;
+  height: 40px;
+  border-radius: 50%;
+  border: 4px dashed var(--zzz-yellow);
+  position: relative;
+  animation: star-spin 12s infinite linear;
+}
+.reel::after {
+  content: '';
+  position: absolute;
+  width: 12px;
+  height: 12px;
+  background: var(--zzz-yellow);
+  border-radius: 50%;
+  top: 50%;
+  left: 50%;
+  transform: translate(-50%, -50%);
+}
+
+@keyframes star-spin {
+  100% { transform: rotate(360deg); }
+}
+
+.placeholder-graphic .title {
+  color: var(--zzz-white);
+  font-family: var(--font-num);
+  font-size: 13px;
+  font-weight: 900;
+  letter-spacing: 0.15em;
+}
+
+.placeholder-graphic .subtitle {
+  color: var(--zzz-yellow);
+  font-family: var(--font-num);
+  font-size: 8px;
+  font-weight: 900;
+  letter-spacing: 0.1em;
+}
+
+.grid-line {
+  width: 48px;
+  height: 2px;
+  background: var(--zzz-yellow);
+  margin-top: 4px;
+}

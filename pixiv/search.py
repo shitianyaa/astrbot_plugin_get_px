@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import asyncio
-import random
 import re
 
 from astrbot.api.all import Image, Plain, logger
@@ -123,7 +122,13 @@ class SearchMixin:
         except (TypeError, ValueError):
             count = 1
 
-        r18_mode = self._cfg_int("pixiv_r18", 0, 0, 2)
+        try:
+            if tag and await self._blocked_query_term(tag):
+                yield event.plain_result("🚫 搜索词不符合内容安全要求")
+                return
+        except RuntimeError:
+            yield event.plain_result("🚫 内容安全服务暂不可用，本次请求已拒绝")
+            return
         ranking_mode = ranking_override or self._cfg_str("pixiv_ranking_mode", "week")
         timeout_sec = self._cfg_float("request_timeout", 30.0, 5.0, 120.0)
         quality = self._cfg_str("image_quality", "original")
@@ -134,20 +139,6 @@ class SearchMixin:
             100.0,
         )
         downgrade_limit_bytes = int(downgrade_limit_mb * 1024 * 1024)
-        ai_enabled = self._cfg_bool("ai_enabled", False)
-        ai_prob = self._cfg_int("ai_probability", 30, 0, 100)
-        ai_max = self._cfg_int("ai_max_images", 3, 1, 20)
-        ai_pre_msg = self._cfg_str("ai_pre_message", "让我先品鉴一番，你稍等喵~")
-        ai_vision_pid = self._cfg_str("ai_vision_provider_id", "")
-        ai_comment_pid = self._cfg_str("ai_comment_provider_id", "")
-        ai_vision_prompt = self._cfg_str(
-            "ai_vision_prompt",
-            "请详细描述这张插画的内容，包括画风、构图、配色、角色特征、表情、姿势、背景等。用简洁的中文描述。",
-        )
-        ai_comment_prompt = self._cfg_str(
-            "ai_comment_prompt",
-            "你是一个 Pixiv 插画鉴赏专家。根据以下图片描述，用轻松有趣的语气写一句简短评论（50字以内）。\n\n图片描述：{description}",
-        )
         filter_manga = self._cfg_bool("filter_manga", True)
 
         if ranking_mode not in RANKING_MODES:
@@ -166,21 +157,6 @@ class SearchMixin:
             yield event.plain_result("❌ Pixiv 请求失败或无结果，换个标签试试")
             return
 
-        # R18 过滤
-        illusts = self._filter_r18(illusts, r18_mode)
-        if not illusts:
-            if r18_mode == 0:
-                yield event.plain_result(
-                    "🔒 过滤后没有可用作品。如果目标内容包含敏感作品，请到 Pixiv 官网「设置 > 显示设置」中开启「显示作品」选项，然后将插件 R18 设置改为 2（混合）。"
-                )
-            elif r18_mode == 1:
-                yield event.plain_result(
-                    "🔒 没有找到 R18 作品。请确认你的 Pixiv 账号已在官网「显示设置」中开启了「显示敏感作品」和「显示 R-18 作品」。"
-                )
-            else:
-                yield event.plain_result("🔒 过滤后没有可用作品")
-            return
-
         # 漫画过滤：普通搜索/排行中只要作品类型命中 manga 就过滤；漫画日榜保留后门。
         is_manga_ranking = not tag and ranking_mode == "day_manga"
         if filter_manga and not is_manga_ranking:
@@ -191,15 +167,19 @@ class SearchMixin:
                 )
                 return
 
-        illusts = await self._filter_blacklisted_illusts(illusts)
+        try:
+            illusts = await self._filter_blacklisted_illusts(illusts)
+        except RuntimeError:
+            yield event.plain_result("🚫 内容安全服务暂不可用，本次请求已拒绝")
+            return
         if not illusts:
             yield event.plain_result(
-                "😶 可用作品都被黑名单过滤了，换个标签或调整黑名单后再试"
+                "😶 可用作品都被内容安全策略过滤了，换个标签后再试"
             )
             return
 
         pick_count = min(count, len(illusts))
-        dedupe_ttl_hours = self._cfg_float("dedupe_ttl_hours", 24.0, 0.0, 720.0)
+        dedupe_ttl_hours = self._cfg_float("dedupe_ttl_hours", 24.0, 0.0, 24.0)
 
         chosen = await self._pick_illusts(
             event,
@@ -225,7 +205,6 @@ class SearchMixin:
 
         # 判断发送模式
         send_as_forward = self._cfg_bool("send_as_forward", True)
-        history_source = f"search:{tag.strip()}" if tag else f"rank:{ranking_mode}"
 
         # 下载所有图片
         downloaded: list[tuple[dict, str, str, int]] = []
@@ -258,51 +237,6 @@ class SearchMixin:
                         f"{LOG_PREFIX} [{idx}/{pick_count}] 作品 {illust_id} 下载失败: {e}"
                     )
 
-            # AI 识图（每张图片单独评论）
-            ai_comments: dict[int, str] = {}  # illust_id -> comment
-            if ai_enabled and ai_prob > 0 and downloaded:
-                if random.randint(1, 100) <= ai_prob:
-                    logger.info(f"{LOG_PREFIX} 触发 AI 识图 (概率 {ai_prob}%)")
-                    if ai_pre_msg:
-                        await event.send(event.plain_result(ai_pre_msg))
-                    # 并发分析图片（受 ai_max 限制）
-                    to_analyze = downloaded[:ai_max]
-                    if len(downloaded) > ai_max:
-                        logger.info(
-                            f"{LOG_PREFIX} [AI] 共 {len(downloaded)} 张图，仅分析前 {ai_max} 张"
-                        )
-
-                    async def _analyze(idx: int, illust: dict, path: str):
-                        try:
-                            comment = await self.ai.comment(
-                                event,
-                                path,
-                                ai_vision_pid,
-                                ai_comment_pid,
-                                ai_vision_prompt,
-                                ai_comment_prompt,
-                            )
-                            if comment:
-                                ai_comments[illust.get("id", 0)] = comment
-                                logger.info(
-                                    f"{LOG_PREFIX} [AI] 作品 {illust.get('id')} 评论完成: {comment[:40]}..."
-                                )
-                        except Exception as e:
-                            illust_id = illust.get("id", 0)
-                            logger.warning(
-                                f"{LOG_PREFIX} [AI] 作品 {illust_id} 识图失败: {e}，已降级跳过"
-                            )
-                            ai_comments[illust_id] = "羞死啦 羞死啦 ~"
-
-                    await asyncio.gather(
-                        *[
-                            _analyze(i, il, p)
-                            for i, (il, p, _actual_q, _file_size) in enumerate(
-                                to_analyze
-                            )
-                        ]
-                    )
-
             # 统一发送（避免 yield 和 send 混用导致消息拆分）
             if not downloaded:
                 yield event.plain_result("😢 所有图片均下载失败，请稍后再试")
@@ -326,10 +260,6 @@ class SearchMixin:
                         Plain(f"🎨 {title} (ID: {illust_id})"),
                         Image.fromFileSystem(path),
                     ]
-                    # AI 评论和图片放在同一个 Node 里
-                    comment = ai_comments.get(illust_id, "")
-                    if comment:
-                        content.append(Plain(f"🐱： {comment}"))
                     nodes.nodes.append(
                         Node(
                             uin=self_id,
@@ -393,23 +323,12 @@ class SearchMixin:
                             Plain(f"🎨 {title} (ID: {illust_id})"),
                             Image.fromFileSystem(path),
                         ]
-                        comment = ai_comments.get(illust_id, "")
-                        if comment:
-                            content.append(Plain(f"🐱： {comment}"))
                         # 逐条发送（带重试机制）
                         for attempt in range(1, max_retries + 1):
                             try:
                                 await event.send(event.chain_result(content))
                                 logger.info(
                                     f"{LOG_PREFIX} [降级] 作品 {illust_id} 已发送"
-                                )
-                                await self._record_sent_image(
-                                    event,
-                                    illust,
-                                    path,
-                                    source=history_source,
-                                    quality=actual_q,
-                                    file_size=file_size,
                                 )
                                 await self._record_image_usage(
                                     event,
@@ -438,14 +357,6 @@ class SearchMixin:
                                         pass
                 else:
                     for illust, path, actual_q, file_size in downloaded:
-                        await self._record_sent_image(
-                            event,
-                            illust,
-                            path,
-                            source=history_source,
-                            quality=actual_q,
-                            file_size=file_size,
-                        )
                         await self._record_image_usage(
                             event,
                             source_key,
@@ -463,9 +374,6 @@ class SearchMixin:
                         Plain(f"🎨 {title} (ID: {illust_id})"),
                         Image.fromFileSystem(path),
                     ]
-                    comment = ai_comments.get(illust_id, "")
-                    if comment:
-                        content.append(Plain(f"🐱： {comment}"))
                     # 逐条发送（带重试机制）
                     max_retries = 3
                     for attempt in range(1, max_retries + 1):
@@ -474,14 +382,6 @@ class SearchMixin:
                             logger.info(
                                 f"{LOG_PREFIX} 作品 {illust_id} 已发送"
                                 + (f" (第{attempt}次尝试)" if attempt > 1 else "")
-                            )
-                            await self._record_sent_image(
-                                event,
-                                illust,
-                                path,
-                                source=history_source,
-                                quality=actual_q,
-                                file_size=file_size,
                             )
                             await self._record_image_usage(
                                 event,
@@ -527,7 +427,6 @@ class SearchMixin:
                     except Exception as e:
                         logger.warning(f"{LOG_PREFIX} 释放当天发图占用失败: {e}")
 
-
     async def _handle_rank(
         self, event: AstrMessageEvent, mode: str, count_str: str = ""
     ):
@@ -546,7 +445,6 @@ class SearchMixin:
         ):
             yield result
 
-
     async def _handle_info(self, event: AstrMessageEvent, illust_id: int):
         """查看作品详情。"""
 
@@ -561,7 +459,11 @@ class SearchMixin:
             yield event.plain_result(f"😶 未找到作品 {illust_id}")
             return
 
-        reason = await self._blacklist_reason_for_illust(illust, str(illust_id))
+        try:
+            reason = await self._blacklist_reason_for_illust(illust, str(illust_id))
+        except RuntimeError:
+            yield event.plain_result("🚫 内容安全服务暂不可用，本次请求已拒绝")
+            return
         if reason:
             yield event.plain_result(f"🚫 {reason}")
             return
@@ -571,7 +473,6 @@ class SearchMixin:
         tags = "、".join(t.get("name", "") for t in (illust.get("tags") or [])[:5])
         desc = (illust.get("caption") or "").strip()
         pages = len(illust.get("meta_pages") or [])
-        x_restrict = illust.get("x_restrict", 0)
         total_view = illust.get("total_view", 0)
         total_bookmark = illust.get("total_bookmark", 0)
 
@@ -582,7 +483,7 @@ class SearchMixin:
             f"作者: {author}",
             f"标签: {tags or '无'}",
             f"页数: {pages or 1}",
-            f"R18: {'是' if x_restrict else '否'}",
+            "内容分级: 普通",
             f"浏览: {total_view:,}　收藏: {total_bookmark:,}",
         ]
         if desc:

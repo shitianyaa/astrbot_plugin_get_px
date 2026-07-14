@@ -11,10 +11,7 @@ def parse_aspect_ratio(value: object) -> float:
         return 0.0
 
     normalized = (
-        raw.replace("：", ":")
-        .replace("／", "/")
-        .replace("×", "x")
-        .replace(" ", "")
+        raw.replace("：", ":").replace("／", "/").replace("×", "x").replace(" ", "")
     )
     for separator in (":", "/", "x"):
         if separator not in normalized:

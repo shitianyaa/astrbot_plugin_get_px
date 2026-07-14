@@ -13,7 +13,9 @@ import aiohttp
 
 HOLIDAY_REFRESH_DAYS = 180
 HOLIDAY_RETRY_HOURS = 24
-HOLIDAY_SOURCE = "https://raw.githubusercontent.com/NateScarlet/holiday-cn/master/{year}.json"
+HOLIDAY_SOURCE = (
+    "https://raw.githubusercontent.com/NateScarlet/holiday-cn/master/{year}.json"
+)
 
 
 @dataclass(frozen=True)
@@ -77,7 +79,9 @@ class HolidayCalendar:
             async with aiohttp.ClientSession(timeout=timeout) as session:
                 for index, year in enumerate(years):
                     try:
-                        async with session.get(HOLIDAY_SOURCE.format(year=year)) as response:
+                        async with session.get(
+                            HOLIDAY_SOURCE.format(year=year)
+                        ) as response:
                             response.raise_for_status()
                             payload = await response.json(content_type=None)
                         days.update(self._parse_year(payload, year))
@@ -118,7 +122,9 @@ class HolidayCalendar:
             payload = json.loads(self.path.read_text(encoding="utf-8"))
         except (FileNotFoundError, OSError, json.JSONDecodeError):
             return {"schema_version": 1, "days": {}}
-        if not isinstance(payload, dict) or not isinstance(payload.get("days", {}), dict):
+        if not isinstance(payload, dict) or not isinstance(
+            payload.get("days", {}), dict
+        ):
             return {"schema_version": 1, "days": {}}
         return payload
 

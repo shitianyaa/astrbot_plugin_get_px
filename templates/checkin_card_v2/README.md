@@ -1,6 +1,6 @@
-# 签到卡片 V2 运行时模板
+# 签到卡片 V2 运行时模板（default 默认主题）
 
-本目录是插件实际使用的 Jinja 模板。`checkin/card.py` 启动时读取 `index.html`，并将 `style.css` 注入 `/*__CHECKIN_CARD_CSS__*/`，因此渲染结果不依赖外部样式或网络资源。
+本目录是 `default`（米白）默认主题的运行时模板。本文件仅描述默认主题；`01 浅蓝`、`02 红黑`、`03 黄黑` 等其他已上线主题的视觉方向见 `templates/checkin_card_liked/<编号>/README.md`。`checkin/card.py` 启动时读取 `index.html`，并将 `style.css` 注入 `/*__CHECKIN_CARD_CSS__*/`，因此渲染结果不依赖外部样式或网络资源。
 
 ![签到卡片 V2](../../docs/images/checkin-card-v2-template-preview.png)
 

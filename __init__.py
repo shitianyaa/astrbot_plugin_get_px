@@ -9,7 +9,6 @@ import sys
 
 
 _LEGACY_MODULES = {
-    "ai_commenter": ".pixiv.commenter",
     "checkin_background": ".checkin.background",
     "checkin_birthday": ".checkin.birthday",
     "checkin_cache": ".checkin.cache",
@@ -18,7 +17,6 @@ _LEGACY_MODULES = {
     "checkin_greeting": ".checkin.greeting",
     "downloader": ".pixiv.downloader",
     "holiday_calendar": ".checkin.holiday",
-    "image_history": ".pixiv.history",
     "image_index": ".pixiv.index",
     "pixiv_client": ".pixiv.client",
 }

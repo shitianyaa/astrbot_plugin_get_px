@@ -6,7 +6,7 @@ from zoneinfo import ZoneInfo
 
 
 SHANGHAI_TZ = ZoneInfo("Asia/Shanghai")
-CHECKIN_SNAPSHOT_SCHEMA_VERSION = 3
+CHECKIN_SNAPSHOT_SCHEMA_VERSION = 5
 CHECKIN_SNAPSHOT_SCOPE = "checkin"
 CHECKIN_SNAPSHOT_PLUGIN_NAME = "astrbot_plugin_get_px"
 
@@ -87,6 +87,7 @@ class CheckinRecord:
     greeting_attribution: str = ""
     secondary_note: str = ""
     template_version: str = "v2"
+    theme_id: str = "default"
 
 
 @dataclass(frozen=True)
@@ -108,6 +109,25 @@ class BoostPurchaseResult:
 
 
 @dataclass(frozen=True)
+class ThemePurchaseResult:
+    success: bool
+    profile: CheckinProfile
+    theme_id: str
+    cost: int
+    already_owned: bool
+    message: str
+
+
+@dataclass(frozen=True)
+class BackgroundRefreshResult:
+    success: bool
+    profile: CheckinProfile
+    record: CheckinRecord | None
+    cost: int
+    message: str
+
+
+@dataclass(frozen=True)
 class CheckinUserPreference:
     user_id: str
     birthday_month: int
@@ -117,6 +137,7 @@ class CheckinUserPreference:
     selected_title_id: str
     created_at: str
     updated_at: str
+    selected_theme_id: str = "default"
 
     @property
     def birthday_label(self) -> str:

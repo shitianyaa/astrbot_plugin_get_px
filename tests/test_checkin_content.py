@@ -101,9 +101,7 @@ def test_event_priority_birthday_then_custom_then_holiday() -> None:
     birthday = resolve_checkin_content(
         holiday, profile, birthday_label="生日", custom_event_label="相遇纪念日"
     )
-    custom = resolve_checkin_content(
-        holiday, profile, custom_event_label="相遇纪念日"
-    )
+    custom = resolve_checkin_content(holiday, profile, custom_event_label="相遇纪念日")
     built_in = resolve_checkin_content(holiday, profile)
 
     assert birthday.title == "生日纪念"
@@ -145,9 +143,7 @@ def test_known_lunar_festivals_are_resolved_with_lunar_python() -> None:
     spring_festival = resolve_checkin_content(
         make_record(date_key="2026-02-17"), profile
     )
-    mid_autumn = resolve_checkin_content(
-        make_record(date_key="2026-09-25"), profile
-    )
+    mid_autumn = resolve_checkin_content(make_record(date_key="2026-09-25"), profile)
 
     assert (spring_festival.event_key, spring_festival.event_label) == (
         "spring_festival",
@@ -159,7 +155,9 @@ def test_known_lunar_festivals_are_resolved_with_lunar_python() -> None:
     )
 
 
-def test_online_off_day_preserves_builtin_calendar_and_workday_does_not_override() -> None:
+def test_online_off_day_preserves_builtin_calendar_and_workday_does_not_override() -> (
+    None
+):
     record = make_record(date_key="2026-10-01")
     profile = make_profile()
 
@@ -241,7 +239,7 @@ def test_content_limits_badges_and_greeting_and_accepts_plain_birthday_data() ->
 
     assert content.event_key == "birthday"
     assert len(content.badges) <= 2
-    assert len(content.greeting) <= 44
+    assert len(content.greeting) <= 32
     assert content.context.username == "Alice"
     assert content.context.user_id_hint != "10001"
     assert "10001" not in content.context.to_plain_text()

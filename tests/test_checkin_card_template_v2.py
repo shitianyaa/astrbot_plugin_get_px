@@ -25,6 +25,7 @@ class CheckinCardTemplateV2Test(unittest.TestCase):
             self.assertEqual(image.format, "PNG")
             self.assertEqual(image.size, (1440, 2040))
         self.assertTrue(hasattr(GetPxPlugin, "cmd_checkin_help"))
+        self.assertTrue(hasattr(GetPxPlugin, "cmd_preview_checkin_theme"))
 
     def test_required_h_paper_album_regions_exist(self):
         html = (TEMPLATE_DIR / "index.html").read_text(encoding="utf-8")
@@ -84,7 +85,9 @@ class CheckinCardTemplateV2Test(unittest.TestCase):
     def test_only_artwork_credit_may_use_text_smaller_than_18px(self):
         css = (TEMPLATE_DIR / "style.css").read_text(encoding="utf-8")
         undersized: list[tuple[str, int]] = []
-        for match in re.finditer(r"(?P<selector>[^{}]+)\{(?P<body>[^{}]*)\}", css, re.S):
+        for match in re.finditer(
+            r"(?P<selector>[^{}]+)\{(?P<body>[^{}]*)\}", css, re.S
+        ):
             selector = match.group("selector").strip()
             for size in re.findall(r"font-size:\s*(\d+)px", match.group("body")):
                 pixels = int(size)

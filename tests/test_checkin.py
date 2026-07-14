@@ -374,12 +374,35 @@ class CheckinStoreTest(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(remote.greeting, "Hitokoto greeting")
             self.assertEqual(remote.greeting_attribution, "毛不易 · 芬芳一生")
 
+    async def test_hitokoto_greeting_can_be_refreshed_without_reopening_upgrade(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            store = FrozenCheckinStore(tmp)
+            await store.checkin(user_id="10001", username="tester", bot_name="neko")
+            await store.update_record_content(
+                user_id="10001",
+                date_key="2026-05-26",
+                event_key="normal",
+                event_label="",
+                greeting="First greeting",
+                greeting_source="local",
+                secondary_note="",
+                template_version="v2",
+            )
+            refreshed = await store.refresh_record_greeting(
+                user_id="10001",
+                date_key="2026-05-26",
+                greeting="Second greeting",
+                greeting_source="hitokoto",
+                greeting_attribution="作者 · 来源",
+            )
+
+            self.assertEqual(refreshed.greeting, "Second greeting")
+            self.assertEqual(refreshed.greeting_attribution, "作者 · 来源")
+
     async def test_empty_ai_update_cannot_reopen_local_content_transition(self):
         with tempfile.TemporaryDirectory() as tmp:
             store = FrozenCheckinStore(tmp)
-            await store.checkin(
-                user_id="10001", username="tester", bot_name="neko"
-            )
+            await store.checkin(user_id="10001", username="tester", bot_name="neko")
             local = await store.update_record_content(
                 user_id="10001",
                 date_key="2026-05-26",
@@ -418,9 +441,7 @@ class CheckinStoreTest(unittest.IsolatedAsyncioTestCase):
     async def test_empty_ai_record_cannot_transition_back_to_local(self):
         with tempfile.TemporaryDirectory() as tmp:
             store = FrozenCheckinStore(tmp)
-            await store.checkin(
-                user_id="10001", username="tester", bot_name="neko"
-            )
+            await store.checkin(user_id="10001", username="tester", bot_name="neko")
             with closing(sqlite3.connect(Path(tmp) / "checkin.sqlite3")) as conn:
                 conn.execute(
                     """
@@ -494,9 +515,11 @@ class CheckinStoreTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(affection_level(70)["name"], "信赖")
         self.assertEqual(affection_level(140)["name"], "挚友")
 
-
     async def test_export_import_round_trip_preserves_profile_and_records(self):
-        with tempfile.TemporaryDirectory() as src_tmp, tempfile.TemporaryDirectory() as dst_tmp:
+        with (
+            tempfile.TemporaryDirectory() as src_tmp,
+            tempfile.TemporaryDirectory() as dst_tmp,
+        ):
             source = FrozenCheckinStore(src_tmp, date_key="2026-05-26")
             for day in range(26, 30):
                 source.date_key = f"2026-05-{day}"
@@ -538,7 +561,7 @@ class CheckinStoreTest(unittest.IsolatedAsyncioTestCase):
             )
 
             snapshot = await source.export_snapshot()
-            self.assertEqual(snapshot["schema_version"], 3)
+            self.assertEqual(snapshot["schema_version"], 5)
             serialized = dump_checkin_snapshot_json(snapshot)
             restored = load_checkin_snapshot_json(serialized.encode("utf-8"))
 
@@ -567,7 +590,10 @@ class CheckinStoreTest(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(record.template_version, "v2")
 
     async def test_version_one_snapshot_imports_with_v2_record_defaults(self):
-        with tempfile.TemporaryDirectory() as src_tmp, tempfile.TemporaryDirectory() as dst_tmp:
+        with (
+            tempfile.TemporaryDirectory() as src_tmp,
+            tempfile.TemporaryDirectory() as dst_tmp,
+        ):
             source = FrozenCheckinStore(src_tmp, date_key="2026-05-26")
             await source.checkin(user_id="20002", username="source", bot_name="neko")
             legacy = await source.export_snapshot()
@@ -586,7 +612,7 @@ class CheckinStoreTest(unittest.IsolatedAsyncioTestCase):
             normalized = load_checkin_snapshot_json(
                 dump_checkin_snapshot_json(legacy).encode("utf-8")
             )
-            self.assertEqual(normalized["schema_version"], 3)
+            self.assertEqual(normalized["schema_version"], 5)
             self.assertEqual(normalized["records"][0]["event_key"], "")
             self.assertEqual(normalized["records"][0]["event_label"], "")
             self.assertEqual(normalized["records"][0]["greeting"], "")
@@ -598,7 +624,7 @@ class CheckinStoreTest(unittest.IsolatedAsyncioTestCase):
             target = FrozenCheckinStore(dst_tmp, date_key="2026-05-26")
             summary = await target.import_snapshot(normalized)
             record = await target.get_today_record("20002")
-            self.assertEqual(summary["schema_version"], 3)
+            self.assertEqual(summary["schema_version"], 5)
             self.assertIsNotNone(record)
             self.assertEqual(record.greeting_source, "local")
             self.assertEqual(record.greeting_attribution, "")
@@ -617,7 +643,10 @@ class CheckinStoreTest(unittest.IsolatedAsyncioTestCase):
                 )
 
     async def test_import_overwrites_existing_data(self):
-        with tempfile.TemporaryDirectory() as src_tmp, tempfile.TemporaryDirectory() as dst_tmp:
+        with (
+            tempfile.TemporaryDirectory() as src_tmp,
+            tempfile.TemporaryDirectory() as dst_tmp,
+        ):
             source = FrozenCheckinStore(src_tmp, date_key="2026-05-26")
             await source.checkin(user_id="20002", username="source", bot_name="neko")
             snapshot = await source.export_snapshot()
@@ -651,7 +680,10 @@ class CheckinStoreTest(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(after, before)
 
     async def test_import_rolls_back_when_rows_conflict(self):
-        with tempfile.TemporaryDirectory() as src_tmp, tempfile.TemporaryDirectory() as dst_tmp:
+        with (
+            tempfile.TemporaryDirectory() as src_tmp,
+            tempfile.TemporaryDirectory() as dst_tmp,
+        ):
             source = FrozenCheckinStore(src_tmp, date_key="2026-05-26")
             await source.checkin(user_id="20002", username="source", bot_name="neko")
             snapshot = await source.export_snapshot()
@@ -684,7 +716,10 @@ class CheckinStoreTest(unittest.IsolatedAsyncioTestCase):
             store = FrozenCheckinStore(tmp, date_key="2026-05-26")
             await store.checkin(user_id="10001", username="target", bot_name="neko")
             before = await store.export_snapshot()
-            invalid = {**before, "profiles": [*before["profiles"], dict(before["profiles"][0])]}
+            invalid = {
+                **before,
+                "profiles": [*before["profiles"], dict(before["profiles"][0])],
+            }
 
             with self.assertRaisesRegex(ValueError, "profiles\\[1\\].*user_id"):
                 await store.import_snapshot(invalid)
@@ -696,9 +731,14 @@ class CheckinStoreTest(unittest.IsolatedAsyncioTestCase):
             store = FrozenCheckinStore(tmp, date_key="2026-05-26")
             await store.checkin(user_id="10001", username="target", bot_name="neko")
             before = await store.export_snapshot()
-            invalid = {**before, "records": [*before["records"], dict(before["records"][0])]}
+            invalid = {
+                **before,
+                "records": [*before["records"], dict(before["records"][0])],
+            }
 
-            with self.assertRaisesRegex(ValueError, "records\\[1\\].*date_key.*user_id"):
+            with self.assertRaisesRegex(
+                ValueError, "records\\[1\\].*date_key.*user_id"
+            ):
                 await store.import_snapshot(invalid)
 
             self.assertEqual(await store.export_snapshot(), before)

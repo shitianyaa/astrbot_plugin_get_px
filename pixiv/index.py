@@ -11,6 +11,8 @@ from zoneinfo import ZoneInfo
 
 from astrbot.api import logger
 
+from .safety import normalize_safety_text
+
 
 LOG_PREFIX = "[GetPx]"
 SHANGHAI_TZ = ZoneInfo("Asia/Shanghai")
@@ -118,6 +120,33 @@ class ImageIndexStore:
         async with self._lock:
             return await asyncio.to_thread(self._get_blacklisted_illust_ids_sync)
 
+    async def list_safety_terms(self) -> list[dict[str, str]]:
+        async with self._lock:
+            return await asyncio.to_thread(self._list_safety_terms_sync)
+
+    async def add_safety_term(self, term: str, *, added_by: str = "web") -> bool:
+        term = str(term or "").strip()
+        normalized = normalize_safety_text(term)
+        if not normalized:
+            raise ValueError("屏蔽词不能为空")
+        if len(term) > 64:
+            raise ValueError("屏蔽词不能超过 64 个字符")
+        async with self._lock:
+            return await asyncio.to_thread(
+                self._add_safety_term_sync, term, normalized, added_by, self.now_iso()
+            )
+
+    async def remove_safety_term(self, term: str) -> bool:
+        normalized = normalize_safety_text(term)
+        if not normalized:
+            raise ValueError("屏蔽词不能为空")
+        async with self._lock:
+            return await asyncio.to_thread(self._remove_safety_term_sync, normalized)
+
+    async def get_custom_safety_terms(self) -> set[str]:
+        async with self._lock:
+            return await asyncio.to_thread(self._get_custom_safety_terms_sync)
+
     async def list_blacklist_illusts(self) -> list[dict[str, Any]]:
         async with self._lock:
             return await asyncio.to_thread(self._list_blacklist_illusts_sync)
@@ -169,6 +198,8 @@ class ImageIndexStore:
         source: str = "",
         record_id: str = "",
         thumb_id: str = "",
+        reason: str = "",
+        added_by: str = "",
     ) -> bool:
         illust_id = str(illust_id or "")
         if not illust_id:
@@ -183,6 +214,8 @@ class ImageIndexStore:
                 str(source or ""),
                 str(record_id or ""),
                 str(thumb_id or ""),
+                str(reason or "")[:200],
+                str(added_by or "")[:100],
                 now,
             )
 
@@ -291,6 +324,22 @@ class ImageIndexStore:
                 ADD COLUMN thumb_id TEXT NOT NULL DEFAULT ''
                 """
             )
+        for name in ("reason", "added_by"):
+            if name not in blacklist_columns:
+                conn.execute(
+                    f"ALTER TABLE image_blacklist ADD COLUMN {name} "
+                    "TEXT NOT NULL DEFAULT ''"
+                )
+        conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS content_safety_terms (
+                normalized_term TEXT PRIMARY KEY,
+                term TEXT NOT NULL,
+                added_by TEXT NOT NULL DEFAULT '',
+                added_at TEXT NOT NULL
+            )
+            """
+        )
         conn.execute(
             """
             CREATE TABLE IF NOT EXISTS source_page_cursor (
@@ -405,12 +454,54 @@ class ImageIndexStore:
         conn = self._get_conn()
         rows = conn.execute(
             """
-            SELECT illust_id, title, author, source, record_id, thumb_id, added_at
+            SELECT illust_id, title, author, source, record_id, thumb_id,
+                   reason, added_by, added_at
             FROM image_blacklist
             ORDER BY added_at DESC, illust_id DESC
             """
         ).fetchall()
         return [dict(row) for row in rows]
+
+    def _list_safety_terms_sync(self) -> list[dict[str, str]]:
+        rows = (
+            self._get_conn()
+            .execute(
+                "SELECT term, normalized_term, added_by, added_at "
+                "FROM content_safety_terms ORDER BY added_at DESC, term"
+            )
+            .fetchall()
+        )
+        return [dict(row) for row in rows]
+
+    def _get_custom_safety_terms_sync(self) -> set[str]:
+        rows = (
+            self._get_conn()
+            .execute("SELECT normalized_term FROM content_safety_terms")
+            .fetchall()
+        )
+        return {str(row["normalized_term"]) for row in rows}
+
+    def _add_safety_term_sync(
+        self, term: str, normalized: str, added_by: str, added_at: str
+    ) -> bool:
+        cursor = self._get_conn().execute(
+            """
+            INSERT INTO content_safety_terms (normalized_term, term, added_by, added_at)
+            VALUES (?, ?, ?, ?)
+            ON CONFLICT(normalized_term) DO UPDATE SET term = excluded.term
+            """,
+            (normalized, term, added_by, added_at),
+        )
+        self._get_conn().commit()
+        return cursor.rowcount > 0
+
+    def _remove_safety_term_sync(self, normalized: str) -> bool:
+        cursor = self._get_conn().execute(
+            "DELETE FROM content_safety_terms WHERE normalized_term = ?",
+            (normalized,),
+        )
+        self._get_conn().commit()
+        return cursor.rowcount > 0
 
     def _is_blacklisted_sync(self, illust_id: str) -> bool:
         conn = self._get_conn()
@@ -490,15 +581,18 @@ class ImageIndexStore:
         source: str,
         record_id: str,
         thumb_id: str,
+        reason: str,
+        added_by: str,
         added_at: str,
     ) -> bool:
         conn = self._get_conn()
         cursor = conn.execute(
             """
             INSERT INTO image_blacklist (
-                illust_id, title, author, source, record_id, thumb_id, added_at
+                illust_id, title, author, source, record_id, thumb_id,
+                reason, added_by, added_at
             )
-            VALUES (?, ?, ?, ?, ?, ?, ?)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
             ON CONFLICT(illust_id)
             DO UPDATE SET
                 title = CASE
@@ -521,9 +615,27 @@ class ImageIndexStore:
                     WHEN excluded.thumb_id != '' THEN excluded.thumb_id
                     ELSE image_blacklist.thumb_id
                 END,
+                reason = CASE
+                    WHEN excluded.reason != '' THEN excluded.reason
+                    ELSE image_blacklist.reason
+                END,
+                added_by = CASE
+                    WHEN excluded.added_by != '' THEN excluded.added_by
+                    ELSE image_blacklist.added_by
+                END,
                 added_at = excluded.added_at
             """,
-            (illust_id, title, author, source, record_id, thumb_id, added_at),
+            (
+                illust_id,
+                title,
+                author,
+                source,
+                record_id,
+                thumb_id,
+                reason,
+                added_by,
+                added_at,
+            ),
         )
         conn.commit()
         return cursor.rowcount > 0
@@ -532,7 +644,8 @@ class ImageIndexStore:
         conn = self._get_conn()
         row = conn.execute(
             """
-            SELECT illust_id, title, author, source, record_id, thumb_id, added_at
+            SELECT illust_id, title, author, source, record_id, thumb_id,
+                   reason, added_by, added_at
             FROM image_blacklist
             WHERE illust_id = ?
             """,
@@ -541,9 +654,7 @@ class ImageIndexStore:
         if row is None:
             return None
         record = dict(row)
-        conn.execute(
-            "DELETE FROM image_blacklist WHERE illust_id = ?", (illust_id,)
-        )
+        conn.execute("DELETE FROM image_blacklist WHERE illust_id = ?", (illust_id,))
         conn.commit()
         thumb_id = str(record.get("thumb_id") or "")
         if thumb_id:

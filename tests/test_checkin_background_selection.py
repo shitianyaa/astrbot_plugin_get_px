@@ -5,7 +5,7 @@ import tempfile
 import unittest
 from pathlib import Path
 from types import SimpleNamespace
-from unittest.mock import patch
+from unittest.mock import AsyncMock, patch
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 
@@ -37,14 +37,6 @@ class FakePixivClient:
     async def search(self, tag: str, offset: int = 0):
         self.search_calls.append((tag, offset))
         return list(self.search_pages.get((tag, offset), []))
-
-
-class FakeHistory:
-    def __init__(self, illust_ids):
-        self.illust_ids = [str(illust_id) for illust_id in illust_ids]
-
-    async def list_records(self):
-        return [{"illust_id": illust_id} for illust_id in self.illust_ids]
 
 
 class FakeDownloader:
@@ -79,7 +71,7 @@ class CheckinBackgroundSelectionTest(unittest.IsolatedAsyncioTestCase):
     def test_split_config_tags_accepts_common_delimiters(self):
         self.assertEqual(
             GetPxPlugin._split_config_tags(
-                "alpha\uFF0Cbeta、gamma;delta\uFF1Bepsilon\nzeta"
+                "alpha\uff0cbeta、gamma;delta\uff1bepsilon\nzeta"
             ),
             ["alpha", "beta", "gamma", "delta", "epsilon", "zeta"],
         )
@@ -90,9 +82,7 @@ class CheckinBackgroundSelectionTest(unittest.IsolatedAsyncioTestCase):
             "astrbot_plugin_get_px.checkin.artwork.random.shuffle",
             side_effect=lambda tags: tags.reverse(),
         ):
-            candidates = plugin._checkin_background_tag_candidates(
-                "alpha,beta,gamma"
-            )
+            candidates = plugin._checkin_background_tag_candidates("alpha,beta,gamma")
         self.assertEqual(candidates, ["gamma", "beta", "alpha"])
 
     def test_greeting_schema_defaults_to_hitokoto_without_legacy_switch(self):
@@ -111,9 +101,38 @@ class CheckinBackgroundSelectionTest(unittest.IsolatedAsyncioTestCase):
         self.assertIn("动画", categories["options"])
         self.assertIn("诗词", categories["options"])
 
+    def test_economy_and_dedupe_schema_limits_are_bounded(self):
+        schema_path = Path(__file__).resolve().parents[1] / "_conf_schema.json"
+        schema = json.loads(schema_path.read_text(encoding="utf-8"))
+
+        self.assertEqual(schema["dedupe_ttl_hours"]["slider"]["max"], 24)
+        self.assertEqual(
+            schema["checkin_background_refresh_cost"]["slider"]["max"], 500
+        )
+        self.assertEqual(schema["checkin_theme_price"]["slider"]["max"], 5000)
+
+    def test_pixiv_ai_comment_settings_are_removed(self):
+        schema_path = Path(__file__).resolve().parents[1] / "_conf_schema.json"
+        schema = json.loads(schema_path.read_text(encoding="utf-8"))
+
+        for key in (
+            "ai_enabled",
+            "ai_probability",
+            "ai_max_images",
+            "ai_pre_message",
+            "ai_vision_provider_id",
+            "ai_comment_provider_id",
+            "ai_vision_prompt",
+            "ai_comment_prompt",
+        ):
+            self.assertNotIn(key, schema)
+
     def test_custom_background_schema_recommends_portrait_contain_display(self):
         schema_path = Path(__file__).resolve().parents[1] / "_conf_schema.json"
         schema = json.loads(schema_path.read_text(encoding="utf-8"))
+
+        self.assertNotIn("checkin_background_aspect_ratio", schema)
+        self.assertNotIn("checkin_background_aspect_tolerance", schema)
         hint = schema["checkin_custom_background"]["hint"]
 
         for landscape_contract in ("16:9", "1920x1080", "960x540"):
@@ -194,16 +213,13 @@ class CheckinBackgroundSelectionTest(unittest.IsolatedAsyncioTestCase):
                 "checkin_background_mode": "pixiv_daily",
                 "pixiv_refresh_token": "token",
                 "pixiv_ranking_mode": "week",
-                "pixiv_r18": 0,
                 "filter_manga": True,
-                "blacklist_tags": "",
                 "image_quality": "large",
                 "pixiv_proxy_url": "",
                 "request_timeout": 30.0,
                 "auto_downgrade_original_mb": 3.0,
             }
             plugin.image_index = ImageIndexStore(tmp)
-            plugin.image_history = FakeHistory([])
             plugin.downloader = FakeDownloader()
             plugin.client = FakePixivClient({0: [_illust(70), _illust(71)]})
             record = SimpleNamespace(date_key="2026-07-12", user_id="10001")
@@ -251,21 +267,37 @@ class CheckinBackgroundSelectionTest(unittest.IsolatedAsyncioTestCase):
             finally:
                 plugin.image_index.close()
 
+    async def test_preview_background_prunes_expired_users(self):
+        plugin = object.__new__(GetPxPlugin)
+        plugin.config = {"checkin_background_mode": "pixiv_daily"}
+        plugin._checkin_preview_background_ids = {
+            "expired": [("1", 0.0)],
+        }
+        plugin._download_checkin_pixiv_background = AsyncMock(
+            return_value=CardBackground(mode="fallback", source="fallback")
+        )
+
+        await plugin._prepare_checkin_background(
+            FakeEvent(),
+            SimpleNamespace(date_key="2026-07-12", user_id="10001"),
+            claim_usage=False,
+            refresh_preview=True,
+        )
+
+        self.assertNotIn("expired", plugin._checkin_preview_background_ids)
+
     async def test_checkin_background_tries_remaining_configured_tags(self):
         with tempfile.TemporaryDirectory() as tmp:
             plugin = object.__new__(GetPxPlugin)
             plugin.config = {
                 "pixiv_refresh_token": "token",
                 "pixiv_ranking_mode": "week",
-                "pixiv_r18": 0,
                 "filter_manga": True,
-                "blacklist_tags": "",
-                "checkin_background_tag": "empty\uFF0Cavailable",
+                "checkin_background_tag": "empty\uff0cavailable",
                 "pixiv_proxy_url": "",
                 "request_timeout": 30.0,
             }
             plugin.image_index = ImageIndexStore(tmp)
-            plugin.image_history = FakeHistory([])
             plugin.downloader = FakeDownloader()
             plugin.client = FakePixivClient(
                 {}, search_pages={("available", 0): [_illust(72)]}
@@ -290,15 +322,13 @@ class CheckinBackgroundSelectionTest(unittest.IsolatedAsyncioTestCase):
             finally:
                 plugin.image_index.close()
 
-    async def test_checkin_background_skips_page_used_by_index_and_history(self):
+    async def test_checkin_background_skips_page_used_by_index(self):
         with tempfile.TemporaryDirectory() as tmp:
             plugin = object.__new__(GetPxPlugin)
             plugin.config = {
                 "pixiv_refresh_token": "token",
                 "pixiv_ranking_mode": "week",
-                "pixiv_r18": 0,
                 "filter_manga": True,
-                "blacklist_tags": "",
                 "checkin_background_aspect_ratio": "16:9",
                 "checkin_background_aspect_tolerance": 0.25,
                 "image_quality": "large",
@@ -307,7 +337,6 @@ class CheckinBackgroundSelectionTest(unittest.IsolatedAsyncioTestCase):
                 "auto_downgrade_original_mb": 3.0,
             }
             plugin.image_index = ImageIndexStore(tmp)
-            plugin.image_history = FakeHistory(range(19))
             plugin.downloader = FakeDownloader()
             plugin.client = FakePixivClient(
                 {
@@ -317,13 +346,14 @@ class CheckinBackgroundSelectionTest(unittest.IsolatedAsyncioTestCase):
             )
 
             try:
-                await plugin.image_index.record_usage(
-                    scope="group:20001",
-                    source_key="rank:week",
-                    illust_id="19",
-                    feature="checkin",
-                    user_id="10001",
-                )
+                for illust_id in range(20):
+                    await plugin.image_index.record_usage(
+                        scope="group:20001",
+                        source_key="rank:week",
+                        illust_id=str(illust_id),
+                        feature="checkin",
+                        user_id="10001",
+                    )
 
                 background = await plugin._download_checkin_pixiv_background(
                     FakeEvent(),
@@ -342,9 +372,7 @@ class CheckinBackgroundSelectionTest(unittest.IsolatedAsyncioTestCase):
             plugin.config = {
                 "pixiv_refresh_token": "token",
                 "pixiv_ranking_mode": "week",
-                "pixiv_r18": 0,
                 "filter_manga": True,
-                "blacklist_tags": "",
                 "checkin_background_aspect_ratio": "16:9",
                 "checkin_background_aspect_tolerance": 0.25,
                 "image_quality": "large",
@@ -353,7 +381,6 @@ class CheckinBackgroundSelectionTest(unittest.IsolatedAsyncioTestCase):
                 "auto_downgrade_original_mb": 3.0,
             }
             plugin.image_index = ImageIndexStore(tmp)
-            plugin.image_history = FakeHistory([])
             plugin.downloader = FakeDownloader()
             plugin.client = FakePixivClient({0: [_illust(30)]})
 
@@ -392,14 +419,11 @@ class CheckinBackgroundSelectionTest(unittest.IsolatedAsyncioTestCase):
             plugin.config = {
                 "pixiv_refresh_token": "token",
                 "pixiv_ranking_mode": "week",
-                "pixiv_r18": 0,
                 "filter_manga": True,
-                "blacklist_tags": "",
                 "pixiv_proxy_url": "",
                 "request_timeout": 30.0,
             }
             plugin.image_index = ImageIndexStore(tmp)
-            plugin.image_history = FakeHistory([])
             plugin.downloader = CancelledDownloader()
             plugin.client = FakePixivClient({0: [_illust(31)]})
 
@@ -424,9 +448,7 @@ class CheckinBackgroundSelectionTest(unittest.IsolatedAsyncioTestCase):
             plugin.config = {
                 "pixiv_refresh_token": "token",
                 "pixiv_ranking_mode": "week",
-                "pixiv_r18": 0,
                 "filter_manga": True,
-                "blacklist_tags": "",
                 "checkin_background_aspect_ratio": "16:9",
                 "checkin_background_aspect_tolerance": 0.25,
                 "image_quality": "large",
@@ -435,14 +457,10 @@ class CheckinBackgroundSelectionTest(unittest.IsolatedAsyncioTestCase):
                 "auto_downgrade_original_mb": 3.0,
             }
             plugin.image_index = ImageIndexStore(tmp)
-            plugin.image_history = FakeHistory([])
             plugin.downloader = FakeDownloader()
             plugin.client = FakePixivClient(
                 {
-                    0: [
-                        _illust(i, width=1600, height=900)
-                        for i in range(20)
-                    ],
+                    0: [_illust(i, width=1600, height=900) for i in range(20)],
                     20: [_illust(20)],
                 }
             )
@@ -466,9 +484,7 @@ class CheckinBackgroundSelectionTest(unittest.IsolatedAsyncioTestCase):
             plugin.config = {
                 "pixiv_refresh_token": "token",
                 "pixiv_ranking_mode": "week",
-                "pixiv_r18": 0,
                 "filter_manga": True,
-                "blacklist_tags": "",
                 "checkin_background_aspect_ratio": "16:9",
                 "checkin_background_aspect_tolerance": 0.25,
                 "image_quality": "large",
@@ -477,13 +493,11 @@ class CheckinBackgroundSelectionTest(unittest.IsolatedAsyncioTestCase):
                 "auto_downgrade_original_mb": 3.0,
             }
             plugin.image_index = ImageIndexStore(tmp)
-            plugin.image_history = FakeHistory([])
             plugin.downloader = FakeDownloader()
             plugin.client = FakePixivClient(
                 {
                     offset: [
-                        _illust(offset + i, width=1600, height=900)
-                        for i in range(20)
+                        _illust(offset + i, width=1600, height=900) for i in range(20)
                     ]
                     for offset in (0, 20, 40, 60, 80)
                 }
