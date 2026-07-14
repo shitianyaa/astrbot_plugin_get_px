@@ -243,8 +243,8 @@ class PluginWebApi:
     async def checkin_member_update(self):
         if self.plugin.checkin_store is None:
             return self._unavailable("签到数据尚未初始化")
-        payload = await request.get_json(silent=True) or {}
-        if not isinstance(payload, dict):
+        payload = await self._request_json_object()
+        if payload is None:
             return jsonify({"success": False, "error": "请求内容必须是对象"}), 400
         user_id = str(payload.get("user_id") or "").strip()
         try:
@@ -296,7 +296,9 @@ class PluginWebApi:
     async def content_safety_term_add(self):
         if self.plugin.image_index is None:
             return self._unavailable("内容安全数据尚未初始化")
-        payload = await request.get_json(silent=True) or {}
+        payload = await self._request_json_object()
+        if payload is None:
+            return jsonify({"success": False, "error": "请求内容必须是对象"}), 400
         term = str(payload.get("term") or "").strip()
         if normalize_safety_text(term) in {
             normalize_safety_text(item) for item in BUILTIN_SAFETY_TERMS
@@ -313,7 +315,9 @@ class PluginWebApi:
     async def content_safety_term_remove(self):
         if self.plugin.image_index is None:
             return self._unavailable("内容安全数据尚未初始化")
-        payload = await request.get_json(silent=True) or {}
+        payload = await self._request_json_object()
+        if payload is None:
+            return jsonify({"success": False, "error": "请求内容必须是对象"}), 400
         term = str(payload.get("term") or "").strip()
         if normalize_safety_text(term) in {
             normalize_safety_text(item) for item in BUILTIN_SAFETY_TERMS
@@ -341,7 +345,9 @@ class PluginWebApi:
     async def image_blacklist_add(self):
         if self.plugin.image_index is None:
             return self._unavailable("作品黑名单尚未初始化")
-        payload = await request.get_json(silent=True) or {}
+        payload = await self._request_json_object()
+        if payload is None:
+            return jsonify({"success": False, "error": "请求内容必须是对象"}), 400
         illust_id = str(payload.get("illust_id") or "").strip()
         if not illust_id.isdigit() or int(illust_id) <= 0:
             return jsonify(
@@ -449,7 +455,9 @@ class PluginWebApi:
     async def image_blacklist_remove(self):
         if self.plugin.image_index is None:
             return self._unavailable("作品黑名单尚未初始化")
-        payload = await request.get_json(silent=True) or {}
+        payload = await self._request_json_object()
+        if payload is None:
+            return jsonify({"success": False, "error": "请求内容必须是对象"}), 400
         illust_id = str(payload.get("illust_id") or "").strip()
         if not illust_id.isdigit() or int(illust_id) <= 0:
             return jsonify(
@@ -471,7 +479,8 @@ class PluginWebApi:
         if path is None:
             return jsonify({"success": False, "error": "缩略图不存在"}), 404
         try:
-            encoded = base64.b64encode(path.read_bytes()).decode("ascii")
+            raw = await asyncio.to_thread(path.read_bytes)
+            encoded = base64.b64encode(raw).decode("ascii")
         except OSError as exc:
             return self.internal_error("读取黑名单缩略图", exc)
         return jsonify(
@@ -485,7 +494,9 @@ class PluginWebApi:
     async def image_blacklist_thumb_data_batch(self):
         if self.plugin.image_index is None:
             return self._unavailable("作品黑名单尚未初始化")
-        payload = await request.get_json(silent=True) or {}
+        payload = await self._request_json_object()
+        if payload is None:
+            return jsonify({"success": False, "error": "请求内容必须是对象"}), 400
         ids = self._normalize_request_ids(payload.get("ids"))
         if not ids:
             return jsonify({"success": True, "thumbs": {}, "missing": []})
@@ -602,6 +613,11 @@ class PluginWebApi:
         if not minimum <= parsed <= maximum:
             raise ValueError(f"参数范围必须是 {minimum} 至 {maximum}")
         return parsed
+
+    @staticmethod
+    async def _request_json_object() -> dict[str, Any] | None:
+        payload = await request.get_json(silent=True)
+        return payload if isinstance(payload, dict) else None
 
     @staticmethod
     def _parse_profile_integer(value: object, label: str) -> int:

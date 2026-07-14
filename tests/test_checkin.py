@@ -374,6 +374,31 @@ class CheckinStoreTest(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(remote.greeting, "Hitokoto greeting")
             self.assertEqual(remote.greeting_attribution, "毛不易 · 芬芳一生")
 
+    async def test_hitokoto_greeting_can_be_refreshed_without_reopening_upgrade(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            store = FrozenCheckinStore(tmp)
+            await store.checkin(user_id="10001", username="tester", bot_name="neko")
+            await store.update_record_content(
+                user_id="10001",
+                date_key="2026-05-26",
+                event_key="normal",
+                event_label="",
+                greeting="First greeting",
+                greeting_source="local",
+                secondary_note="",
+                template_version="v2",
+            )
+            refreshed = await store.refresh_record_greeting(
+                user_id="10001",
+                date_key="2026-05-26",
+                greeting="Second greeting",
+                greeting_source="hitokoto",
+                greeting_attribution="作者 · 来源",
+            )
+
+            self.assertEqual(refreshed.greeting, "Second greeting")
+            self.assertEqual(refreshed.greeting_attribution, "作者 · 来源")
+
     async def test_empty_ai_update_cannot_reopen_local_content_transition(self):
         with tempfile.TemporaryDirectory() as tmp:
             store = FrozenCheckinStore(tmp)

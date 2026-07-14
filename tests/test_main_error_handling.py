@@ -33,6 +33,7 @@ class _FakeEvent:
         self.fail_send = fail_send
         self.sent = []
         self.unified_msg_origin = "private:10001"
+        self.stopped = False
 
     def get_sender_id(self):
         return "10001"
@@ -57,6 +58,9 @@ class _FakeEvent:
         if self.fail_send:
             raise RuntimeError("send failed")
         self.sent.append(payload)
+
+    def stop_event(self):
+        self.stopped = True
 
 
 class _FailingClient:
@@ -271,6 +275,24 @@ class _ConcurrentCheckinStore(_FakeCheckinStore):
 
 
 class MainErrorHandlingTest(unittest.IsolatedAsyncioTestCase):
+    async def test_auto_trigger_stops_event_before_search(self):
+        plugin = object.__new__(GetPxPlugin)
+        plugin.config = {"auto_trigger_enabled": True}
+        plugin.client = object()
+        plugin._ensure_client_or_error = lambda _event: True
+
+        async def handle_search(_event, *, tag, count_str):
+            self.assertEqual(tag, "初音ミク")
+            self.assertEqual(count_str, "3")
+            yield "ok"
+
+        plugin._handle_search = handle_search
+        event = _FakeEvent()
+        event.get_message_str = lambda: "来三张初音ミク图"
+
+        self.assertEqual(await _collect(plugin.auto_trigger(event)), ["ok"])
+        self.assertTrue(event.stopped)
+
     def test_friendly_send_error_is_callable_through_plugin_instance(self):
         plugin = object.__new__(GetPxPlugin)
 

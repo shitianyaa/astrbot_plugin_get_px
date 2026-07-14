@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import asyncio
 from dataclasses import replace
 from datetime import date, timedelta
 from pathlib import Path
@@ -51,6 +50,7 @@ except ImportError:  # Direct imports used by the test suite.
 LOG_PREFIX = "[GetPx]"
 PLUGIN_NAME = "astrbot_plugin_get_px"
 MAX_CHECKIN_BACKUP_BYTES = 5 * 1024 * 1024
+MAX_CHECKIN_BACKUP_FILES = 50
 PLUGIN_ROOT = Path(__file__).resolve().parents[1]
 
 
@@ -85,10 +85,44 @@ class CheckinCommandMixin:
             try:
                 with file_path.open("x", encoding="utf-8") as handle:
                     handle.write(payload)
+                self._prune_checkin_backups(keep=file_path)
                 return file_path
             except FileExistsError:
                 continue
         raise RuntimeError("无法创建唯一的签到备份文件")
+
+    def _prune_checkin_backups(self, *, keep: Path | None = None) -> None:
+        backup_dir = self._checkin_backup_dir()
+        try:
+            candidates = sorted(
+                (
+                    item
+                    for item in backup_dir.glob("*.json")
+                    if item.is_file() and not item.name.startswith(".upload-")
+                ),
+                key=lambda item: (item.stat().st_mtime_ns, item.name),
+                reverse=True,
+            )
+        except OSError as exc:
+            logger.warning(f"{LOG_PREFIX} 签到备份扫描失败: {type(exc).__name__}")
+            return
+        retained = set(candidates[:MAX_CHECKIN_BACKUP_FILES])
+        if keep is not None:
+            retained.add(keep)
+        removed = 0
+        for item in candidates:
+            if item in retained:
+                continue
+            try:
+                item.unlink(missing_ok=True)
+                removed += 1
+            except OSError as exc:
+                logger.warning(
+                    f"{LOG_PREFIX} 签到旧备份清理失败: "
+                    f"file={item.name} error={type(exc).__name__}"
+                )
+        if removed:
+            logger.info(f"{LOG_PREFIX} 签到旧备份已清理: removed={removed}")
 
     async def _read_uploaded_file_bytes(self, upload) -> bytes:
         filename = str(getattr(upload, "filename", "") or "").strip() or "upload.json"
@@ -424,12 +458,17 @@ class CheckinCommandMixin:
             if preference.birthday_label:
                 source = "手动" if preference.birthday_source == "manual" else "QQ资料"
                 return f"当前签到生日: {preference.birthday_label}（{source}）"
-            parsed = await self._fetch_qq_birthday(event, user_id)
-            await self.checkin_store.mark_qq_birthday_checked(user_id)
-            if parsed is None:
-                return "用户未公开生日"
+            lookup = await self._fetch_qq_birthday(event, user_id)
+            if lookup.definitive:
+                await self.checkin_store.mark_qq_birthday_checked(user_id)
+            if lookup.value is None:
+                return (
+                    "用户未公开生日"
+                    if lookup.definitive
+                    else "QQ 生日读取失败，请稍后再试"
+                )
             preference = await self.checkin_store.set_qq_birthday_if_not_manual(
-                user_id=user_id, month=parsed[0], day=parsed[1]
+                user_id=user_id, month=lookup.value[0], day=lookup.value[1]
             )
             return f"当前签到生日: {preference.birthday_label}（QQ资料）"
         except ValueError as exc:
@@ -705,11 +744,7 @@ class CheckinCommandMixin:
             yield event.plain_result("无法识别用户 ID")
             return
         if not _flow_locked:
-            locks = getattr(self, "_checkin_flow_locks", None)
-            if locks is None:
-                locks = {}
-                self._checkin_flow_locks = locks
-            lock = locks.setdefault(user_id, asyncio.Lock())
+            lock = self._checkin_flow_lock(user_id)
             async with lock:
                 outputs = [
                     item
@@ -769,6 +804,7 @@ class CheckinCommandMixin:
 
             record = purchase.record
             profile = purchase.profile
+            record = await self._refresh_checkin_hitokoto(event, record)
             bot_name = self._cfg_str("checkin_bot_name", "neko") or "neko"
             user_title = await self._get_checkin_user_title(user_id)
             cache = getattr(self, "checkin_cache", None)

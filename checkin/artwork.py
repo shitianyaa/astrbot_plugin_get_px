@@ -219,10 +219,20 @@ class CheckinArtworkMixin:
                 recent_map = {}
                 self._checkin_preview_background_ids = recent_map
             now_monotonic = time.monotonic()
+            for recent_user_id, recent_items in list(recent_map.items()):
+                active_items = [
+                    (illust_id, created_at)
+                    for illust_id, created_at in recent_items
+                    if now_monotonic - created_at
+                    < CHECKIN_PREVIEW_BACKGROUND_TTL_SECONDS
+                ]
+                if active_items:
+                    recent_map[recent_user_id] = active_items[-20:]
+                else:
+                    recent_map.pop(recent_user_id, None)
             active_recent = [
                 (illust_id, created_at)
                 for illust_id, created_at in recent_map.get(record.user_id, ())
-                if now_monotonic - created_at < CHECKIN_PREVIEW_BACKGROUND_TTL_SECONDS
             ]
             recent_map[record.user_id] = active_recent
             preview_excluded_ids.update(item[0] for item in active_recent)

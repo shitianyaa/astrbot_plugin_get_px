@@ -5,7 +5,7 @@ import tempfile
 import unittest
 from pathlib import Path
 from types import SimpleNamespace
-from unittest.mock import patch
+from unittest.mock import AsyncMock, patch
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 
@@ -104,6 +104,9 @@ class CheckinBackgroundSelectionTest(unittest.IsolatedAsyncioTestCase):
     def test_custom_background_schema_recommends_portrait_contain_display(self):
         schema_path = Path(__file__).resolve().parents[1] / "_conf_schema.json"
         schema = json.loads(schema_path.read_text(encoding="utf-8"))
+
+        self.assertNotIn("checkin_background_aspect_ratio", schema)
+        self.assertNotIn("checkin_background_aspect_tolerance", schema)
         hint = schema["checkin_custom_background"]["hint"]
 
         for landscape_contract in ("16:9", "1920x1080", "960x540"):
@@ -237,6 +240,25 @@ class CheckinBackgroundSelectionTest(unittest.IsolatedAsyncioTestCase):
                 self.assertEqual(plugin.downloader.downgrade_limits, [0] * 3)
             finally:
                 plugin.image_index.close()
+
+    async def test_preview_background_prunes_expired_users(self):
+        plugin = object.__new__(GetPxPlugin)
+        plugin.config = {"checkin_background_mode": "pixiv_daily"}
+        plugin._checkin_preview_background_ids = {
+            "expired": [("1", 0.0)],
+        }
+        plugin._download_checkin_pixiv_background = AsyncMock(
+            return_value=CardBackground(mode="fallback", source="fallback")
+        )
+
+        await plugin._prepare_checkin_background(
+            FakeEvent(),
+            SimpleNamespace(date_key="2026-07-12", user_id="10001"),
+            claim_usage=False,
+            refresh_preview=True,
+        )
+
+        self.assertNotIn("expired", plugin._checkin_preview_background_ids)
 
     async def test_checkin_background_tries_remaining_configured_tags(self):
         with tempfile.TemporaryDirectory() as tmp:

@@ -54,7 +54,7 @@ CHECKIN_THEMES: dict[str, CheckinTheme] = {
         theme_id="03",
         name="黄黑",
         directory="checkin_card_liked/03_proxy_license",
-        template_version="proxy-v2",
+        template_version="proxy-v3",
         description="工业终端、警示条与战术 HUD",
         preview_image="templates/checkin_card_liked/03_proxy_license/preview.png",
     ),

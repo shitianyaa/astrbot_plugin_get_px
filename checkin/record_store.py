@@ -274,6 +274,30 @@ class RecordStoreMixin:
                 self.now_iso(),
             )
 
+    async def refresh_record_greeting(
+        self,
+        *,
+        user_id: str,
+        date_key: str,
+        greeting: str,
+        greeting_source: str,
+        greeting_attribution: str = "",
+    ) -> CheckinRecord:
+        """Refresh an already remote-generated greeting without reopening content upgrades."""
+        validated_source = _validate_greeting_source(greeting_source, "greeting_source")
+        if validated_source not in {"ai", "hitokoto"}:
+            raise ValueError("greeting_source must be ai or hitokoto")
+        async with self._lock:
+            return await asyncio.to_thread(
+                self._refresh_record_greeting_sync,
+                str(user_id or ""),
+                str(date_key or ""),
+                str(greeting or ""),
+                validated_source,
+                str(greeting_attribution or ""),
+                self.now_iso(),
+            )
+
     def _get_or_create_profile_sync(self, user_id: str) -> CheckinProfile:
         with closing(self._connect()) as conn:
             row = conn.execute(
@@ -812,6 +836,52 @@ class RecordStoreMixin:
                         secondary_note,
                         greeting_source,
                         greeting_source,
+                    ),
+                )
+                updated_row = conn.execute(
+                    """
+                    SELECT * FROM checkin_records
+                    WHERE user_id = ? AND date_key = ?
+                    """,
+                    (user_id, date_key),
+                ).fetchone()
+                if updated_row is None:
+                    raise ValueError("check-in record not found")
+                conn.commit()
+            except Exception:
+                conn.rollback()
+                raise
+        return self._row_to_record(updated_row)
+
+    def _refresh_record_greeting_sync(
+        self,
+        user_id: str,
+        date_key: str,
+        greeting: str,
+        greeting_source: str,
+        greeting_attribution: str,
+        now: str,
+    ) -> CheckinRecord:
+        if not user_id or not date_key:
+            raise ValueError("user_id and date_key are required")
+        with closing(self._connect()) as conn:
+            conn.execute("BEGIN IMMEDIATE")
+            try:
+                conn.execute(
+                    """
+                    UPDATE checkin_records
+                    SET greeting = ?, greeting_source = ?,
+                        greeting_attribution = ?, updated_at = ?
+                    WHERE user_id = ? AND date_key = ?
+                      AND greeting_source IN ('local', 'ai', 'hitokoto')
+                    """,
+                    (
+                        greeting,
+                        greeting_source,
+                        greeting_attribution,
+                        now,
+                        user_id,
+                        date_key,
                     ),
                 )
                 updated_row = conn.execute(

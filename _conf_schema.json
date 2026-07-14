@@ -110,19 +110,6 @@
     "default": "",
     "hint": "签到背景使用的 Pixiv 搜索标签；多个标签可用逗号、顿号、分号或换行分隔，每次签到随机确定尝试顺序，一个标签无可用候选时继续尝试下一个。留空时使用默认排行榜类型。"
   },
-  "checkin_background_aspect_ratio": {
-    "description": "签到背景图片比例",
-    "type": "string",
-    "default": "3:4",
-    "hint": "签到卡 V2 固定使用 3:4 竖向作品；当前值仅保留用于配置兼容，不会拓宽到横图或其他比例。"
-  },
-  "checkin_background_aspect_tolerance": {
-    "description": "签到背景比例容差",
-    "type": "float",
-    "default": 0.20,
-    "slider": {"min": 0, "max": 1, "step": 0.01},
-    "hint": "签到卡 V2 固定使用 0.20 容差，即接受宽高比闭区间 0.60–0.90；当前值仅保留用于配置兼容。"
-  },
   "checkin_custom_background": {
     "description": "签到自定义背景",
     "type": "string",

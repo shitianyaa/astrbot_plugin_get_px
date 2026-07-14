@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import asyncio
-from dataclasses import replace
+from dataclasses import dataclass, replace
 from pathlib import Path
 
 from astrbot.api.all import Image, Plain, logger
@@ -22,6 +22,12 @@ except ImportError:  # Direct imports used by the test suite.
 
 LOG_PREFIX = "[GetPx]"
 DEFAULT_AUTO_DOWNGRADE_ORIGINAL_LIMIT_MB = 3.0
+
+
+@dataclass(frozen=True)
+class QQBirthdayLookup:
+    value: tuple[int, int] | None
+    definitive: bool
 
 
 class CheckinApplicationMixin:
@@ -93,12 +99,8 @@ class CheckinApplicationMixin:
         group_id, group_name, platform = self._event_group_context(event)
 
         if not _flow_locked:
-            locks = getattr(self, "_checkin_flow_locks", None)
-            if locks is None:
-                locks = {}
-                self._checkin_flow_locks = locks
             lock_key = user_id
-            lock = locks.setdefault(lock_key, asyncio.Lock())
+            lock = self._checkin_flow_lock(lock_key)
             async with lock:
                 outputs = [
                     item
@@ -376,6 +378,41 @@ class CheckinApplicationMixin:
         )
         return greeting, source, ""
 
+    async def _refresh_checkin_hitokoto(
+        self, event: AstrMessageEvent, record: CheckinRecord
+    ) -> CheckinRecord:
+        """Refresh only the Hitokoto greeting, keeping the current greeting on failure."""
+        if self._checkin_greeting_mode() != "hitokoto":
+            return record
+        store = getattr(self, "checkin_store", None)
+        refresh = getattr(store, "refresh_record_greeting", None)
+        if not callable(refresh):
+            return record
+        try:
+            content, _title = await self._compose_checkin_content(
+                event,
+                record,
+                self._checkin_profile_from_record(record),
+                mutate_features=False,
+            )
+            greeting, source, attribution = await self.checkin_greeting.generate_hitokoto(
+                content.context,
+                timeout=self._cfg_float("checkin_hitokoto_timeout", 5.0, 1.0, 15.0),
+                categories=self.config.get("checkin_hitokoto_categories", ["全部"]),
+            )
+            if source != "hitokoto" or not greeting:
+                return record
+            return await refresh(
+                user_id=record.user_id,
+                date_key=record.date_key,
+                greeting=greeting,
+                greeting_source="hitokoto",
+                greeting_attribution=attribution,
+            )
+        except Exception as exc:
+            logger.warning(f"{LOG_PREFIX} 刷新签到一言失败，保留原问候: {exc}")
+            return record
+
     def _checkin_greeting_mode(self) -> str:
         mode = self._cfg_str("checkin_greeting_mode", "hitokoto").lower()
         return mode if mode in ("local", "hitokoto", "ai") else "hitokoto"
@@ -384,11 +421,12 @@ class CheckinApplicationMixin:
         preference = await self.checkin_store.get_user_preference(user_id)
         if preference.birthday_source == "manual" or preference.qq_birthday_checked:
             return preference
-        parsed = await self._fetch_qq_birthday(event, user_id)
-        await self.checkin_store.mark_qq_birthday_checked(user_id)
-        if parsed is not None:
+        lookup = await self._fetch_qq_birthday(event, user_id)
+        if lookup.definitive:
+            await self.checkin_store.mark_qq_birthday_checked(user_id)
+        if lookup.value is not None:
             return await self.checkin_store.set_qq_birthday_if_not_manual(
-                user_id=user_id, month=parsed[0], day=parsed[1]
+                user_id=user_id, month=lookup.value[0], day=lookup.value[1]
             )
         return await self.checkin_store.get_user_preference(user_id)
 
@@ -404,19 +442,19 @@ class CheckinApplicationMixin:
     @staticmethod
     async def _fetch_qq_birthday(
         event: AstrMessageEvent, user_id: str
-    ) -> tuple[int, int] | None:
+    ) -> QQBirthdayLookup:
         try:
             if event.get_platform_name() != "aiocqhttp":
                 logger.info(
                     f"{LOG_PREFIX} QQ 生日读取跳过: platform={event.get_platform_name()}"
                 )
-                return None
+                return QQBirthdayLookup(None, False)
             bot = getattr(event, "bot", None)
             if bot is None or not hasattr(bot, "call_action"):
                 logger.warning(
                     f"{LOG_PREFIX} QQ 生日读取失败: 当前事件不支持 call_action"
                 )
-                return None
+                return QQBirthdayLookup(None, False)
             payload = await asyncio.wait_for(
                 bot.call_action(
                     action="get_stranger_info",
@@ -430,16 +468,16 @@ class CheckinApplicationMixin:
                 logger.info(f"{LOG_PREFIX} QQ 生日未读取: 用户未公开生日")
             else:
                 logger.info(f"{LOG_PREFIX} QQ 生日读取成功: user_id={user_id}")
-            return parsed
+            return QQBirthdayLookup(parsed, True)
         except asyncio.TimeoutError:
             logger.warning(f"{LOG_PREFIX} QQ 生日读取超时: user_id={user_id}")
-            return None
+            return QQBirthdayLookup(None, False)
         except (TypeError, ValueError) as exc:
             logger.warning(f"{LOG_PREFIX} QQ 生日资料解析失败: {exc}")
-            return None
+            return QQBirthdayLookup(None, False)
         except Exception as exc:
             logger.warning(f"{LOG_PREFIX} QQ 生日读取异常: {exc}", exc_info=True)
-            return None
+            return QQBirthdayLookup(None, False)
 
     @staticmethod
     def _checkin_profile_from_record(record: CheckinRecord) -> CheckinProfile:
@@ -510,6 +548,6 @@ class CheckinApplicationMixin:
         return self.checkin_cache.cache_key(
             date_key=record.date_key,
             user_id=record.user_id,
-            template_version=record.template_version or "v2",
+            template_version=get_checkin_theme(record.theme_id).template_version,
             view_model=view_model,
         )

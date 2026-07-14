@@ -24,6 +24,7 @@ import asyncio
 from pathlib import Path
 import re
 import time
+import weakref
 
 from astrbot.api.all import AstrBotConfig, Image, logger
 from astrbot.api.event import AstrMessageEvent, filter
@@ -118,7 +119,9 @@ class GetPxPlugin(
         self.checkin_greeting = CheckinGreetingGenerator(context)
         self.holiday_calendar: HolidayCalendar | None = None
         self._holiday_refresh_task: asyncio.Task | None = None
-        self._checkin_flow_locks: dict[str, asyncio.Lock] = {}
+        self._checkin_flow_locks: weakref.WeakValueDictionary[
+            str, asyncio.Lock
+        ] = weakref.WeakValueDictionary()
 
     # ──────────────────────────────────────────────────────────────
     # 生命周期
@@ -191,7 +194,11 @@ class GetPxPlugin(
             return
 
         proxy = self._cfg_str("pixiv_proxy_url")
-        self.client = PixivClient(refresh_token=token, proxy=proxy)
+        self.client = PixivClient(
+            refresh_token=token,
+            proxy=proxy,
+            request_timeout=self._cfg_float("request_timeout", 30.0, 5.0, 120.0),
+        )
         logger.info(f"{LOG_PREFIX} 客户端已初始化")
 
     def _web_api(self) -> PluginWebApi:
@@ -222,6 +229,9 @@ class GetPxPlugin(
             self.client = None
         await self.downloader.close()
         self._last_request.clear()
+        locks = getattr(self, "_checkin_flow_locks", None)
+        if locks is not None:
+            locks.clear()
         if self.image_index is not None:
             self.image_index.close()
         self.image_index = None
@@ -505,6 +515,8 @@ class GetPxPlugin(
         if not match:
             return
 
+        event.stop_event()
+
         count_part = match.group(2).strip() if match.group(2) else ""
         tag_part = (match.group(4) or "").strip()
 
@@ -609,12 +621,30 @@ class GetPxPlugin(
         if rate_limit <= 0:
             return 0
         now = time.monotonic()
+        if len(self._last_request) > 1024:
+            cutoff = now - max(float(rate_limit) * 2, 60.0)
+            self._last_request = {
+                key: timestamp
+                for key, timestamp in self._last_request.items()
+                if timestamp >= cutoff
+            }
         last = self._last_request.get(user_id, 0.0)
         elapsed = now - last
         if elapsed < rate_limit:
             return int(rate_limit - elapsed) + 1
         self._last_request[user_id] = now
         return 0
+
+    def _checkin_flow_lock(self, user_id: str) -> asyncio.Lock:
+        locks = getattr(self, "_checkin_flow_locks", None)
+        if locks is None:
+            locks = weakref.WeakValueDictionary()
+            self._checkin_flow_locks = locks
+        lock = locks.get(user_id)
+        if lock is None:
+            lock = asyncio.Lock()
+            locks[user_id] = lock
+        return lock
 
     # ──────────────────────────────────────────────────────────────
     # 配置读取（带类型校验）

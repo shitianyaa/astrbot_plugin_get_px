@@ -6,7 +6,7 @@ import unittest
 from io import BytesIO
 from pathlib import Path
 from types import SimpleNamespace
-from unittest.mock import AsyncMock
+from unittest.mock import AsyncMock, Mock
 
 from PIL import Image
 
@@ -219,6 +219,32 @@ class CheckinCardRenderQualityTest(unittest.IsolatedAsyncioTestCase):
             quality_98 = plugin._checkin_card_cache_key(SimpleNamespace(), **kwargs)
 
             self.assertNotEqual(quality_80, quality_98)
+
+    def test_current_theme_version_invalidates_an_older_daily_cache(self):
+        plugin = object.__new__(GetPxPlugin)
+        plugin.config = {
+            "checkin_avatar_enabled": False,
+            "checkin_card_quality": 95,
+        }
+        plugin.checkin_cache = SimpleNamespace(cache_key=Mock(return_value="cache-key"))
+
+        result = plugin._checkin_card_cache_key(
+            SimpleNamespace(),
+            profile=_profile(),
+            record=replace(
+                _record(),
+                theme_id="03",
+                template_version="proxy-v2",
+            ),
+            background=None,
+            bot_name="neko",
+        )
+
+        self.assertEqual(result, "cache-key")
+        self.assertEqual(
+            plugin.checkin_cache.cache_key.call_args.kwargs["template_version"],
+            "proxy-v3",
+        )
 
 
 if __name__ == "__main__":

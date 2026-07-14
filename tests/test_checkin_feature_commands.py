@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 from contextlib import closing
 import sqlite3
 import sys
@@ -79,13 +80,34 @@ async def test_automatic_birthday_is_attempted_only_once() -> None:
 
 
 @pytest.mark.asyncio
-async def test_non_onebot_birthday_marks_attempt_without_platform_call() -> None:
+async def test_non_onebot_birthday_does_not_mark_attempt() -> None:
     with tempfile.TemporaryDirectory() as tmp:
         plugin = make_plugin(tmp)
         event = FakeEvent(platform="webchat")
         preference = await plugin._ensure_checkin_birthday(event, "10001")
-        assert preference.qq_birthday_checked
+        assert not preference.qq_birthday_checked
         event.bot.call_action.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_temporary_birthday_failure_is_retried() -> None:
+    with tempfile.TemporaryDirectory() as tmp:
+        plugin = make_plugin(tmp)
+        event = FakeEvent()
+        event.bot.call_action = AsyncMock(
+            side_effect=[
+                asyncio.TimeoutError,
+                {"birthday_year": 2000, "birthday_month": 7, "birthday_day": 11},
+            ]
+        )
+
+        first = await plugin._ensure_checkin_birthday(event, "10001")
+        second = await plugin._ensure_checkin_birthday(event, "10001")
+
+        assert not first.qq_birthday_checked
+        assert second.qq_birthday_checked
+        assert second.birthday_label == "07-11"
+        assert event.bot.call_action.await_count == 2
 
 
 @pytest.mark.asyncio
@@ -174,6 +196,44 @@ async def test_background_refresh_requires_today_checkin() -> None:
             item async for item in plugin._handle_refresh_checkin_background(event)
         ]
         assert outputs == ["请先完成今天的签到，再更新背景"]
+
+
+@pytest.mark.asyncio
+async def test_background_refresh_refreshes_hitokoto_greeting() -> None:
+    with tempfile.TemporaryDirectory() as tmp:
+        plugin = make_plugin(tmp)
+        plugin.config = {
+            "checkin_greeting_mode": "hitokoto",
+            "checkin_hitokoto_categories": ["全部"],
+            "checkin_hitokoto_timeout": 5.0,
+        }
+        plugin.checkin_greeting = SimpleNamespace(
+            generate_hitokoto=AsyncMock(
+                return_value=("刷新后的一言", "hitokoto", "作者 · 来源")
+            )
+        )
+        event = FakeEvent()
+        await plugin.checkin_store.checkin(
+            user_id="10001", username="测试用户", bot_name="neko"
+        )
+        await plugin.checkin_store.update_record_content(
+            user_id="10001",
+            date_key=plugin.checkin_store.today_key(),
+            event_key="normal",
+            event_label="",
+            greeting="原始一言",
+            greeting_source="local",
+            secondary_note="",
+            template_version="v2",
+        )
+        record = await plugin.checkin_store.get_today_record("10001")
+
+        refreshed = await plugin._refresh_checkin_hitokoto(event, record)
+
+        assert refreshed.greeting == "刷新后的一言"
+        assert refreshed.greeting_source == "hitokoto"
+        assert refreshed.greeting_attribution == "作者 · 来源"
+        assert plugin.checkin_greeting.generate_hitokoto.await_count == 1
 
 
 @pytest.mark.asyncio

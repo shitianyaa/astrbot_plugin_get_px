@@ -185,4 +185,16 @@ class SchemaMixin:
                 ON checkin_group_presence (group_id, date_key, first_seen_at)
                 """
             )
+            conn.execute(
+                """
+                CREATE INDEX IF NOT EXISTS idx_checkin_records_member_updated
+                ON checkin_records (user_id, updated_at)
+                """
+            )
+            conn.execute(
+                """
+                CREATE INDEX IF NOT EXISTS idx_checkin_group_presence_member_seen
+                ON checkin_group_presence (user_id, last_seen_at)
+                """
+            )
             conn.commit()

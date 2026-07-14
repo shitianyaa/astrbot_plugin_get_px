@@ -40,7 +40,7 @@
 
 ### 配置
 - 新增 `checkin_greeting_mode`、`checkin_hitokoto_categories`、`checkin_hitokoto_timeout`、`checkin_ai_greeting_provider_id`、`checkin_ai_greeting_prompt`、`checkin_ai_greeting_timeout`。
-- `checkin_background_aspect_ratio` 与 `checkin_background_aspect_tolerance` 默认值更新为 `3:4` 和 `0.20`，仅保留配置兼容，不再控制 V2 的固定竖向契约。
+- 移除已不再生效的 `checkin_background_aspect_ratio` 与 `checkin_background_aspect_tolerance` 设置项；签到背景比例继续由 V2 固定契约控制。
 
 ## v2.6.1 (2026-06-04)
 
@@ -119,7 +119,7 @@
 
 ### 🐛 修复
 - 修复自动触发未生效：`super().__init__` 需传入 `config` 参数
-- 移除自动触发中的 `event.stop_event()` 调用
+- 自动触发命中后消费事件，避免同一消息继续被其他处理器重复处理
 - 正则改为必须以「图」结尾，避免「来份外卖」等误触发
 
 ### 📝 配置

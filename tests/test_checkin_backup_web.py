@@ -15,6 +15,7 @@ from astrbot_plugin_get_px.checkin import CheckinStore  # noqa: E402
 from astrbot_plugin_get_px.checkin import dump_checkin_snapshot_json  # noqa: E402
 from astrbot_plugin_get_px.checkin.commands import (  # noqa: E402
     MAX_CHECKIN_BACKUP_BYTES,
+    MAX_CHECKIN_BACKUP_FILES,
 )
 from astrbot_plugin_get_px.main import GetPxPlugin  # noqa: E402
 
@@ -46,6 +47,21 @@ class _FakeEvent:
 
 
 class CheckinBackupWebTest(unittest.IsolatedAsyncioTestCase):
+    async def test_backup_retention_is_bounded(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            plugin = object.__new__(GetPxPlugin)
+            plugin.data_dir = Path(tmp)
+            plugin.checkin_store = FrozenCheckinStore(tmp)
+            snapshot = await plugin.checkin_store.export_snapshot()
+
+            for index in range(MAX_CHECKIN_BACKUP_FILES + 5):
+                plugin._write_checkin_snapshot_file(
+                    snapshot, prefix=f"checkin-export-{index}"
+                )
+
+            backups = list((Path(tmp) / "checkin_backups").glob("*.json"))
+            self.assertEqual(len(backups), MAX_CHECKIN_BACKUP_FILES)
+
     async def test_uploaded_snapshot_stops_reading_after_size_limit(self):
         class OversizedStream(io.BytesIO):
             pass

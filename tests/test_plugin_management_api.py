@@ -132,6 +132,41 @@ async def test_management_api_validates_ranking_and_illustration_ids() -> None:
 
 
 @pytest.mark.asyncio
+async def test_management_api_rejects_non_object_json_payloads() -> None:
+    with tempfile.TemporaryDirectory() as tmp:
+        plugin = build_plugin(tmp)
+        api = PluginWebApi(
+            plugin,
+            plugin_name="astrbot_plugin_get_px",
+            log_prefix="[GetPx]",
+            internal_error_message="internal",
+        )
+        app = Quart(__name__)
+        routes = {
+            "/term/add": api.content_safety_term_add,
+            "/term/remove": api.content_safety_term_remove,
+            "/blacklist/add": api.image_blacklist_add,
+            "/blacklist/remove": api.image_blacklist_remove,
+            "/thumbs": api.image_blacklist_thumb_data_batch,
+        }
+        for path, handler in routes.items():
+            app.add_url_rule(path, view_func=handler, methods=["POST"])
+        try:
+            async with app.test_app():
+                client = app.test_client()
+                responses = [
+                    await client.post(path, json=["invalid"])
+                    for path in routes
+                ]
+                payloads = [await response.get_json() for response in responses]
+
+            assert all(response.status_code == 400 for response in responses)
+            assert all(payload["error"] == "请求内容必须是对象" for payload in payloads)
+        finally:
+            plugin.image_index.close()
+
+
+@pytest.mark.asyncio
 async def test_manual_blacklist_fetches_metadata_and_safe_thumbnail() -> None:
     with tempfile.TemporaryDirectory() as tmp:
         plugin = build_plugin(tmp)

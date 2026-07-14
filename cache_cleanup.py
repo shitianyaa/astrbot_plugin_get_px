@@ -36,7 +36,13 @@ def cleanup_legacy_caches(data_dir: Path | str) -> CacheCleanupSummary:
 
     for name in LEGACY_CACHE_TARGETS:
         try:
-            target = (root / name).resolve()
+            raw_target = root / name
+            if _is_link(raw_target):
+                _remove_link(raw_target)
+                cleaned += 1
+                logger.info(f"{LOG_PREFIX} 缓存链接已清理: target={name}")
+                continue
+            target = raw_target.resolve()
             target.relative_to(root)
             if target == root:
                 raise ValueError("cache target resolves to data root")
@@ -68,6 +74,21 @@ def cleanup_legacy_caches(data_dir: Path | str) -> CacheCleanupSummary:
         f"failed={failed} files={files} bytes={total_bytes}"
     )
     return summary
+
+
+def _is_link(path: Path) -> bool:
+    if path.is_symlink():
+        return True
+    is_junction = getattr(path, "is_junction", None)
+    return bool(callable(is_junction) and is_junction())
+
+
+def _remove_link(path: Path) -> None:
+    is_junction = getattr(path, "is_junction", None)
+    if callable(is_junction) and is_junction() and not path.is_symlink():
+        path.rmdir()
+    else:
+        path.unlink(missing_ok=True)
 
 
 def _measure_tree(path: Path) -> tuple[int, int]:

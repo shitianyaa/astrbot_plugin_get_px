@@ -88,6 +88,32 @@ class PixivClientIllustDetailTest(unittest.IsolatedAsyncioTestCase):
         with self.assertRaises(RuntimeError):
             await client.illust_detail(123)
 
+    async def test_request_timeout_releases_active_call(self):
+        class HangingApi(_FakeApi):
+            async def illust_detail(self, _illust_id):
+                await asyncio.Event().wait()
+
+        client = PixivClient("token", request_timeout=0.01)
+        client._api = HangingApi()
+        client._cached_token = "token"
+        client._expires_at = time.monotonic() + 300
+
+        with self.assertRaisesRegex(TimeoutError, "作品详情请求超时"):
+            await client.illust_detail(123)
+
+        self.assertEqual(client._active_calls, 0)
+
+    async def test_close_timeout_forces_api_close(self):
+        api = _FakeApi()
+        client = _logged_in_client(api)
+        client.close_timeout = 0.01
+        client._active_calls = 1
+
+        await client.close()
+
+        self.assertTrue(api.closed)
+        self.assertIsNone(client.api)
+
 
 if __name__ == "__main__":
     unittest.main()
