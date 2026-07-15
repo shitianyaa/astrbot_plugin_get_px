@@ -31,7 +31,7 @@ class CheckinCardCacheTest(unittest.IsolatedAsyncioTestCase):
         self.key = self.cache.cache_key(
             date_key=self.date_key,
             user_id="10001",
-            template_version="v2",
+            template_version="default:1",
             view_model={"greeting": "今天也见面了", "badges": ["夏日", "连签5天"]},
         )
 
@@ -42,7 +42,7 @@ class CheckinCardCacheTest(unittest.IsolatedAsyncioTestCase):
         kwargs = {
             "date_key": self.date_key,
             "user_id": "10001",
-            "template_version": "v2",
+            "template_version": "default:1",
             "view_model": {"badges": ["夏日"], "greeting": "你好"},
         }
         first = self.cache.cache_key(**kwargs)

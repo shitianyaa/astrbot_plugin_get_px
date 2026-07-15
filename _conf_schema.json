@@ -97,13 +97,6 @@
     "slider": {"min": 0, "max": 500, "step": 10},
     "hint": "用户完成当天签到后，使用 /刷新签到背景 重新抽取 Pixiv 背景所需金币。设为 0 表示免费。"
   },
-  "checkin_theme_price": {
-    "description": "签到主题统一价格",
-    "type": "int",
-    "default": 1500,
-    "slider": {"min": 0, "max": 5000, "step": 100},
-    "hint": "每套非默认签到主题的购买价格。默认米白始终免费。"
-  },
   "checkin_background_tag": {
     "description": "签到 Pixiv 背景标签",
     "type": "string",

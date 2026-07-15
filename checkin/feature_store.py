@@ -95,27 +95,20 @@ class FeatureStoreMixin:
         *,
         user_id: str,
         theme_id: str,
-        cost: int,
-        template_version: str,
     ) -> ThemePurchaseResult:
         async with self._lock:
             return await asyncio.to_thread(
                 self._purchase_theme_sync,
                 str(user_id or ""),
                 str(theme_id or ""),
-                max(0, int(cost)),
-                str(template_version or ""),
             )
 
-    async def select_theme(
-        self, *, user_id: str, theme_id: str, template_version: str
-    ) -> str:
+    async def select_theme(self, *, user_id: str, theme_id: str) -> str:
         async with self._lock:
             return await asyncio.to_thread(
                 self._select_theme_sync,
                 str(user_id or ""),
                 str(theme_id or ""),
-                str(template_version or ""),
             )
 
     async def add_global_event(
@@ -158,21 +151,29 @@ class FeatureStoreMixin:
         with closing(self._connect()) as conn:
             conn.execute(
                 """
-                INSERT OR IGNORE INTO checkin_user_preferences
+                INSERT OR IGNORE INTO checkin_users
                 (user_id, created_at, updated_at) VALUES (?, ?, ?)
                 """,
                 (user_id, now, now),
             )
+            conn.execute(
+                """
+                INSERT OR IGNORE INTO checkin_user_themes
+                    (user_id, theme_id, price_paid, acquired_at)
+                VALUES (?, 'default', 0, ?)
+                """,
+                (user_id, now),
+            )
             conn.commit()
             row = conn.execute(
-                "SELECT * FROM checkin_user_preferences WHERE user_id = ?", (user_id,)
+                "SELECT * FROM checkin_users WHERE user_id = ?", (user_id,)
             ).fetchone()
         return self._row_to_preference(row)
 
     def _find_preference_sync(self, user_id: str) -> CheckinUserPreference | None:
         with closing(self._connect()) as conn:
             row = conn.execute(
-                "SELECT * FROM checkin_user_preferences WHERE user_id = ?",
+                "SELECT * FROM checkin_users WHERE user_id = ?",
                 (user_id,),
             ).fetchone()
         return self._row_to_preference(row) if row is not None else None
@@ -185,7 +186,7 @@ class FeatureStoreMixin:
         with closing(self._connect()) as conn:
             conn.execute(
                 """
-                UPDATE checkin_user_preferences
+                UPDATE checkin_users
                 SET birthday_month = ?, birthday_day = ?, birthday_source = ?,
                     qq_birthday_checked = 1, updated_at = ? WHERE user_id = ?
                 """,
@@ -202,7 +203,7 @@ class FeatureStoreMixin:
             conn.execute("BEGIN IMMEDIATE")
             conn.execute(
                 """
-                UPDATE checkin_user_preferences
+                UPDATE checkin_users
                 SET birthday_month = ?, birthday_day = ?, birthday_source = 'qq',
                     qq_birthday_checked = 1, updated_at = ?
                 WHERE user_id = ? AND birthday_source != 'manual'
@@ -217,7 +218,7 @@ class FeatureStoreMixin:
         with closing(self._connect()) as conn:
             conn.execute(
                 """
-                UPDATE checkin_user_preferences SET birthday_month = 0,
+                UPDATE checkin_users SET birthday_month = 0,
                     birthday_day = 0, birthday_source = '', qq_birthday_checked = 0,
                     updated_at = ? WHERE user_id = ?
                 """,
@@ -230,7 +231,7 @@ class FeatureStoreMixin:
         self._get_or_create_preference_sync(user_id)
         with closing(self._connect()) as conn:
             conn.execute(
-                "UPDATE checkin_user_preferences SET qq_birthday_checked = 1, updated_at = ? WHERE user_id = ?",
+                "UPDATE checkin_users SET qq_birthday_checked = 1, updated_at = ? WHERE user_id = ?",
                 (self.now_iso(), user_id),
             )
             conn.commit()
@@ -255,13 +256,21 @@ class FeatureStoreMixin:
                 if changed:
                     unlocked.append(achievement_id)
             preference = conn.execute(
-                "SELECT selected_title_id FROM checkin_user_preferences WHERE user_id = ?",
+                "SELECT selected_title_id FROM checkin_users WHERE user_id = ?",
                 (profile.user_id,),
             ).fetchone()
             if preference is None:
                 conn.execute(
-                    "INSERT INTO checkin_user_preferences (user_id, created_at, updated_at) VALUES (?, ?, ?)",
+                    "INSERT INTO checkin_users (user_id, created_at, updated_at) VALUES (?, ?, ?)",
                     (profile.user_id, now, now),
+                )
+                conn.execute(
+                    """
+                    INSERT INTO checkin_user_themes
+                        (user_id, theme_id, price_paid, acquired_at)
+                    VALUES (?, 'default', 0, ?)
+                    """,
+                    (profile.user_id, now),
                 )
                 selected = ""
             else:
@@ -281,7 +290,7 @@ class FeatureStoreMixin:
             )
             if not selected and auto_title_id:
                 conn.execute(
-                    "UPDATE checkin_user_preferences SET selected_title_id = ?, updated_at = ? WHERE user_id = ?",
+                    "UPDATE checkin_users SET selected_title_id = ?, updated_at = ? WHERE user_id = ?",
                     (auto_title_id, now, profile.user_id),
                 )
             conn.commit()
@@ -311,7 +320,7 @@ class FeatureStoreMixin:
         self._get_or_create_preference_sync(user_id)
         with closing(self._connect()) as conn:
             conn.execute(
-                "UPDATE checkin_user_preferences SET selected_title_id = ?, updated_at = ? WHERE user_id = ?",
+                "UPDATE checkin_users SET selected_title_id = ?, updated_at = ? WHERE user_id = ?",
                 (title_id, self.now_iso(), user_id),
             )
             conn.commit()
@@ -319,22 +328,22 @@ class FeatureStoreMixin:
 
     def _list_owned_theme_ids_sync(self, user_id: str) -> tuple[str, ...]:
         if not user_id:
-            return ("default",)
+            return ()
+        self._get_or_create_preference_sync(user_id)
         with closing(self._connect()) as conn:
             rows = conn.execute(
-                "SELECT theme_id FROM checkin_theme_purchases "
-                "WHERE user_id = ? ORDER BY purchased_at, theme_id",
+                """
+                SELECT owned.theme_id
+                FROM checkin_user_themes AS owned
+                JOIN checkin_themes AS theme ON theme.theme_id = owned.theme_id
+                WHERE owned.user_id = ? AND theme.enabled = 1
+                ORDER BY theme.sort_order, owned.acquired_at
+                """,
                 (user_id,),
             ).fetchall()
-        return ("default",) + tuple(str(row["theme_id"]) for row in rows)
+        return tuple(str(row["theme_id"]) for row in rows)
 
-    def _purchase_theme_sync(
-        self,
-        user_id: str,
-        theme_id: str,
-        cost: int,
-        template_version: str,
-    ) -> ThemePurchaseResult:
+    def _purchase_theme_sync(self, user_id: str, theme_id: str) -> ThemePurchaseResult:
         if not user_id:
             raise ValueError("user_id is required")
         if not theme_id or theme_id == "default":
@@ -346,7 +355,7 @@ class FeatureStoreMixin:
             try:
                 conn.execute(
                     """
-                    INSERT OR IGNORE INTO checkin_profiles (
+                    INSERT OR IGNORE INTO checkin_users (
                         user_id, coins, affection, total_days, streak_days,
                         last_checkin_date, boost_start_date, boost_until_date,
                         repeat_penalty_date, repeat_penalty_total,
@@ -358,25 +367,36 @@ class FeatureStoreMixin:
                 )
                 conn.execute(
                     """
-                    INSERT OR IGNORE INTO checkin_user_preferences
-                    (user_id, selected_theme_id, created_at, updated_at)
-                    VALUES (?, 'default', ?, ?)
+                    INSERT OR IGNORE INTO checkin_user_themes
+                        (user_id, theme_id, price_paid, acquired_at)
+                    VALUES (?, 'default', 0, ?)
                     """,
-                    (user_id, now, now),
+                    (user_id, now),
                 )
+                theme_row = conn.execute(
+                    """
+                    SELECT price, version FROM checkin_themes
+                    WHERE theme_id = ? AND enabled = 1
+                    """,
+                    (theme_id,),
+                ).fetchone()
+                if theme_row is None:
+                    raise ValueError("未知或已停用的主题")
+                cost = int(theme_row["price"] or 0)
+                template_version = f"{theme_id}:{int(theme_row['version'] or 1)}"
                 profile_row = conn.execute(
-                    "SELECT * FROM checkin_profiles WHERE user_id = ?",
+                    "SELECT * FROM checkin_users WHERE user_id = ?",
                     (user_id,),
                 ).fetchone()
                 existing = conn.execute(
-                    "SELECT 1 FROM checkin_theme_purchases "
+                    "SELECT 1 FROM checkin_user_themes "
                     "WHERE user_id = ? AND theme_id = ?",
                     (user_id, theme_id),
                 ).fetchone()
                 if existing is not None:
                     conn.execute(
-                        "UPDATE checkin_user_preferences "
-                        "SET selected_theme_id = ?, updated_at = ? WHERE user_id = ?",
+                        "UPDATE checkin_users "
+                        "SET current_theme_id = ?, updated_at = ? WHERE user_id = ?",
                         (theme_id, now, user_id),
                     )
                     conn.execute(
@@ -409,21 +429,21 @@ class FeatureStoreMixin:
                     )
                 remaining = coins - cost
                 conn.execute(
-                    "UPDATE checkin_profiles SET coins = ?, updated_at = ? "
+                    "UPDATE checkin_users SET coins = ?, updated_at = ? "
                     "WHERE user_id = ?",
                     (remaining, now, user_id),
                 )
                 conn.execute(
                     """
-                    INSERT INTO checkin_theme_purchases
-                    (user_id, theme_id, cost, purchased_at)
+                    INSERT INTO checkin_user_themes
+                    (user_id, theme_id, price_paid, acquired_at)
                     VALUES (?, ?, ?, ?)
                     """,
                     (user_id, theme_id, cost, now),
                 )
                 conn.execute(
-                    "UPDATE checkin_user_preferences "
-                    "SET selected_theme_id = ?, updated_at = ? WHERE user_id = ?",
+                    "UPDATE checkin_users "
+                    "SET current_theme_id = ?, updated_at = ? WHERE user_id = ?",
                     (theme_id, now, user_id),
                 )
                 conn.execute(
@@ -443,7 +463,7 @@ class FeatureStoreMixin:
                     ),
                 )
                 updated_row = conn.execute(
-                    "SELECT * FROM checkin_profiles WHERE user_id = ?",
+                    "SELECT * FROM checkin_users WHERE user_id = ?",
                     (user_id,),
                 ).fetchone()
                 conn.commit()
@@ -459,29 +479,31 @@ class FeatureStoreMixin:
             f"购买成功，消耗 {cost} 金币并已切换主题。",
         )
 
-    def _select_theme_sync(
-        self, user_id: str, theme_id: str, template_version: str
-    ) -> str:
+    def _select_theme_sync(self, user_id: str, theme_id: str) -> str:
         if not user_id:
             raise ValueError("user_id is required")
         if not theme_id:
             raise ValueError("theme_id is required")
-        if theme_id != "default":
-            with closing(self._connect()) as conn:
-                owned = conn.execute(
-                    "SELECT 1 FROM checkin_theme_purchases "
-                    "WHERE user_id = ? AND theme_id = ?",
-                    (user_id, theme_id),
-                ).fetchone()
-            if owned is None:
-                raise ValueError("该主题尚未购买")
         self._get_or_create_preference_sync(user_id)
         now = self.now_iso()
         with closing(self._connect()) as conn:
             conn.execute("BEGIN IMMEDIATE")
+            theme_row = conn.execute(
+                "SELECT version FROM checkin_themes WHERE theme_id = ? AND enabled = 1",
+                (theme_id,),
+            ).fetchone()
+            if theme_row is None:
+                raise ValueError("未知或已停用的主题")
+            owned = conn.execute(
+                "SELECT 1 FROM checkin_user_themes WHERE user_id = ? AND theme_id = ?",
+                (user_id, theme_id),
+            ).fetchone()
+            if owned is None:
+                raise ValueError("该主题尚未购买")
+            template_version = f"{theme_id}:{int(theme_row['version'] or 1)}"
             conn.execute(
-                "UPDATE checkin_user_preferences "
-                "SET selected_theme_id = ?, updated_at = ? WHERE user_id = ?",
+                "UPDATE checkin_users "
+                "SET current_theme_id = ?, updated_at = ? WHERE user_id = ?",
                 (theme_id, now, user_id),
             )
             conn.execute(
@@ -559,7 +581,7 @@ class FeatureStoreMixin:
             selected_title_id=str(row["selected_title_id"] or ""),
             created_at=str(row["created_at"] or ""),
             updated_at=str(row["updated_at"] or ""),
-            selected_theme_id=str(row["selected_theme_id"] or "default"),
+            current_theme_id=str(row["current_theme_id"] or "default"),
         )
 
     @staticmethod

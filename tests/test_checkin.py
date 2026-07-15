@@ -113,82 +113,6 @@ class CheckinStoreTest(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(last.penalty_total_today, 0)
             self.assertEqual(last.penalty_amount, 0)
 
-    async def test_legacy_database_adds_card_content_columns_with_defaults(self):
-        with tempfile.TemporaryDirectory() as tmp:
-            db_path = Path(tmp) / "checkin.sqlite3"
-            with closing(sqlite3.connect(db_path)) as conn:
-                conn.execute(
-                    """
-                    CREATE TABLE checkin_records (
-                        date_key TEXT NOT NULL,
-                        user_id TEXT NOT NULL,
-                        username TEXT NOT NULL DEFAULT '',
-                        bot_name TEXT NOT NULL DEFAULT '',
-                        base_coins INTEGER NOT NULL DEFAULT 0,
-                        bonus_coins INTEGER NOT NULL DEFAULT 0,
-                        coins_reward INTEGER NOT NULL DEFAULT 0,
-                        base_affection REAL NOT NULL DEFAULT 0,
-                        bonus_affection REAL NOT NULL DEFAULT 0,
-                        affection_reward REAL NOT NULL DEFAULT 0,
-                        boost_active INTEGER NOT NULL DEFAULT 0,
-                        boost_multiplier REAL NOT NULL DEFAULT 1,
-                        total_coins_after INTEGER NOT NULL DEFAULT 0,
-                        total_affection_after REAL NOT NULL DEFAULT 0,
-                        total_days_after INTEGER NOT NULL DEFAULT 0,
-                        streak_days_after INTEGER NOT NULL DEFAULT 0,
-                        note TEXT NOT NULL DEFAULT '',
-                        background_mode TEXT NOT NULL DEFAULT '',
-                        background_source TEXT NOT NULL DEFAULT '',
-                        background_illust_id TEXT NOT NULL DEFAULT '',
-                        background_title TEXT NOT NULL DEFAULT '',
-                        background_author TEXT NOT NULL DEFAULT '',
-                        created_at TEXT NOT NULL,
-                        updated_at TEXT NOT NULL,
-                        PRIMARY KEY (date_key, user_id)
-                    )
-                    """
-                )
-                conn.execute(
-                    """
-                    INSERT INTO checkin_records (
-                        date_key, user_id, created_at, updated_at
-                    ) VALUES (?, ?, ?, ?)
-                    """,
-                    (
-                        "2026-05-26",
-                        "10001",
-                        "2026-05-26T12:00:00+08:00",
-                        "2026-05-26T12:00:00+08:00",
-                    ),
-                )
-                conn.commit()
-
-            store = FrozenCheckinStore(tmp)
-
-            with closing(sqlite3.connect(db_path)) as conn:
-                columns = {
-                    row[1] for row in conn.execute("PRAGMA table_info(checkin_records)")
-                }
-            self.assertTrue(
-                {
-                    "event_key",
-                    "event_label",
-                    "greeting",
-                    "greeting_source",
-                    "secondary_note",
-                    "template_version",
-                }.issubset(columns)
-            )
-
-            record = await store.get_today_record("10001")
-            self.assertIsNotNone(record)
-            self.assertEqual(record.event_key, "")
-            self.assertEqual(record.event_label, "")
-            self.assertEqual(record.greeting, "")
-            self.assertEqual(record.greeting_source, "local")
-            self.assertEqual(record.secondary_note, "")
-            self.assertEqual(record.template_version, "v2")
-
     async def test_record_content_persists_once_and_only_local_can_upgrade_to_ai(self):
         with tempfile.TemporaryDirectory() as tmp:
             store = FrozenCheckinStore(tmp)
@@ -196,7 +120,7 @@ class CheckinStoreTest(unittest.IsolatedAsyncioTestCase):
                 user_id="10001", username="tester", bot_name="neko"
             )
             self.assertEqual(checked.record.greeting_source, "local")
-            self.assertEqual(checked.record.template_version, "v2")
+            self.assertEqual(checked.record.template_version, "default:1")
 
             local = await store.update_record_content(
                 user_id="10001",
@@ -206,7 +130,7 @@ class CheckinStoreTest(unittest.IsolatedAsyncioTestCase):
                 greeting="Local greeting",
                 greeting_source="local",
                 secondary_note="Local note",
-                template_version="v2",
+                template_version="default:1",
             )
             ignored_local = await store.update_record_content(
                 user_id="10001",
@@ -216,7 +140,7 @@ class CheckinStoreTest(unittest.IsolatedAsyncioTestCase):
                 greeting="Other local greeting",
                 greeting_source="local",
                 secondary_note="Other note",
-                template_version="v3",
+                template_version="default:2",
             )
             self.assertEqual(ignored_local, local)
 
@@ -228,7 +152,7 @@ class CheckinStoreTest(unittest.IsolatedAsyncioTestCase):
                 greeting="AI greeting",
                 greeting_source="ai",
                 secondary_note="AI note",
-                template_version="v2",
+                template_version="default:1",
             )
             self.assertEqual(ai.greeting, "AI greeting")
             self.assertEqual(ai.greeting_source, "ai")
@@ -242,7 +166,7 @@ class CheckinStoreTest(unittest.IsolatedAsyncioTestCase):
                 greeting="Second AI greeting",
                 greeting_source="ai",
                 secondary_note="Changed note",
-                template_version="v3",
+                template_version="default:2",
             )
             self.assertEqual(ignored_ai, ai)
 
@@ -261,7 +185,7 @@ class CheckinStoreTest(unittest.IsolatedAsyncioTestCase):
                 greeting="Local greeting",
                 greeting_source="local",
                 secondary_note="Local note",
-                template_version="v2",
+                template_version="default:1",
             )
             with closing(sqlite3.connect(Path(tmp) / "checkin.sqlite3")) as conn:
                 conn.execute(
@@ -292,7 +216,7 @@ class CheckinStoreTest(unittest.IsolatedAsyncioTestCase):
                     greeting="First AI greeting",
                     greeting_source="ai",
                     secondary_note="First AI note",
-                    template_version="v2",
+                    template_version="default:1",
                 ),
                 second_store.update_record_content(
                     user_id="10001",
@@ -302,7 +226,7 @@ class CheckinStoreTest(unittest.IsolatedAsyncioTestCase):
                     greeting="Second AI greeting",
                     greeting_source="ai",
                     secondary_note="Second AI note",
-                    template_version="v2",
+                    template_version="default:1",
                 ),
             )
             first_store.content_barrier = None
@@ -338,7 +262,7 @@ class CheckinStoreTest(unittest.IsolatedAsyncioTestCase):
                     greeting="Remote greeting",
                     greeting_source="remote",
                     secondary_note="Remote note",
-                    template_version="v2",
+                    template_version="default:1",
                 )
 
             self.assertEqual(await store.get_today_record("10001"), checked.record)
@@ -355,7 +279,7 @@ class CheckinStoreTest(unittest.IsolatedAsyncioTestCase):
                 greeting="Local greeting",
                 greeting_source="local",
                 secondary_note="",
-                template_version="v2",
+                template_version="default:1",
             )
 
             remote = await store.update_record_content(
@@ -367,7 +291,7 @@ class CheckinStoreTest(unittest.IsolatedAsyncioTestCase):
                 greeting_source="hitokoto",
                 greeting_attribution="毛不易 · 芬芳一生",
                 secondary_note="",
-                template_version="v2",
+                template_version="default:1",
             )
 
             self.assertEqual(remote.greeting_source, "hitokoto")
@@ -386,7 +310,7 @@ class CheckinStoreTest(unittest.IsolatedAsyncioTestCase):
                 greeting="First greeting",
                 greeting_source="local",
                 secondary_note="",
-                template_version="v2",
+                template_version="default:1",
             )
             refreshed = await store.refresh_record_greeting(
                 user_id="10001",
@@ -411,7 +335,7 @@ class CheckinStoreTest(unittest.IsolatedAsyncioTestCase):
                 greeting="Local greeting",
                 greeting_source="local",
                 secondary_note="Local note",
-                template_version="v2",
+                template_version="default:1",
             )
 
             empty_ai = await store.update_record_content(
@@ -422,7 +346,7 @@ class CheckinStoreTest(unittest.IsolatedAsyncioTestCase):
                 greeting="",
                 greeting_source="ai",
                 secondary_note="",
-                template_version="v2",
+                template_version="default:1",
             )
             later_local = await store.update_record_content(
                 user_id="10001",
@@ -432,7 +356,7 @@ class CheckinStoreTest(unittest.IsolatedAsyncioTestCase):
                 greeting="Changed local greeting",
                 greeting_source="local",
                 secondary_note="Changed local note",
-                template_version="v2",
+                template_version="default:1",
             )
 
             self.assertEqual(empty_ai, local)
@@ -461,7 +385,7 @@ class CheckinStoreTest(unittest.IsolatedAsyncioTestCase):
                 greeting="Local greeting",
                 greeting_source="local",
                 secondary_note="Local note",
-                template_version="v2",
+                template_version="default:1",
             )
 
             self.assertEqual(result.greeting_source, "ai")
@@ -547,7 +471,7 @@ class CheckinStoreTest(unittest.IsolatedAsyncioTestCase):
                 greeting="Local welcome",
                 greeting_source="local",
                 secondary_note="Local note",
-                template_version="v2",
+                template_version="default:1",
             )
             await source.update_record_content(
                 user_id="10001",
@@ -557,11 +481,11 @@ class CheckinStoreTest(unittest.IsolatedAsyncioTestCase):
                 greeting="Welcome back",
                 greeting_source="ai",
                 secondary_note="Stay hydrated",
-                template_version="v2",
+                template_version="default:1",
             )
 
             snapshot = await source.export_snapshot()
-            self.assertEqual(snapshot["schema_version"], 5)
+            self.assertEqual(snapshot["schema_version"], 6)
             serialized = dump_checkin_snapshot_json(snapshot)
             restored = load_checkin_snapshot_json(serialized.encode("utf-8"))
 
@@ -570,7 +494,7 @@ class CheckinStoreTest(unittest.IsolatedAsyncioTestCase):
             profile = await target.get_profile("10001")
             record = await target.get_today_record("10001")
 
-            self.assertEqual(summary["profiles"], 1)
+            self.assertEqual(summary["users"], 1)
             self.assertEqual(summary["records"], 4)
             self.assertEqual(profile.total_days, 4)
             self.assertEqual(profile.last_checkin_date, "2026-05-29")
@@ -587,50 +511,19 @@ class CheckinStoreTest(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(record.greeting, "Welcome back")
             self.assertEqual(record.greeting_source, "ai")
             self.assertEqual(record.secondary_note, "Stay hydrated")
-            self.assertEqual(record.template_version, "v2")
+            self.assertEqual(record.template_version, "default:1")
 
-    async def test_version_one_snapshot_imports_with_v2_record_defaults(self):
-        with (
-            tempfile.TemporaryDirectory() as src_tmp,
-            tempfile.TemporaryDirectory() as dst_tmp,
-        ):
-            source = FrozenCheckinStore(src_tmp, date_key="2026-05-26")
-            await source.checkin(user_id="20002", username="source", bot_name="neko")
-            legacy = await source.export_snapshot()
-            legacy["schema_version"] = 1
-            for key in (
-                "event_key",
-                "event_label",
-                "greeting",
-                "greeting_source",
-                "greeting_attribution",
-                "secondary_note",
-                "template_version",
-            ):
-                legacy["records"][0].pop(key, None)
+    async def test_unsupported_snapshot_version_is_rejected(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            store = FrozenCheckinStore(tmp, date_key="2026-05-26")
+            await store.checkin(user_id="20002", username="source", bot_name="neko")
+            snapshot = await store.export_snapshot()
+            snapshot["schema_version"] = 5
 
-            normalized = load_checkin_snapshot_json(
-                dump_checkin_snapshot_json(legacy).encode("utf-8")
-            )
-            self.assertEqual(normalized["schema_version"], 5)
-            self.assertEqual(normalized["records"][0]["event_key"], "")
-            self.assertEqual(normalized["records"][0]["event_label"], "")
-            self.assertEqual(normalized["records"][0]["greeting"], "")
-            self.assertEqual(normalized["records"][0]["greeting_source"], "local")
-            self.assertEqual(normalized["records"][0]["greeting_attribution"], "")
-            self.assertEqual(normalized["records"][0]["secondary_note"], "")
-            self.assertEqual(normalized["records"][0]["template_version"], "v2")
+            with self.assertRaisesRegex(ValueError, "不支持的签到备份版本"):
+                dump_checkin_snapshot_json(snapshot)
 
-            target = FrozenCheckinStore(dst_tmp, date_key="2026-05-26")
-            summary = await target.import_snapshot(normalized)
-            record = await target.get_today_record("20002")
-            self.assertEqual(summary["schema_version"], 5)
-            self.assertIsNotNone(record)
-            self.assertEqual(record.greeting_source, "local")
-            self.assertEqual(record.greeting_attribution, "")
-            self.assertEqual(record.template_version, "v2")
-
-    async def test_version_two_snapshot_rejects_invalid_greeting_source(self):
+    async def test_snapshot_rejects_invalid_greeting_source(self):
         with tempfile.TemporaryDirectory() as tmp:
             store = FrozenCheckinStore(tmp, date_key="2026-05-26")
             await store.checkin(user_id="20002", username="source", bot_name="neko")
@@ -704,24 +597,24 @@ class CheckinStoreTest(unittest.IsolatedAsyncioTestCase):
             store = FrozenCheckinStore(tmp, date_key="2026-05-26")
             await store.checkin(user_id="10001", username="target", bot_name="neko")
             before = await store.export_snapshot()
-            invalid = {**before, "profiles": []}
+            invalid = {**before, "users": []}
 
-            with self.assertRaisesRegex(ValueError, "records\\[0\\].*user_id"):
+            with self.assertRaisesRegex(ValueError, "user_themes\\[0\\].*user_id"):
                 await store.import_snapshot(invalid)
 
             self.assertEqual(await store.export_snapshot(), before)
 
-    async def test_import_rejects_duplicate_profile_user_id_without_mutating_data(self):
+    async def test_import_rejects_duplicate_user_id_without_mutating_data(self):
         with tempfile.TemporaryDirectory() as tmp:
             store = FrozenCheckinStore(tmp, date_key="2026-05-26")
             await store.checkin(user_id="10001", username="target", bot_name="neko")
             before = await store.export_snapshot()
             invalid = {
                 **before,
-                "profiles": [*before["profiles"], dict(before["profiles"][0])],
+                "users": [*before["users"], dict(before["users"][0])],
             }
 
-            with self.assertRaisesRegex(ValueError, "profiles\\[1\\].*user_id"):
+            with self.assertRaisesRegex(ValueError, "users\\[1\\].*user_id"):
                 await store.import_snapshot(invalid)
 
             self.assertEqual(await store.export_snapshot(), before)
@@ -736,9 +629,7 @@ class CheckinStoreTest(unittest.IsolatedAsyncioTestCase):
                 "records": [*before["records"], dict(before["records"][0])],
             }
 
-            with self.assertRaisesRegex(
-                ValueError, "records\\[1\\].*date_key.*user_id"
-            ):
+            with self.assertRaisesRegex(ValueError, "records\\[1\\] duplicate"):
                 await store.import_snapshot(invalid)
 
             self.assertEqual(await store.export_snapshot(), before)

@@ -1,9 +1,12 @@
 import io
 import json
+from contextlib import closing
+import sqlite3
 import sys
 import tempfile
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 
 from quart import Quart
 from werkzeug.datastructures import FileStorage
@@ -121,24 +124,25 @@ class CheckinBackupWebTest(unittest.IsolatedAsyncioTestCase):
                 methods=["POST"],
             )
 
-            async with app.test_app():
-                client = app.test_client()
-                response = await client.post(
-                    "/checkin-import",
-                    files={
-                        "file": FileStorage(
-                            stream=io.BytesIO(snapshot_text.encode("utf-8")),
-                            filename="checkin-export.json",
-                            name="file",
-                            content_type="application/json",
-                        )
-                    },
-                )
-                payload = await response.get_json()
+            with patch("astrbot_plugin_get_px.plugin_api.api.logger") as mock_logger:
+                async with app.test_app():
+                    client = app.test_client()
+                    response = await client.post(
+                        "/checkin-import",
+                        files={
+                            "file": FileStorage(
+                                stream=io.BytesIO(snapshot_text.encode("utf-8")),
+                                filename="checkin-export.json",
+                                name="file",
+                                content_type="application/json",
+                            )
+                        },
+                    )
+                    payload = await response.get_json()
 
             self.assertEqual(response.status_code, 200)
             self.assertTrue(payload["success"])
-            self.assertEqual(payload["profiles"], 1)
+            self.assertEqual(payload["users"], 1)
             self.assertEqual(payload["records"], 1)
             self.assertTrue(payload["rollback_file"].endswith(".json"))
             self.assertNotIn("rollback_path", payload)
@@ -147,8 +151,125 @@ class CheckinBackupWebTest(unittest.IsolatedAsyncioTestCase):
             replaced = await plugin.checkin_store.get_profile("10001")
             self.assertEqual(imported.total_days, 1)
             self.assertEqual(replaced.total_days, 0)
+            log_text = "\n".join(
+                str(call.args[0])
+                for method in (mock_logger.info, mock_logger.warning)
+                for call in method.call_args_list
+            )
+            self.assertIn("开始导入签到 JSON 备份", log_text)
+            self.assertIn("旧签到数据已备份", log_text)
+            self.assertIn("旧签到数据已由 JSON 备份覆盖", log_text)
 
-    async def test_web_checkin_import_accepts_version_one_snapshot(self):
+    async def test_web_checkin_import_replaces_database_and_deletes_old_one(self):
+        with (
+            tempfile.TemporaryDirectory() as src_tmp,
+            tempfile.TemporaryDirectory() as dst_tmp,
+        ):
+            source = FrozenCheckinStore(src_tmp, date_key="2026-05-26")
+            source_result = await source.checkin(
+                user_id="20002", username="source", bot_name="neko"
+            )
+            with closing(sqlite3.connect(source._db_path)) as conn:
+                conn.execute("PRAGMA wal_checkpoint(TRUNCATE)")
+            database_bytes = Path(source._db_path).read_bytes()
+
+            plugin = object.__new__(GetPxPlugin)
+            plugin.data_dir = Path(dst_tmp)
+            plugin.checkin_store = FrozenCheckinStore(dst_tmp, date_key="2026-05-26")
+            await plugin.checkin_store.checkin(
+                user_id="10001", username="target", bot_name="neko"
+            )
+            app = Quart(__name__)
+            app.add_url_rule(
+                "/checkin-import-database",
+                view_func=plugin._web_checkin_import,
+                methods=["POST"],
+            )
+
+            with patch("astrbot_plugin_get_px.plugin_api.api.logger") as mock_logger:
+                async with app.test_app():
+                    response = await app.test_client().post(
+                        "/checkin-import-database",
+                        files={
+                            "file": FileStorage(
+                                stream=io.BytesIO(database_bytes),
+                                filename="new-checkin.sqlite3",
+                                name="file",
+                                content_type="application/vnd.sqlite3",
+                            )
+                        },
+                    )
+                    payload = await response.get_json()
+
+            self.assertEqual(response.status_code, 200)
+            self.assertTrue(payload["success"])
+            self.assertTrue(payload["database_replaced"])
+            self.assertTrue(payload["old_database_deleted"])
+            self.assertEqual(payload["users"], 1)
+            self.assertEqual(payload["records"], 1)
+            self.assertEqual(
+                (Path(dst_tmp) / "checkin.sqlite3").read_bytes(), database_bytes
+            )
+            self.assertFalse(list((Path(dst_tmp) / "checkin_backups").glob("*.json")))
+            self.assertIsNone(await plugin.checkin_store.find_profile("10001"))
+            imported = await plugin.checkin_store.find_profile("20002")
+            self.assertIsNotNone(imported)
+            self.assertEqual(imported.affection, source_result.profile.affection)
+            self.assertFalse(list(Path(dst_tmp).glob(".checkin-import-*")))
+            log_text = "\n".join(
+                str(call.args[0])
+                for method in (mock_logger.info, mock_logger.warning)
+                for call in method.call_args_list
+            )
+            self.assertIn("开始导入签到数据库", log_text)
+            self.assertIn("签到数据库导入完成", log_text)
+            self.assertIn("旧签到数据库已永久替换", log_text)
+
+    async def test_web_checkin_import_rejects_legacy_database_without_replacing(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            legacy_path = Path(tmp) / "legacy.sqlite3"
+            with closing(sqlite3.connect(legacy_path)) as conn:
+                conn.execute(
+                    "CREATE TABLE checkin_profiles "
+                    "(user_id TEXT PRIMARY KEY, affection REAL NOT NULL)"
+                )
+                conn.commit()
+
+            plugin = object.__new__(GetPxPlugin)
+            plugin.data_dir = Path(tmp) / "current"
+            plugin.checkin_store = FrozenCheckinStore(
+                plugin.data_dir, date_key="2026-05-26"
+            )
+            await plugin.checkin_store.checkin(
+                user_id="10001", username="target", bot_name="neko"
+            )
+            app = Quart(__name__)
+            app.add_url_rule(
+                "/checkin-import-legacy-database",
+                view_func=plugin._web_checkin_import,
+                methods=["POST"],
+            )
+
+            async with app.test_app():
+                response = await app.test_client().post(
+                    "/checkin-import-legacy-database",
+                    files={
+                        "file": FileStorage(
+                            stream=io.BytesIO(legacy_path.read_bytes()),
+                            filename="legacy.sqlite3",
+                            name="file",
+                            content_type="application/vnd.sqlite3",
+                        )
+                    },
+                )
+                payload = await response.get_json()
+
+            self.assertEqual(response.status_code, 400)
+            self.assertFalse(payload["success"])
+            self.assertIsNotNone(await plugin.checkin_store.find_profile("10001"))
+            self.assertFalse(list(plugin.data_dir.glob(".checkin-import-*")))
+
+    async def test_web_checkin_import_rejects_old_snapshot_version(self):
         with (
             tempfile.TemporaryDirectory() as src_tmp,
             tempfile.TemporaryDirectory() as dst_tmp,
@@ -156,17 +277,7 @@ class CheckinBackupWebTest(unittest.IsolatedAsyncioTestCase):
             source = FrozenCheckinStore(src_tmp, date_key="2026-05-26")
             await source.checkin(user_id="20002", username="source", bot_name="neko")
             legacy = await source.export_snapshot()
-            legacy["schema_version"] = 1
-            for key in (
-                "event_key",
-                "event_label",
-                "greeting",
-                "greeting_source",
-                "greeting_attribution",
-                "secondary_note",
-                "template_version",
-            ):
-                legacy["records"][0].pop(key, None)
+            legacy["schema_version"] = 5
             snapshot_text = json.dumps(legacy, ensure_ascii=False)
 
             plugin = object.__new__(GetPxPlugin)
@@ -174,7 +285,7 @@ class CheckinBackupWebTest(unittest.IsolatedAsyncioTestCase):
             plugin.checkin_store = FrozenCheckinStore(dst_tmp, date_key="2026-05-26")
             app = Quart(__name__)
             app.add_url_rule(
-                "/checkin-import-v1",
+                "/checkin-import-old",
                 view_func=plugin._web_checkin_import,
                 methods=["POST"],
             )
@@ -182,11 +293,11 @@ class CheckinBackupWebTest(unittest.IsolatedAsyncioTestCase):
             async with app.test_app():
                 client = app.test_client()
                 response = await client.post(
-                    "/checkin-import-v1",
+                    "/checkin-import-old",
                     files={
                         "file": FileStorage(
                             stream=io.BytesIO(snapshot_text.encode("utf-8")),
-                            filename="checkin-export-v1.json",
+                            filename="checkin-export-old.json",
                             name="file",
                             content_type="application/json",
                         )
@@ -194,14 +305,9 @@ class CheckinBackupWebTest(unittest.IsolatedAsyncioTestCase):
                 )
                 payload = await response.get_json()
 
-            self.assertEqual(response.status_code, 200)
-            self.assertTrue(payload["success"])
-            self.assertEqual(payload["records"], 1)
-            imported = await plugin.checkin_store.get_today_record("20002")
-            self.assertIsNotNone(imported)
-            self.assertEqual(imported.greeting_source, "local")
-            self.assertEqual(imported.greeting_attribution, "")
-            self.assertEqual(imported.template_version, "v2")
+            self.assertEqual(response.status_code, 400)
+            self.assertFalse(payload["success"])
+            self.assertIn("不支持的签到备份版本", payload["error"])
 
     async def test_web_checkin_import_rejects_invalid_snapshot(self):
         with tempfile.TemporaryDirectory() as tmp:

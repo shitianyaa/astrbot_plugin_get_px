@@ -28,6 +28,7 @@ const state = {
 };
 
 const MAX_BACKUP_BYTES = 5 * 1024 * 1024;
+const MAX_DATABASE_BYTES = 64 * 1024 * 1024;
 const dateFormatter = new Intl.DateTimeFormat("zh-CN", {
   month: "2-digit",
   day: "2-digit",
@@ -66,7 +67,6 @@ const els = {
   blacklistContent: $("blacklistContent"),
   blacklistCount: $("blacklistCount"),
   latestBackup: $("latestBackup"),
-  cacheStats: $("cacheStats"),
   importFile: $("importFile"),
   importBtn: $("importBtn"),
   importResult: $("importResult"),
@@ -134,16 +134,6 @@ function formatDate(value) {
 function formatCount(value) {
   const number = Number(value);
   return numberFormatter.format(Number.isFinite(number) ? number : 0);
-}
-
-function formatBytes(bytes) {
-  if (bytes === undefined || bytes === null || Number.isNaN(Number(bytes))) return "0 B";
-  const num = Number(bytes);
-  if (num === 0) return "0 B";
-  const k = 1024;
-  const sizes = ["B", "KiB", "MiB", "GiB"];
-  const i = Math.floor(Math.log(num) / Math.log(k));
-  return `${(num / Math.pow(k, i)).toFixed(2)} ${sizes[i]}`;
 }
 
 function currentGroup() {
@@ -637,23 +627,19 @@ async function reloadBlacklist() {
 function renderData() {
   els.latestBackup.textContent = state.overview.latest_backup_at
     ? `最近备份：${formatDate(state.overview.latest_backup_at)}` : "最近备份：尚无备份记录";
-  const stats = state.overview.cache_cleanup || {};
-  const items = [
-    ["已清理目录", stats.cleaned ?? 0],
-    ["已跳过目录", stats.skipped ?? 0],
-    ["清理失败", stats.failed ?? 0],
-    ["已删文件数", stats.files ?? 0],
-    ["释放空间", formatBytes(stats.bytes ?? 0)],
-  ];
-  els.cacheStats.innerHTML = items.map(([label, value]) => `<div><dt>${label}</dt><dd>${value}</dd></div>`).join("");
 }
 
 function backupFileError(file) {
   if (!file) return "请先选择备份文件。";
-  if (!file.name.toLocaleLowerCase("zh-CN").endsWith(".json")) {
-    return "只能选择 JSON 备份文件。";
+  const name = file.name.toLocaleLowerCase("zh-CN");
+  const isDatabase = name.endsWith(".sqlite3") || name.endsWith(".db");
+  if (!isDatabase && !name.endsWith(".json")) {
+    return "只能选择 JSON 备份或新版 SQLite 数据库。";
   }
-  if (file.size > MAX_BACKUP_BYTES) {
+  if (isDatabase && file.size > MAX_DATABASE_BYTES) {
+    return "数据库文件不能超过 64 MiB。";
+  }
+  if (!isDatabase && file.size > MAX_BACKUP_BYTES) {
     return "备份文件不能超过 5 MiB。";
   }
   return "";
@@ -847,22 +833,34 @@ function bindEvents() {
       els.importFile.focus();
       return;
     }
-    if (!file || !await confirmAction("恢复签到数据", "这将会覆盖当前所有签到记录与用户购买主题数据！恢复前系统会自动将现有数据创建为回滚备份。确认要继续吗？")) return;
+    const lowerName = file?.name.toLocaleLowerCase("zh-CN") || "";
+    const isDatabase = lowerName.endsWith(".sqlite3") || lowerName.endsWith(".db");
+    const confirmText = isDatabase
+      ? "这会用上传的新版数据库永久替换当前签到数据库，并删除旧数据库及其 WAL/SHM 文件，不会保留旧数据库副本。确认要继续吗？"
+      : "这将会覆盖当前所有签到记录与用户购买主题数据！恢复前系统会自动将现有数据创建为回滚备份。确认要继续吗？";
+    if (!file || !await confirmAction(isDatabase ? "替换签到数据库" : "恢复签到数据", confirmText)) return;
 
     els.importBtn.disabled = true;
-    els.importResult.textContent = "正在上传并恢复，请稍候…";
+    els.importResult.textContent = isDatabase
+      ? "正在校验并替换数据库，请稍候…"
+      : "正在上传并恢复，请稍候…";
 
     try {
       const result = apiResult(await bridge.upload("checkin-import", file));
-      els.importResult.textContent = `恢复成功！已导入：
-        ${result.profiles || 0} 位用户，
+      els.importResult.textContent = result.database_replaced
+        ? `数据库替换成功，旧数据库已删除。当前数据：
+        ${result.users || 0} 位用户，
         ${result.records || 0} 条签到历史，
         ${result.group_presence || 0} 条群活跃记录，
-        ${result.preferences || 0} 项主题偏好，
-        ${result.theme_purchases || 0} 个购买主题，
+        ${result.user_themes || 0} 个用户主题。`
+        : `恢复成功！已导入：
+        ${result.users || 0} 位用户，
+        ${result.records || 0} 条签到历史，
+        ${result.group_presence || 0} 条群活跃记录，
+        ${result.user_themes || 0} 个用户主题，
         回滚文件为 ${result.rollback_file || "未知"}。`;
       els.importFile.value = "";
-      showToast("签到备份已成功恢复！");
+      showToast(result.database_replaced ? "新版签到数据库已启用" : "签到备份已成功恢复！");
       await reloadAll();
     } catch (error) {
       els.importResult.textContent = `恢复失败：${error.message || "未知错误"}`;

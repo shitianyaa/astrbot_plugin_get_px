@@ -120,7 +120,7 @@ def _record(*, persisted=True, with_background=True) -> CheckinRecord:
         greeting="今天也见面了" if persisted else "",
         greeting_source="local",
         secondary_note="",
-        template_version="v2",
+        template_version="default:1",
     )
 
 

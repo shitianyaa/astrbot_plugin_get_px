@@ -8,28 +8,27 @@
 </head>
 <body>
   <main class="stage">
-    <!-- 绝区零工控警示风背景 -->
-    <div class="zzz-bg">
+    <!-- 黄黑工控警示背景 -->
+    <div class="theme-bg">
       <div class="concrete-wall"></div>
       <div class="vhs-glitch"></div>
       <div class="hazard-stripe top-left"></div>
       <div class="hazard-stripe bottom-right"></div>
     </div>
 
-    <!-- pass-stamp represents the Proxy License Seal -->
     <div class="pass-stamp" aria-label="主题 {{ theme_name }}">
-      <strong>{{ theme_id }}</strong>
-      <span class="sub-text">PROXY LICENSE</span>
-      <span class="stamp-seal">已授权</span>
+      <strong>{{ theme_code }}</strong>
+      <span class="sub-text">{{ theme_name }}</span>
+      <span class="stamp-seal">已解锁</span>
     </div>
 
-    <article class="zzz-card checkin-card" aria-label="{{ title }}">
-      <!-- 左侧：战术数据面板 -->
+    <article class="theme-card checkin-card" aria-label="{{ title }}">
+      <!-- 左侧信息面板 -->
       <section class="info-panel">
-        <header class="zzz-header">
+        <header class="theme-header">
           <div class="vhs-header">
             <span class="vhs-rec-dot"></span>
-            <span class="vhs-rec-text">INTERKNOT TERMINAL // SYS_STATUS: ACTIVE</span>
+            <span class="vhs-rec-text">TERMINAL // SYS_STATUS: ACTIVE</span>
             <span class="date-tag">TIME_LOG // {{ date_label }}</span>
           </div>
 
@@ -41,15 +40,15 @@
             {% if badges %}
             <div class="badges">
               {% for badge in badges %}
-              <span class="zzz-badge">★ {{ badge }}</span>
+              <span class="theme-badge">★ {{ badge }}</span>
               {% endfor %}
             </div>
             {% endif %}
           </div>
         </header>
 
-        <div class="zzz-body">
-          <!-- 代理人信息 (Proxy Dossier) -->
+        <div class="theme-body">
+          <!-- 用户信息 -->
           <div class="passenger-row">
             <div class="avatar-border">
               <div class="avatar-box">
@@ -61,7 +60,7 @@
               </div>
             </div>
             <div class="passenger-meta">
-              <span class="net-tag">PROXY IDENT // 绳匠代号</span>
+              <span class="net-tag">USER IDENT // 用户代号</span>
               <strong class="username">{{ username }}</strong>
               {% if user_title %}<span class="title-tag">{{ user_title }}</span>{% endif %}
             </div>
@@ -72,57 +71,56 @@
           <div class="broadcast-box">
             <div class="crt-screen">
               <div class="crt-scanline"></div>
-              <span class="box-label">SIGNAL SOURCE: INTERKNOT // 绳网广播</span>
+              <span class="box-label">SIGNAL SOURCE // 广播</span>
               <blockquote class="greeting-text">{{ greeting }}</blockquote>
               {% if secondary_note %}<p class="note-text">{{ secondary_note }}</p>{% endif %}
               <p class="bot-signature">NODE LOG — {{ bot_name }}</p>
             </div>
           </div>
 
-          <!-- 委托赏金组件 (Commission Supplies) -->
           <div class="supplies-box">
-            <span class="box-label">COMMISSION REWARDS // 委托赏金</span>
+            <span class="box-label">今日奖励</span>
             <div class="supplies-grid">
               <div class="supply-item coin-item">
-                <span class="label">丁尼赏金 // DENNIES</span>
+                <span class="label">金币奖励</span>
                 <strong class="value">+{{ coins_reward }}</strong>
               </div>
               <div class="supply-item exp-item">
-                <span class="label">绳网里程 // MERIT</span>
+                <span class="label">好感度</span>
                 <strong class="value">+{{ affection_reward_label }}{% if boost_multiplier > 1 %}<small>×{{ boost_multiplier_label }}</small>{% endif %}</strong>
               </div>
               <div class="supply-item streak-item">
-                <span class="label">连续委托 // STREAK</span>
+                <span class="label">连签天数</span>
                 <strong class="value">{{ streak_days }}<small>次</small></strong>
               </div>
             </div>
           </div>
         </div>
 
-        <!-- 底部绳匠信誉等级与余额 -->
+        <!-- 底部等级与余额 -->
         <footer class="panel-footer">
           <div class="terminal-status" aria-label="终端状态">
             <div class="status-cell text-yellow">
-              <span>委托达成 // TOTAL</span>
-              <strong>{{ total_days }}<small> 次</small></strong>
+              <span>累计签到</span>
+              <strong>{{ total_days }}<small> 天</small></strong>
             </div>
             <div class="status-cell text-white">
-              <span>持有丁尼 // DENNIES</span>
+              <span>金币持有</span>
               <strong>{{ coins_total }}</strong>
             </div>
             <div class="status-cell text-cyan">
-              <span>背景更新 // REFRESH</span>
-              <strong>{{ background_refresh_cost }}<small> 丁尼</small></strong>
+              <span>背景更新</span>
+              <strong>{{ background_refresh_cost }}<small> 金币</small></strong>
             </div>
             <div class="status-cell text-pink">
-              <span>许可证件 // LICENSE</span>
-              <strong>№{{ theme_id }} · ACTIVE</strong>
+              <span>当前主题</span>
+              <strong>№{{ theme_code }} · {{ theme_name }}</strong>
             </div>
           </div>
 
           <div class="level-progress-wrap">
             <div class="progress-info">
-              <span class="level-label">绳匠级别 · {{ affection_level }} ({{ affection_value_label }})</span>
+              <span class="level-label">好感 · {{ affection_level }} ({{ affection_value_label }})</span>
               <span class="level-next">{{ affection_next_text }}</span>
             </div>
             <div class="progress-bar-track">
@@ -131,13 +129,13 @@
           </div>
 
           <div class="milestone-row">
-            <span class="milestone-label">PROT GOAL // 进阶考核</span>
+            <span class="milestone-label">下一目标</span>
             <strong class="milestone-val">{{ milestone_next_text }}</strong>
           </div>
         </footer>
       </section>
 
-      <!-- 右侧：战术目镜/观测窗口 (Tactical Viewport) -->
+      <!-- 右侧作品窗 -->
       <section class="viewport-panel">
         <div class="hud-frame">
           <div class="hud-bracket tl"></div>

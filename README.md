@@ -5,7 +5,7 @@
 一个面向 AstrBot 的 Pixiv 发图插件：安全搜索普通分级插画、查看排行榜、下载作品、每日签到，并在 WebUI 管理群排行、成员数值、内容安全和签到数据。
 
 ![AstrBot](https://img.shields.io/badge/AstrBot-plugin-5865f2?style=flat-square)
-![Version](https://img.shields.io/badge/version-2.8.0-22c55e?style=flat-square)
+![Version](https://img.shields.io/badge/version-3.0.0-22c55e?style=flat-square)
 ![Python](https://img.shields.io/badge/Python-3.10%2B-3776ab?style=flat-square)
 ![Platform](https://img.shields.io/badge/platform-OneBot%20%2F%20aiocqhttp-f97316?style=flat-square)
 
@@ -25,11 +25,11 @@
 
 ## 界面展示
 
-| `default` · 米白 | `01` · 浅蓝 |
+| `00` · 米白 | `01` · 浅蓝 |
 | :---: | :---: |
-| ![米白](docs/images/checkin-card-v2-template-preview.png) | ![浅蓝](templates/checkin_card_liked/01_stellar_ticket/preview.png) |
+| ![米白](templates/checkin_themes/default/preview.png) | ![浅蓝](templates/checkin_themes/blue/preview.png) |
 | `02` · 红黑 | `03` · 黄黑 |
-| ![红黑](templates/checkin_card_liked/02_phantom_coop/preview.png) | ![黄黑](templates/checkin_card_liked/03_proxy_license/preview.png) |
+| ![红黑](templates/checkin_themes/red/preview.png) | ![黄黑](templates/checkin_themes/yellow/preview.png) |
 
 签到卡 `960 × 540`。`/查看主题 <编号>` 可免费看预览（如 `/查看主题 1`），不扣金币、不切换主题。
 
@@ -112,8 +112,7 @@ AstrBot WebUI 插件页的「pluginCenter」可：
 - 按群查看今日 / 月度 / 连签 / 累计排行与 7/30 天趋势
 - 搜索成员并调整金币、好感度、累计与连续签到当前值
 - 维护自定义屏蔽词与作品 ID 黑名单
-- 下载 / 上传签到备份（schema v5；可导入旧版 JSON）
-- 查看启动时旧缓存清理结果
+- 下载 / 上传签到备份（schema v6 JSON），或导入新版 SQLite 数据库并永久替换旧库
 
 成员数值编辑只改当前资料，不回写历史奖励、群排行或已生成卡片。
 
@@ -121,7 +120,7 @@ AstrBot WebUI 插件页的「pluginCenter」可：
 
 - 奖励全局一天一次；群榜按实际签到的群分别记录，不重复发金币。
 - 重复签到不重奖，重发当天缓存卡片。
-- 商店：加持 200/500/1000；背景刷新默认 100（可配）；非默认主题默认每套 1500（可配）。默认「米白」免费。
+- 商店：加持 200/500/1000；背景刷新默认 100（可配）；非默认主题每套 1500。默认「米白」免费。
 
 细则（好感等级、卡片规格、问候 24/32 字、生日事件、称号、节假日等）见 [签到说明](docs/user/checkin.md)。
 
@@ -157,9 +156,8 @@ AstrBot WebUI 插件页的「pluginCenter」可：
 | `checkin_bot_name` | 签到卡片中的 bot 角色名 | `neko` |
 | `checkin_background_mode` | 签到背景模式：`pixiv_daily` 或 `custom`；自定义背景不可用时会继续尝试 Pixiv 背景 | `pixiv_daily` |
 | `checkin_background_refresh_cost` | 用户更新当天 Pixiv 签到背景所需金币；范围 `0–500`，`0` 为免费 | `100` |
-| `checkin_theme_price` | 每套非默认签到主题的统一购买价格；范围 `0–5000`，`0` 为免费 | `1500` |
 | `checkin_background_tag` | 签到 Pixiv 背景标签，多个标签可用逗号、顿号、分号或换行分隔；每次随机确定尝试顺序，一个标签无可用候选时继续尝试下一个 | 空 |
-| `checkin_custom_background` | 本地图片路径；V2 仍按竖向作品相框完整显示 | 空 |
+| `checkin_custom_background` | 本地图片路径；默认主题按竖向作品相框完整显示 | 空 |
 | `checkin_avatar_enabled` | 签到卡片显示用户头像 | `true` |
 | `checkin_card_quality` | 签到卡片 JPEG 清晰度，范围 60–100；修改后自动生成新的当天缓存 | `95` |
 | `checkin_greeting_mode` | 签到问候来源：`local` / `hitokoto` / `ai` | `hitokoto` |
@@ -181,7 +179,7 @@ AstrBot WebUI 插件页的「pluginCenter」可：
 | [签到说明](docs/user/checkin.md) | 发奖、商店、好感、卡片、问候、生日事件与称号 |
 | [项目架构](docs/project/architecture.md) | 模块划分（开发用） |
 
-**数据简述：** 发图当天去重与签到数据在插件数据目录；发送用临时图发完即清；启动清理废弃图片历史目录，签到 JPEG 缓存按天自过期，不整目录清空数据库/黑名单/备份。
+**数据简述：** 发图当天去重与签到数据在插件数据目录；发送用临时图发完即清；签到 JPEG 缓存按天自过期，不会整目录清空数据库、黑名单或备份。
 
 ## 获取 Pixiv Token
 
@@ -199,7 +197,7 @@ lunar-python
 ## 致谢
 
 - Pixiv 图片获取基于 [pixivpy-async](https://github.com/Mikubill/pixivpy-async)
-- 历史缩略图生成基于 [Pillow](https://python-pillow.org/)
+- 作品黑名单缩略图生成基于 [Pillow](https://python-pillow.org/)
 - 签到每日一言由 [Hitokoto API](https://github.com/hitokoto-osc/hitokoto-api) 提供，感谢一言开源社区和公共 API 服务
 - 签到卡片内置字体由 [霞鹜文楷轻便版](https://github.com/lxgw/LxgwWenKai-Lite) 生成，采用 SIL Open Font License 1.1 授权
 - 每日签到设计参考 [zhenxun_bot](https://github.com/zhenxun-org/zhenxun_bot)

@@ -120,7 +120,7 @@ class CheckinApplicationMixin:
             if callable(get_preference):
                 preference = await get_preference(user_id)
                 theme = get_checkin_theme(
-                    getattr(preference, "selected_theme_id", "default")
+                    getattr(preference, "current_theme_id", "default")
                 )
             result = await self.checkin_store.checkin(
                 user_id=user_id,
@@ -270,7 +270,7 @@ class CheckinApplicationMixin:
             greeting=content.greeting,
             greeting_source="local",
             secondary_note=content.secondary_note,
-            template_version=record.template_version or "v2",
+            template_version=record.template_version or "default:1",
         )
         if not allow_ai:
             return record
@@ -288,7 +288,7 @@ class CheckinApplicationMixin:
             greeting_source=source,
             greeting_attribution=greeting_attribution,
             secondary_note=content.secondary_note,
-            template_version=record.template_version or "v2",
+            template_version=record.template_version or "default:1",
         )
 
     async def _compose_checkin_content(
@@ -395,7 +395,11 @@ class CheckinApplicationMixin:
                 self._checkin_profile_from_record(record),
                 mutate_features=False,
             )
-            greeting, source, attribution = await self.checkin_greeting.generate_hitokoto(
+            (
+                greeting,
+                source,
+                attribution,
+            ) = await self.checkin_greeting.generate_hitokoto(
                 content.context,
                 timeout=self._cfg_float("checkin_hitokoto_timeout", 5.0, 1.0, 15.0),
                 categories=self.config.get("checkin_hitokoto_categories", ["全部"]),

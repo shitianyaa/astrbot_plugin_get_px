@@ -30,7 +30,6 @@ from astrbot.api.all import AstrBotConfig, Image, logger
 from astrbot.api.event import AstrMessageEvent, filter
 from astrbot.api.star import Context, Star
 from astrbot.core.star.star_tools import StarTools
-from .cache_cleanup import cleanup_legacy_caches
 from .checkin import CheckinStore
 from .checkin.application import CheckinApplicationMixin
 from .checkin.artwork import CheckinArtworkMixin
@@ -38,11 +37,11 @@ from .checkin.cache import CheckinCardCache
 from .checkin.commands import CheckinCommandMixin
 from .checkin.greeting import CheckinGreetingGenerator
 from .checkin.holiday import HolidayCalendar
+from .checkin.legacy_migration import detect_legacy_checkin_tables
 from .pixiv import DeliveryMixin, FiltersMixin, SearchMixin
 from .pixiv.client import PixivClient
 from .pixiv.downloader import ImageDownloader
 from .pixiv.index import ImageIndexStore
-from .pixiv.safety import normalized_builtin_terms, normalize_safety_text
 from .plugin_api import PluginWebApi
 
 # ──────────────────────────────────────────────────────────────────────
@@ -51,7 +50,7 @@ from .plugin_api import PluginWebApi
 
 LOG_PREFIX = "[GetPx]"
 PLUGIN_NAME = "astrbot_plugin_get_px"
-PLUGIN_VERSION = "2.8.0"
+PLUGIN_VERSION = "3.0.0"
 WEB_INTERNAL_ERROR_MESSAGE = "服务内部错误，请稍后重试"
 
 AUTO_TRIGGER_PATTERN = r"^/?(来\s*(.*?)(份|个|张|点))(.*?)(福利|色|瑟|涩|塞)?图$"
@@ -105,7 +104,6 @@ class GetPxPlugin(
         self._last_request: dict[str, float] = {}
         self.data_dir: Path | None = None
         self.image_index: ImageIndexStore | None = None
-        self.cache_cleanup_summary: dict[str, int] = {}
         self.plugin_web_api = PluginWebApi(
             self,
             plugin_name=PLUGIN_NAME,
@@ -117,9 +115,9 @@ class GetPxPlugin(
         self.checkin_greeting = CheckinGreetingGenerator(context)
         self.holiday_calendar: HolidayCalendar | None = None
         self._holiday_refresh_task: asyncio.Task | None = None
-        self._checkin_flow_locks: weakref.WeakValueDictionary[
-            str, asyncio.Lock
-        ] = weakref.WeakValueDictionary()
+        self._checkin_flow_locks: weakref.WeakValueDictionary[str, asyncio.Lock] = (
+            weakref.WeakValueDictionary()
+        )
 
     # ──────────────────────────────────────────────────────────────
     # 生命周期
@@ -129,13 +127,44 @@ class GetPxPlugin(
         """插件加载时初始化 Pixiv 客户端。"""
         data_dir = StarTools.get_data_dir(PLUGIN_NAME)
         self.data_dir = Path(data_dir)
-        cleanup_summary = await asyncio.to_thread(cleanup_legacy_caches, self.data_dir)
-        self.cache_cleanup_summary = cleanup_summary.to_dict()
         self._init_client()
         self.image_index = ImageIndexStore(data_dir)
-        await self._migrate_legacy_safety_terms()
         await self.image_index.cleanup_old_days()
-        self.checkin_store = CheckinStore(data_dir)
+        checkin_database_path = self.data_dir / "checkin.sqlite3"
+        checkin_database_existed = checkin_database_path.exists()
+        legacy_tables = detect_legacy_checkin_tables(checkin_database_path)
+        if legacy_tables:
+            logger.warning(
+                f"{LOG_PREFIX} 检测到旧版签到数据，开始迁移: "
+                f"tables={','.join(legacy_tables)}"
+            )
+        try:
+            self.checkin_store = CheckinStore(data_dir)
+        except Exception:
+            if legacy_tables:
+                logger.error(
+                    f"{LOG_PREFIX} 旧版签到数据迁移失败，事务已回滚，"
+                    "旧数据表未删除",
+                    exc_info=True,
+                )
+            raise
+        migration = self.checkin_store.legacy_migration_summary
+        if migration is not None:
+            logger.info(
+                f"{LOG_PREFIX} 旧版签到数据导入完成: users={migration.users}, "
+                f"records={migration.records}, preferences={migration.preferences}, "
+                f"purchases={migration.purchases}, "
+                f"backup={migration.backup_path.name}"
+            )
+            logger.warning(
+                f"{LOG_PREFIX} 旧版签到数据表已删除: "
+                f"tables={','.join(migration.removed_tables)}"
+            )
+        database_action = "已加载" if checkin_database_existed else "已创建"
+        logger.info(
+            f"{LOG_PREFIX} 签到数据库{database_action}: "
+            f"version={PLUGIN_VERSION}, path={self.checkin_store._db_path}"
+        )
         self.checkin_cache = CheckinCardCache(self.data_dir / "checkin_card_cache")
         self.checkin_cache.cleanup_expired(force=True)
         self.holiday_calendar = HolidayCalendar(
@@ -146,31 +175,7 @@ class GetPxPlugin(
             self._refresh_holiday_calendar()
         )
         self.plugin_web_api.register()
-        logger.info(f"{LOG_PREFIX} 插件已加载")
-
-    async def _migrate_legacy_safety_terms(self) -> None:
-        if self.image_index is None or "blacklist_tags" not in self.config:
-            return
-        raw = self.config.get("blacklist_tags", "")
-        builtin = normalized_builtin_terms()
-        migrated = 0
-        try:
-            for term in self._split_config_tags(raw):
-                if normalize_safety_text(term) in builtin:
-                    continue
-                if await self.image_index.add_safety_term(
-                    term, added_by="legacy-config"
-                ):
-                    migrated += 1
-            self.config.pop("blacklist_tags", None)
-            save_config = getattr(self.config, "save_config", None)
-            if callable(save_config):
-                save_config()
-            logger.info(f"{LOG_PREFIX} 旧版屏蔽词迁移完成: migrated={migrated}")
-        except Exception as exc:
-            logger.warning(
-                f"{LOG_PREFIX} 旧版屏蔽词迁移失败: error={type(exc).__name__}"
-            )
+        logger.info(f"{LOG_PREFIX} 插件已加载: version={PLUGIN_VERSION}")
 
     async def _refresh_holiday_calendar(self) -> None:
         if self.holiday_calendar is None:

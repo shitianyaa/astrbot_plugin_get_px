@@ -51,7 +51,7 @@ _MEMBER_SELECT = """
             ), ''),
             p.user_id
         ) AS username
-    FROM checkin_profiles AS p
+    FROM checkin_users AS p
 """
 
 
@@ -152,7 +152,7 @@ class RecordStoreMixin:
         username: str,
         bot_name: str,
         theme_id: str = "default",
-        template_version: str = "v2",
+        template_version: str = "default:1",
         group_id: str = "",
         group_name: str = "",
         platform: str = "",
@@ -171,7 +171,7 @@ class RecordStoreMixin:
                 str(username or user_id),
                 str(bot_name or "neko"),
                 str(theme_id or "default"),
-                str(template_version or "v2"),
+                str(template_version or "default:1"),
                 str(group_id or ""),
                 str(group_name or ""),
                 str(platform or ""),
@@ -269,7 +269,7 @@ class RecordStoreMixin:
                 str(greeting or ""),
                 validated_source,
                 str(secondary_note or ""),
-                str(template_version or "v2"),
+                str(template_version or "default:1"),
                 str(greeting_attribution or ""),
                 self.now_iso(),
             )
@@ -301,14 +301,14 @@ class RecordStoreMixin:
     def _get_or_create_profile_sync(self, user_id: str) -> CheckinProfile:
         with closing(self._connect()) as conn:
             row = conn.execute(
-                "SELECT * FROM checkin_profiles WHERE user_id = ?", (user_id,)
+                "SELECT * FROM checkin_users WHERE user_id = ?", (user_id,)
             ).fetchone()
             if row is not None:
                 return self._row_to_profile(row)
             now = self.now_iso()
             conn.execute(
                 """
-                INSERT INTO checkin_profiles (
+                INSERT INTO checkin_users (
                     user_id, coins, affection, total_days, streak_days,
                     last_checkin_date, boost_start_date, boost_until_date,
                     repeat_penalty_date, repeat_penalty_total, created_at, updated_at
@@ -317,16 +317,24 @@ class RecordStoreMixin:
                 """,
                 (user_id, now, now),
             )
+            conn.execute(
+                """
+                INSERT INTO checkin_user_themes
+                    (user_id, theme_id, price_paid, acquired_at)
+                VALUES (?, 'default', 0, ?)
+                """,
+                (user_id, now),
+            )
             conn.commit()
             row = conn.execute(
-                "SELECT * FROM checkin_profiles WHERE user_id = ?", (user_id,)
+                "SELECT * FROM checkin_users WHERE user_id = ?", (user_id,)
             ).fetchone()
         return self._row_to_profile(row)
 
     def _find_profile_sync(self, user_id: str) -> CheckinProfile | None:
         with closing(self._connect()) as conn:
             row = conn.execute(
-                "SELECT * FROM checkin_profiles WHERE user_id = ?", (user_id,)
+                "SELECT * FROM checkin_users WHERE user_id = ?", (user_id,)
             ).fetchone()
         return self._row_to_profile(row) if row is not None else None
 
@@ -355,7 +363,7 @@ class RecordStoreMixin:
         params = (query, pattern, pattern, pattern)
         with closing(self._connect()) as conn:
             total_row = conn.execute(
-                f"SELECT COUNT(*) AS count FROM checkin_profiles AS p {where_sql}",
+                f"SELECT COUNT(*) AS count FROM checkin_users AS p {where_sql}",
                 params,
             ).fetchone()
             rows = conn.execute(
@@ -391,7 +399,7 @@ class RecordStoreMixin:
                     raise LookupError("指定成员不存在")
                 conn.execute(
                     """
-                    UPDATE checkin_profiles
+                    UPDATE checkin_users
                     SET coins = ?, affection = ?, total_days = ?, streak_days = ?,
                         updated_at = ?
                     WHERE user_id = ?
@@ -428,7 +436,7 @@ class RecordStoreMixin:
             try:
                 conn.execute(
                     """
-                    INSERT OR IGNORE INTO checkin_profiles (
+                    INSERT OR IGNORE INTO checkin_users (
                         user_id, coins, affection, total_days, streak_days,
                         last_checkin_date, boost_start_date, boost_until_date,
                         repeat_penalty_date, repeat_penalty_total,
@@ -438,8 +446,16 @@ class RecordStoreMixin:
                     """,
                     (user_id, now, now),
                 )
+                conn.execute(
+                    """
+                    INSERT OR IGNORE INTO checkin_user_themes
+                        (user_id, theme_id, price_paid, acquired_at)
+                    VALUES (?, 'default', 0, ?)
+                    """,
+                    (user_id, now),
+                )
                 profile_row = conn.execute(
-                    "SELECT * FROM checkin_profiles WHERE user_id = ?", (user_id,)
+                    "SELECT * FROM checkin_users WHERE user_id = ?", (user_id,)
                 ).fetchone()
                 profile = self._row_to_profile(profile_row)
                 record_row = conn.execute(
@@ -513,7 +529,7 @@ class RecordStoreMixin:
 
                 conn.execute(
                     """
-                    UPDATE checkin_profiles
+                    UPDATE checkin_users
                     SET coins = ?, affection = ?, total_days = ?, streak_days = ?,
                         last_checkin_date = ?, updated_at = ?
                     WHERE user_id = ?
@@ -566,7 +582,7 @@ class RecordStoreMixin:
                     ),
                 )
                 updated_row = conn.execute(
-                    "SELECT * FROM checkin_profiles WHERE user_id = ?", (user_id,)
+                    "SELECT * FROM checkin_users WHERE user_id = ?", (user_id,)
                 ).fetchone()
                 record_row = conn.execute(
                     """
@@ -616,7 +632,7 @@ class RecordStoreMixin:
             remaining = profile.coins - cost
             conn.execute(
                 """
-                UPDATE checkin_profiles
+                UPDATE checkin_users
                 SET coins = ?, boost_start_date = ?, boost_until_date = ?,
                     updated_at = ?
                 WHERE user_id = ?
@@ -665,7 +681,7 @@ class RecordStoreMixin:
             conn.execute("BEGIN IMMEDIATE")
             try:
                 profile_row = conn.execute(
-                    "SELECT * FROM checkin_profiles WHERE user_id = ?",
+                    "SELECT * FROM checkin_users WHERE user_id = ?",
                     (user_id,),
                 ).fetchone()
                 record_row = conn.execute(
@@ -694,7 +710,7 @@ class RecordStoreMixin:
                     )
                 remaining = profile.coins - cost
                 conn.execute(
-                    "UPDATE checkin_profiles SET coins = ?, updated_at = ? "
+                    "UPDATE checkin_users SET coins = ?, updated_at = ? "
                     "WHERE user_id = ?",
                     (remaining, now, user_id),
                 )
@@ -719,7 +735,7 @@ class RecordStoreMixin:
                     ),
                 )
                 updated_profile_row = conn.execute(
-                    "SELECT * FROM checkin_profiles WHERE user_id = ?",
+                    "SELECT * FROM checkin_users WHERE user_id = ?",
                     (user_id,),
                 ).fetchone()
                 updated_record_row = conn.execute(
@@ -963,6 +979,6 @@ class RecordStoreMixin:
             greeting_source=str(row["greeting_source"] or "local"),
             greeting_attribution=str(row["greeting_attribution"] or ""),
             secondary_note=str(row["secondary_note"] or ""),
-            template_version=str(row["template_version"] or "v2"),
+            template_version=str(row["template_version"] or "default:1"),
             theme_id=str(row["theme_id"] or "default"),
         )

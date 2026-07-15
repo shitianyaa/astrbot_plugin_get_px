@@ -104,7 +104,7 @@ async def test_achievements_unlock_idempotently_and_titles_require_unlock() -> N
 
 
 @pytest.mark.asyncio
-async def test_v3_snapshot_preserves_feature_tables() -> None:
+async def test_snapshot_preserves_feature_tables() -> None:
     with (
         tempfile.TemporaryDirectory() as source_tmp,
         tempfile.TemporaryDirectory() as target_tmp,
@@ -118,11 +118,11 @@ async def test_v3_snapshot_preserves_feature_tables() -> None:
             event_type="annual", date_value="07-11", name="相遇纪念日", created_by="1"
         )
         snapshot = await source.export_snapshot()
-        assert snapshot["schema_version"] == 5
+        assert snapshot["schema_version"] == 6
 
         target = CheckinStore(target_tmp)
         summary = await target.import_snapshot(snapshot)
-        assert summary["preferences"] == 1
+        assert summary["users"] == 1
         assert summary["global_events"] == 1
         assert summary["achievements"] == 1
         assert (await target.get_user_preference("10001")).birthday_label == "07-11"
@@ -139,20 +139,21 @@ async def test_birthday_can_be_backed_up_before_first_checkin() -> None:
         source = CheckinStore(source_tmp)
         await source.set_birthday(user_id="new-user", month=2, day=29, source="manual")
         snapshot = await source.export_snapshot()
-        assert snapshot["profiles"] == []
+        assert len(snapshot["users"]) == 1
+        assert snapshot["user_themes"][0]["theme_id"] == "default"
         target = CheckinStore(target_tmp)
         await target.import_snapshot(snapshot)
         assert (await target.get_user_preference("new-user")).birthday_label == "02-29"
 
 
 @pytest.mark.asyncio
-async def test_v3_snapshot_requires_feature_arrays_and_rejects_bool_version() -> None:
+async def test_snapshot_requires_all_arrays_and_rejects_bool_version() -> None:
     with tempfile.TemporaryDirectory() as tmp:
         store = CheckinStore(tmp)
         snapshot = await store.export_snapshot()
         missing = dict(snapshot)
-        missing.pop("preferences")
-        with pytest.raises(ValueError, match="preferences"):
+        missing.pop("user_themes")
+        with pytest.raises(ValueError, match="user_themes"):
             await store.import_snapshot(missing)
         invalid = dict(snapshot)
         invalid["schema_version"] = True
@@ -161,16 +162,16 @@ async def test_v3_snapshot_requires_feature_arrays_and_rejects_bool_version() ->
 
 
 @pytest.mark.asyncio
-async def test_v3_snapshot_rejects_blank_fractional_and_nonfinite_values() -> None:
+async def test_snapshot_rejects_blank_fractional_and_nonfinite_values() -> None:
     with tempfile.TemporaryDirectory() as tmp:
         store = CheckinStore(tmp)
         await store.checkin(user_id="10001", username="tester", bot_name="neko")
         snapshot = await store.export_snapshot()
 
         invalid_cases = (
-            ("不能为空", "profiles", 0, "user_id", "   "),
-            ("必须是整数", "profiles", 0, "coins", 1.5),
-            ("必须是数字", "profiles", 0, "affection", float("nan")),
+            ("不能为空", "users", 0, "user_id", "   "),
+            ("必须是整数", "users", 0, "coins", 1.5),
+            ("必须是数字", "users", 0, "affection", float("nan")),
             ("必须是布尔值", "records", 0, "boost_active", 0.5),
         )
         for message, table, index, key, value in invalid_cases:

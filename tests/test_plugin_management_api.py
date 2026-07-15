@@ -19,13 +19,6 @@ def build_plugin(tmp: str):
     plugin.image_index = ImageIndexStore(tmp)
     plugin.client = None
     plugin.downloader = None
-    plugin.cache_cleanup_summary = {
-        "cleaned": 2,
-        "skipped": 0,
-        "failed": 0,
-        "files": 4,
-        "bytes": 128,
-    }
     plugin._cfg_str = lambda key, default="": default
     plugin._cfg_float = lambda key, default, lo, hi: default
     return plugin
@@ -54,6 +47,30 @@ class FakeDownloader:
         path = self.root / "downloaded-thumb.jpg"
         path.write_bytes(b"fake-jpeg-thumbnail")
         return str(path)
+
+
+@pytest.mark.asyncio
+async def test_management_overview_omits_legacy_cleanup_stats() -> None:
+    with tempfile.TemporaryDirectory() as tmp:
+        plugin = build_plugin(tmp)
+        api = PluginWebApi(
+            plugin,
+            plugin_name="astrbot_plugin_get_px",
+            log_prefix="[GetPx]",
+            internal_error_message="internal",
+        )
+        app = Quart(__name__)
+        app.add_url_rule("/overview", view_func=api.overview, methods=["GET"])
+        try:
+            async with app.test_app():
+                response = await app.test_client().get("/overview")
+                payload = await response.get_json()
+
+            assert response.status_code == 200
+            assert payload["success"]
+            assert "cache_cleanup" not in payload
+        finally:
+            plugin.image_index.close()
 
 
 @pytest.mark.asyncio
@@ -155,8 +172,7 @@ async def test_management_api_rejects_non_object_json_payloads() -> None:
             async with app.test_app():
                 client = app.test_client()
                 responses = [
-                    await client.post(path, json=["invalid"])
-                    for path in routes
+                    await client.post(path, json=["invalid"]) for path in routes
                 ]
                 payloads = [await response.get_json() for response in responses]
 

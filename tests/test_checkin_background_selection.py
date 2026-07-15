@@ -109,7 +109,6 @@ class CheckinBackgroundSelectionTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(
             schema["checkin_background_refresh_cost"]["slider"]["max"], 500
         )
-        self.assertEqual(schema["checkin_theme_price"]["slider"]["max"], 5000)
 
     def test_pixiv_ai_comment_settings_are_removed(self):
         schema_path = Path(__file__).resolve().parents[1] / "_conf_schema.json"

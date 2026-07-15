@@ -19,6 +19,8 @@ def test_plugin_center_page_exposes_management_workspaces() -> None:
     assert "内置安全词" in html
     assert "签到数据管理" in html
     assert "imageHistory" not in html
+    assert "cacheStats" not in html
+    assert "schema v6" in html
 
 
 def test_plugin_center_uses_relative_bridge_endpoints() -> None:
@@ -31,6 +33,7 @@ def test_plugin_center_uses_relative_bridge_endpoints() -> None:
     assert endpoints
     assert all(not endpoint.startswith("/") for endpoint in endpoints)
     assert "image-history" not in source
+    assert "cache_cleanup" not in source
 
 
 def test_plugin_center_keeps_responsive_and_accessible_states() -> None:
@@ -44,6 +47,7 @@ def test_plugin_center_keeps_responsive_and_accessible_states() -> None:
     assert 'name="custom_safety_term"' in html
     assert 'name="pixiv_illust_id"' in html
     assert 'name="checkin_backup"' in html
+    assert ".sqlite3,.db" in html
     assert 'name="checkin_member_search"' in html
     assert 'id="memberDialog"' in html
     assert ":root" in source
@@ -56,6 +60,8 @@ def test_plugin_center_keeps_responsive_and_accessible_states() -> None:
     assert "onerror=" not in script
     assert "Promise.allSettled" in script
     assert "MAX_BACKUP_BYTES" in script
+    assert "MAX_DATABASE_BYTES" in script
+    assert "database_replaced" in script
     assert 'apiGet("checkin-members"' in script
     assert 'apiPost("checkin-members/update"' in script
     assert source.count("/*") == source.count("*/")

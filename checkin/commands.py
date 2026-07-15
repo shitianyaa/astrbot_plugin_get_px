@@ -425,7 +425,7 @@ class CheckinCommandMixin:
             f"累计签到: {profile.total_days} 天",
             f"连续签到: {profile.streak_days} 天",
             f"金币: {profile.coins}",
-            f"签到主题: {get_checkin_theme(preference.selected_theme_id).name}",
+            f"签到主题: {get_checkin_theme(preference.current_theme_id).name}",
             f"好感度: {profile.affection:.2f}（{level['name']}）",
             f"好感度加持: {boost_status_text(profile, today)}",
         ]
@@ -614,7 +614,6 @@ class CheckinCommandMixin:
 
     def _build_checkin_shop(self) -> str:
         refresh_cost = self._cfg_int("checkin_background_refresh_cost", 100, 0, 500)
-        theme_cost = self._cfg_int("checkin_theme_price", 1500, 0, 5000)
         lines = [
             "签到商店",
             "金币可购买好感度加持、更新当天背景和解锁签到主题。",
@@ -623,8 +622,10 @@ class CheckinCommandMixin:
             lines.append(f"/购买加持 {days} - {days} 天，{cost} 金币")
         lines.append(f"/刷新签到背景 - {refresh_cost} 金币")
         for theme in CHECKIN_THEMES.values():
-            price = "免费" if theme.free else f"{theme_cost} 金币"
-            lines.append(f"/购买主题 {theme.theme_id} - {theme.name}，{price}")
+            if not theme.enabled:
+                continue
+            price = "免费" if theme.free else f"{theme.price} 金币"
+            lines.append(f"/购买主题 {theme.code} - {theme.name}，{price}")
         lines.append("使用 /查看主题 <编号> 预览，/签到主题 查看购买状态")
         lines.append("已购买主题可使用 /切换主题 <编号> 切换")
         return "\n".join(lines)
@@ -635,18 +636,18 @@ class CheckinCommandMixin:
         user_id = str(event.get_sender_id() or "")
         preference = await self.checkin_store.get_user_preference(user_id)
         owned = set(await self.checkin_store.list_owned_theme_ids(user_id))
-        current = get_checkin_theme(preference.selected_theme_id)
+        current = get_checkin_theme(preference.current_theme_id)
         lines = [f"签到主题（当前：{current.name}）"]
         for theme in CHECKIN_THEMES.values():
+            if not theme.enabled:
+                continue
             if theme.theme_id == current.theme_id:
                 state = "当前"
             elif theme.theme_id in owned:
                 state = "已购"
             else:
                 state = "未购"
-            lines.append(
-                f"[{state}] {theme.theme_id} · {theme.name} - {theme.description}"
-            )
+            lines.append(f"[{state}] {theme.code} · {theme.name} - {theme.description}")
         lines.append("使用 /查看主题 <编号> 预览，/购买主题 <编号> 购买")
         lines.append("已购买主题可使用 /切换主题 <编号> 切换")
         return "\n".join(lines)
@@ -664,9 +665,7 @@ class CheckinCommandMixin:
             return event.plain_result("主题预览图缺失，请联系管理员重新安装插件")
         return event.chain_result(
             [
-                Plain(
-                    f"主题预览：{theme.theme_id} · {theme.name}\n{theme.description}"
-                ),
+                Plain(f"主题预览：{theme.code} · {theme.name}\n{theme.description}"),
                 Image.fromFileSystem(str(preview_path)),
             ]
         )
@@ -682,13 +681,10 @@ class CheckinCommandMixin:
         if theme.free:
             return await self._handle_select_checkin_theme(event, theme.theme_id)
         user_id = str(event.get_sender_id() or "")
-        cost = self._cfg_int("checkin_theme_price", 1500, 0, 5000)
         try:
             purchase = await self.checkin_store.purchase_theme(
                 user_id=user_id,
                 theme_id=theme.theme_id,
-                cost=cost,
-                template_version=theme.template_version,
             )
         except Exception as exc:
             logger.warning(f"{LOG_PREFIX} 购买签到主题失败: {exc}")
@@ -715,7 +711,6 @@ class CheckinCommandMixin:
             await self.checkin_store.select_theme(
                 user_id=user_id,
                 theme_id=theme.theme_id,
-                template_version=theme.template_version,
             )
         except ValueError as exc:
             return str(exc)

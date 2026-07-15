@@ -6,7 +6,7 @@ from zoneinfo import ZoneInfo
 
 
 SHANGHAI_TZ = ZoneInfo("Asia/Shanghai")
-CHECKIN_SNAPSHOT_SCHEMA_VERSION = 5
+CHECKIN_SNAPSHOT_SCHEMA_VERSION = 6
 CHECKIN_SNAPSHOT_SCOPE = "checkin"
 CHECKIN_SNAPSHOT_PLUGIN_NAME = "astrbot_plugin_get_px"
 
@@ -86,7 +86,7 @@ class CheckinRecord:
     greeting_source: str = "local"
     greeting_attribution: str = ""
     secondary_note: str = ""
-    template_version: str = "v2"
+    template_version: str = "default:1"
     theme_id: str = "default"
 
 
@@ -137,7 +137,7 @@ class CheckinUserPreference:
     selected_title_id: str
     created_at: str
     updated_at: str
-    selected_theme_id: str = "default"
+    current_theme_id: str = "default"
 
     @property
     def birthday_label(self) -> str:

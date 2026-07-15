@@ -23,22 +23,16 @@ class BackupStoreMixin:
 
     def _export_snapshot_sync(self) -> dict[str, Any]:
         with closing(self._connect()) as conn:
-            profiles = [
+            users = [
                 dict(row)
                 for row in conn.execute(
-                    "SELECT * FROM checkin_profiles ORDER BY user_id"
+                    "SELECT * FROM checkin_users ORDER BY user_id"
                 ).fetchall()
             ]
             records = [
                 dict(row)
                 for row in conn.execute(
                     "SELECT * FROM checkin_records ORDER BY date_key, user_id"
-                ).fetchall()
-            ]
-            preferences = [
-                dict(row)
-                for row in conn.execute(
-                    "SELECT * FROM checkin_user_preferences ORDER BY user_id"
                 ).fetchall()
             ]
             global_events = [
@@ -53,17 +47,22 @@ class BackupStoreMixin:
                     "SELECT * FROM checkin_achievements ORDER BY user_id, achievement_id"
                 ).fetchall()
             ]
-            theme_purchases = [
+            user_themes = [
                 dict(row)
                 for row in conn.execute(
-                    "SELECT * FROM checkin_theme_purchases ORDER BY user_id, theme_id"
+                    """
+                    SELECT * FROM checkin_user_themes
+                    ORDER BY user_id, acquired_at, theme_id
+                    """
                 ).fetchall()
             ]
             group_presence = [
                 dict(row)
                 for row in conn.execute(
-                    "SELECT * FROM checkin_group_presence "
-                    "ORDER BY date_key, group_id, user_id"
+                    """
+                    SELECT * FROM checkin_group_presence
+                    ORDER BY date_key, group_id, user_id
+                    """
                 ).fetchall()
             ]
         return {
@@ -71,23 +70,21 @@ class BackupStoreMixin:
             "plugin_name": CHECKIN_SNAPSHOT_PLUGIN_NAME,
             "scope": CHECKIN_SNAPSHOT_SCOPE,
             "exported_at": self.now_iso(),
-            "profiles": profiles,
+            "users": users,
             "records": records,
-            "preferences": preferences,
             "global_events": global_events,
             "achievements": achievements,
-            "theme_purchases": theme_purchases,
+            "user_themes": user_themes,
             "group_presence": group_presence,
         }
 
     def _import_snapshot_sync(self, snapshot: dict[str, Any]) -> dict[str, Any]:
         normalized = _validate_checkin_snapshot(snapshot)
-        profiles = normalized["profiles"]
+        users = normalized["users"]
         records = normalized["records"]
-        preferences = normalized["preferences"]
         global_events = normalized["global_events"]
         achievements = normalized["achievements"]
-        theme_purchases = normalized["theme_purchases"]
+        user_themes = normalized["user_themes"]
         group_presence = normalized["group_presence"]
 
         with closing(self._connect()) as conn:
@@ -96,27 +93,38 @@ class BackupStoreMixin:
                 conn.execute("DELETE FROM checkin_group_presence")
                 conn.execute("DELETE FROM checkin_records")
                 conn.execute("DELETE FROM checkin_achievements")
-                conn.execute("DELETE FROM checkin_theme_purchases")
+                conn.execute("DELETE FROM checkin_user_themes")
                 conn.execute("DELETE FROM checkin_global_events")
-                conn.execute("DELETE FROM checkin_user_preferences")
-                conn.execute("DELETE FROM checkin_profiles")
-                if profiles:
+                conn.execute("DELETE FROM checkin_users")
+                if users:
                     conn.executemany(
                         """
-                        INSERT INTO checkin_profiles (
+                        INSERT INTO checkin_users (
                             user_id, coins, affection, total_days, streak_days,
                             last_checkin_date, boost_start_date, boost_until_date,
                             repeat_penalty_date, repeat_penalty_total,
+                            birthday_month, birthday_day, birthday_source,
+                            qq_birthday_checked, selected_title_id, current_theme_id,
                             created_at, updated_at
-                        )
-                        VALUES (
+                        ) VALUES (
                             :user_id, :coins, :affection, :total_days, :streak_days,
                             :last_checkin_date, :boost_start_date, :boost_until_date,
                             :repeat_penalty_date, :repeat_penalty_total,
+                            :birthday_month, :birthday_day, :birthday_source,
+                            :qq_birthday_checked, :selected_title_id, :current_theme_id,
                             :created_at, :updated_at
                         )
                         """,
-                        profiles,
+                        users,
+                    )
+                if user_themes:
+                    conn.executemany(
+                        """
+                        INSERT INTO checkin_user_themes
+                            (user_id, theme_id, price_paid, acquired_at)
+                        VALUES (:user_id, :theme_id, :price_paid, :acquired_at)
+                        """,
+                        user_themes,
                     )
                 if records:
                     conn.executemany(
@@ -130,13 +138,11 @@ class BackupStoreMixin:
                             total_days_after, streak_days_after,
                             note, event_key, event_label, greeting,
                             greeting_source, greeting_attribution,
-                            secondary_note, template_version,
-                            theme_id,
+                            secondary_note, template_version, theme_id,
                             background_mode, background_source,
                             background_illust_id, background_title,
                             background_author, created_at, updated_at
-                        )
-                        VALUES (
+                        ) VALUES (
                             :date_key, :user_id, :username, :bot_name,
                             :base_coins, :bonus_coins, :coins_reward,
                             :base_affection, :bonus_affection, :affection_reward,
@@ -145,8 +151,7 @@ class BackupStoreMixin:
                             :total_days_after, :streak_days_after,
                             :note, :event_key, :event_label, :greeting,
                             :greeting_source, :greeting_attribution,
-                            :secondary_note, :template_version,
-                            :theme_id,
+                            :secondary_note, :template_version, :theme_id,
                             :background_mode, :background_source,
                             :background_illust_id, :background_title,
                             :background_author, :created_at, :updated_at
@@ -154,51 +159,25 @@ class BackupStoreMixin:
                         """,
                         records,
                     )
-                if preferences:
-                    conn.executemany(
-                        """
-                        INSERT INTO checkin_user_preferences
-                        (user_id, birthday_month, birthday_day, birthday_source,
-                         qq_birthday_checked, selected_title_id, created_at, updated_at)
-                        VALUES (:user_id, :birthday_month, :birthday_day, :birthday_source,
-                                :qq_birthday_checked, :selected_title_id, :created_at, :updated_at)
-                        """,
-                        preferences,
-                    )
-                if preferences:
-                    conn.executemany(
-                        """
-                        UPDATE checkin_user_preferences
-                        SET selected_theme_id = :selected_theme_id
-                        WHERE user_id = :user_id
-                        """,
-                        preferences,
-                    )
                 if global_events:
                     conn.executemany(
                         """
                         INSERT INTO checkin_global_events
-                        (event_id, event_type, date_value, name, created_by, created_at, updated_at)
-                        VALUES (:event_id, :event_type, :date_value, :name, :created_by, :created_at, :updated_at)
+                            (event_id, event_type, date_value, name, created_by,
+                             created_at, updated_at)
+                        VALUES (:event_id, :event_type, :date_value, :name,
+                                :created_by, :created_at, :updated_at)
                         """,
                         global_events,
                     )
                 if achievements:
                     conn.executemany(
                         """
-                        INSERT INTO checkin_achievements (user_id, achievement_id, unlocked_at)
+                        INSERT INTO checkin_achievements
+                            (user_id, achievement_id, unlocked_at)
                         VALUES (:user_id, :achievement_id, :unlocked_at)
                         """,
                         achievements,
-                    )
-                if theme_purchases:
-                    conn.executemany(
-                        """
-                        INSERT INTO checkin_theme_purchases
-                        (user_id, theme_id, cost, purchased_at)
-                        VALUES (:user_id, :theme_id, :cost, :purchased_at)
-                        """,
-                        theme_purchases,
                     )
                 if group_presence:
                     conn.executemany(
@@ -222,12 +201,11 @@ class BackupStoreMixin:
             "schema_version": normalized["schema_version"],
             "plugin_name": normalized["plugin_name"],
             "scope": normalized["scope"],
-            "profiles": len(profiles),
+            "users": len(users),
             "records": len(records),
-            "preferences": len(preferences),
             "global_events": len(global_events),
             "achievements": len(achievements),
-            "theme_purchases": len(theme_purchases),
+            "user_themes": len(user_themes),
             "group_presence": len(group_presence),
             "exported_at": normalized["exported_at"],
             "imported_at": self.now_iso(),

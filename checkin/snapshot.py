@@ -12,7 +12,7 @@ from .models import (
     CHECKIN_SNAPSHOT_SCHEMA_VERSION,
     CHECKIN_SNAPSHOT_SCOPE,
 )
-from .themes import CHECKIN_THEMES, DEFAULT_CHECKIN_THEME_ID
+from .themes import CHECKIN_THEMES
 
 
 def dump_checkin_snapshot_json(snapshot: dict[str, Any]) -> str:
@@ -21,10 +21,7 @@ def dump_checkin_snapshot_json(snapshot: dict[str, Any]) -> str:
 
 
 def load_checkin_snapshot_json(raw: str | bytes) -> dict[str, Any]:
-    if isinstance(raw, bytes):
-        text = raw.decode("utf-8-sig")
-    else:
-        text = str(raw)
+    text = raw.decode("utf-8-sig") if isinstance(raw, bytes) else str(raw)
     try:
         data = json.loads(text)
     except json.JSONDecodeError as exc:
@@ -35,333 +32,252 @@ def load_checkin_snapshot_json(raw: str | bytes) -> dict[str, Any]:
 def validate_checkin_snapshot(snapshot: dict[str, Any]) -> dict[str, Any]:
     if not isinstance(snapshot, dict):
         raise ValueError("签到备份数据必须是对象")
-
     schema_version = snapshot.get("schema_version")
-    if (
-        isinstance(schema_version, bool)
-        or not isinstance(schema_version, int)
-        or schema_version not in range(1, CHECKIN_SNAPSHOT_SCHEMA_VERSION + 1)
-    ):
+    if schema_version != CHECKIN_SNAPSHOT_SCHEMA_VERSION:
         raise ValueError(
-            f"不支持的签到备份版本: {schema_version!r}，当前支持 1 至 "
-            f"{CHECKIN_SNAPSHOT_SCHEMA_VERSION}"
+            f"不支持的签到备份版本: {schema_version!r}，"
+            f"当前版本为 {CHECKIN_SNAPSHOT_SCHEMA_VERSION}"
         )
-
-    plugin_name = str(snapshot.get("plugin_name") or "").strip()
-    if plugin_name != CHECKIN_SNAPSHOT_PLUGIN_NAME:
+    if str(snapshot.get("plugin_name") or "").strip() != CHECKIN_SNAPSHOT_PLUGIN_NAME:
         raise ValueError("签到备份文件不属于当前插件")
-
-    scope = str(snapshot.get("scope") or "").strip()
-    if scope != CHECKIN_SNAPSHOT_SCOPE:
+    if str(snapshot.get("scope") or "").strip() != CHECKIN_SNAPSHOT_SCOPE:
         raise ValueError("签到备份文件作用域不正确")
-
     exported_at = str(snapshot.get("exported_at") or "").strip()
     if not exported_at:
         raise ValueError("签到备份缺少 exported_at")
 
-    profiles = snapshot.get("profiles")
-    if not isinstance(profiles, list):
-        raise ValueError("签到备份 profiles 必须是数组")
-    records = snapshot.get("records")
-    if not isinstance(records, list):
-        raise ValueError("签到备份 records 必须是数组")
-
-    preferences = snapshot.get("preferences") if schema_version >= 3 else []
-    global_events = snapshot.get("global_events") if schema_version >= 3 else []
-    achievements = snapshot.get("achievements") if schema_version >= 3 else []
-    theme_purchases = snapshot.get("theme_purchases") if schema_version >= 4 else []
-    group_presence = snapshot.get("group_presence") if schema_version >= 5 else []
-    for key, value in (
-        ("preferences", preferences),
-        ("global_events", global_events),
-        ("achievements", achievements),
-        ("theme_purchases", theme_purchases),
-        ("group_presence", group_presence),
-    ):
+    collections = {
+        "users": snapshot.get("users"),
+        "records": snapshot.get("records"),
+        "global_events": snapshot.get("global_events"),
+        "achievements": snapshot.get("achievements"),
+        "user_themes": snapshot.get("user_themes"),
+        "group_presence": snapshot.get("group_presence"),
+    }
+    for key, value in collections.items():
         if not isinstance(value, list):
             raise ValueError(f"签到备份 {key} 必须是数组")
 
-    normalized_profiles = [
-        _normalize_profile_snapshot_row(row, index)
-        for index, row in enumerate(profiles)
+    users = [_normalize_user_row(row, i) for i, row in enumerate(collections["users"])]
+    records = [
+        _normalize_record_row(row, i) for i, row in enumerate(collections["records"])
     ]
-    normalized_records = [
-        _normalize_record_snapshot_row(row, index) for index, row in enumerate(records)
+    events = [
+        _normalize_global_event_row(row, i)
+        for i, row in enumerate(collections["global_events"])
     ]
-    normalized_preferences = [
-        _normalize_preference_snapshot_row(row, index)
-        for index, row in enumerate(preferences)
+    achievements = [
+        _normalize_achievement_row(row, i)
+        for i, row in enumerate(collections["achievements"])
     ]
-    normalized_events = [
-        _normalize_global_event_snapshot_row(row, index)
-        for index, row in enumerate(global_events)
+    user_themes = [
+        _normalize_user_theme_row(row, i)
+        for i, row in enumerate(collections["user_themes"])
     ]
-    normalized_achievements = [
-        _normalize_achievement_snapshot_row(row, index)
-        for index, row in enumerate(achievements)
-    ]
-    normalized_theme_purchases = [
-        _normalize_theme_purchase_snapshot_row(row, index)
-        for index, row in enumerate(theme_purchases)
-    ]
-    normalized_group_presence = [
-        _normalize_group_presence_snapshot_row(row, index)
-        for index, row in enumerate(group_presence)
+    group_presence = [
+        _normalize_group_presence_row(row, i)
+        for i, row in enumerate(collections["group_presence"])
     ]
 
-    profile_user_ids: set[str] = set()
-    for index, profile in enumerate(normalized_profiles):
-        user_id = profile["user_id"]
-        if user_id in profile_user_ids:
-            raise ValueError(f"profiles[{index}].user_id duplicate: {user_id}")
-        profile_user_ids.add(user_id)
+    user_ids: set[str] = set()
+    for index, user in enumerate(users):
+        user_id = user["user_id"]
+        if user_id in user_ids:
+            raise ValueError(f"users[{index}].user_id duplicate: {user_id}")
+        user_ids.add(user_id)
+
+    owned_keys: set[tuple[str, str]] = set()
+    for index, owned in enumerate(user_themes):
+        key = (owned["user_id"], owned["theme_id"])
+        if key in owned_keys:
+            raise ValueError(f"user_themes[{index}] duplicate")
+        if owned["user_id"] not in user_ids:
+            raise ValueError(f"user_themes[{index}].user_id has no matching user")
+        owned_keys.add(key)
+
+    for index, user in enumerate(users):
+        if (user["user_id"], user["current_theme_id"]) not in owned_keys:
+            raise ValueError(f"users[{index}].current_theme_id 未拥有")
 
     record_keys: set[tuple[str, str]] = set()
-    for index, record in enumerate(normalized_records):
-        record_key = (record["date_key"], record["user_id"])
-        if record_key in record_keys:
-            raise ValueError(
-                f"records[{index}].date_key and user_id duplicate: "
-                f"{record_key[0]}, {record_key[1]}"
-            )
-        record_keys.add(record_key)
-        if record["user_id"] not in profile_user_ids:
-            raise ValueError(
-                f"records[{index}].user_id has no matching profile: {record['user_id']}"
-            )
-
-    preference_ids: set[str] = set()
-    for index, preference in enumerate(normalized_preferences):
-        user_id = preference["user_id"]
-        if user_id in preference_ids:
-            raise ValueError(f"preferences[{index}].user_id duplicate: {user_id}")
-        preference_ids.add(user_id)
+    for index, record in enumerate(records):
+        key = (record["date_key"], record["user_id"])
+        if key in record_keys:
+            raise ValueError(f"records[{index}] duplicate")
+        if record["user_id"] not in user_ids:
+            raise ValueError(f"records[{index}].user_id has no matching user")
+        record_keys.add(key)
 
     achievement_keys: set[tuple[str, str]] = set()
-    for index, achievement in enumerate(normalized_achievements):
+    for index, achievement in enumerate(achievements):
         key = (achievement["user_id"], achievement["achievement_id"])
         if key in achievement_keys:
             raise ValueError(f"achievements[{index}] duplicate")
+        if achievement["user_id"] not in user_ids:
+            raise ValueError(f"achievements[{index}].user_id has no matching user")
         achievement_keys.add(key)
-        if achievement["user_id"] not in profile_user_ids:
-            raise ValueError(f"achievements[{index}].user_id has no matching profile")
+    for index, user in enumerate(users):
+        selected = user["selected_title_id"]
+        if selected and (user["user_id"], selected) not in achievement_keys:
+            raise ValueError(f"users[{index}].selected_title_id 未解锁")
 
     event_ids: set[int] = set()
     event_dates: set[tuple[str, str]] = set()
-    for index, event in enumerate(normalized_events):
+    for index, event in enumerate(events):
         event_key = (event["event_type"], event["date_value"])
         if event["event_id"] in event_ids or event_key in event_dates:
             raise ValueError(f"global_events[{index}] duplicate")
         event_ids.add(event["event_id"])
         event_dates.add(event_key)
 
-    theme_purchase_keys: set[tuple[str, str]] = set()
-    for index, purchase in enumerate(normalized_theme_purchases):
-        key = (purchase["user_id"], purchase["theme_id"])
-        if key in theme_purchase_keys:
-            raise ValueError(f"theme_purchases[{index}] duplicate")
-        theme_purchase_keys.add(key)
-        if purchase["user_id"] not in profile_user_ids:
-            raise ValueError(
-                f"theme_purchases[{index}].user_id has no matching profile"
-            )
-
-    for index, preference in enumerate(normalized_preferences):
-        selected = preference["selected_title_id"]
-        if selected and (preference["user_id"], selected) not in achievement_keys:
-            raise ValueError(f"preferences[{index}].selected_title_id 未解锁")
-        selected_theme = preference["selected_theme_id"]
-        if (
-            selected_theme != DEFAULT_CHECKIN_THEME_ID
-            and (preference["user_id"], selected_theme) not in theme_purchase_keys
-        ):
-            raise ValueError(f"preferences[{index}].selected_theme_id 未购买")
-
     presence_keys: set[tuple[str, str, str]] = set()
-    for index, presence in enumerate(normalized_group_presence):
-        key = (
-            presence["date_key"],
-            presence["group_id"],
-            presence["user_id"],
-        )
+    for index, presence in enumerate(group_presence):
+        key = (presence["date_key"], presence["group_id"], presence["user_id"])
         if key in presence_keys:
             raise ValueError(f"group_presence[{index}] duplicate")
+        if presence["user_id"] not in user_ids:
+            raise ValueError(f"group_presence[{index}].user_id has no matching user")
         presence_keys.add(key)
-        if presence["user_id"] not in profile_user_ids:
-            raise ValueError(f"group_presence[{index}].user_id has no matching profile")
 
     return {
         "schema_version": CHECKIN_SNAPSHOT_SCHEMA_VERSION,
         "plugin_name": CHECKIN_SNAPSHOT_PLUGIN_NAME,
         "scope": CHECKIN_SNAPSHOT_SCOPE,
         "exported_at": exported_at,
-        "profiles": normalized_profiles,
-        "records": normalized_records,
-        "preferences": normalized_preferences,
-        "global_events": normalized_events,
-        "achievements": normalized_achievements,
-        "theme_purchases": normalized_theme_purchases,
-        "group_presence": normalized_group_presence,
+        "users": users,
+        "records": records,
+        "global_events": events,
+        "achievements": achievements,
+        "user_themes": user_themes,
+        "group_presence": group_presence,
     }
 
 
-def _normalize_profile_snapshot_row(row: Any, index: int) -> dict[str, Any]:
+def _normalize_user_row(row: Any, index: int) -> dict[str, Any]:
+    location = f"users[{index}]"
     if not isinstance(row, dict):
-        raise ValueError(f"profiles[{index}] 必须是对象")
+        raise ValueError(f"{location} 必须是对象")
+    month = _require_int(row, "birthday_month", location)
+    day = _require_int(row, "birthday_day", location)
+    source = _optional_text(row, "birthday_source", "")
+    if (month, day) != (0, 0):
+        validate_month_day(month, day)
+        if source not in {"manual", "qq"}:
+            raise ValueError(f"{location}.birthday_source 无效")
+    selected_title = _optional_text(row, "selected_title_id", "")
+    if selected_title and selected_title not in ACHIEVEMENTS:
+        raise ValueError(f"{location}.selected_title_id 无效")
     return {
-        "user_id": _require_text(row, "user_id", f"profiles[{index}]"),
-        "coins": _require_int(row, "coins", f"profiles[{index}]"),
-        "affection": _require_float(row, "affection", f"profiles[{index}]"),
-        "total_days": _require_int(row, "total_days", f"profiles[{index}]"),
-        "streak_days": _require_int(row, "streak_days", f"profiles[{index}]"),
+        "user_id": _require_text(row, "user_id", location),
+        "coins": _require_int(row, "coins", location),
+        "affection": _require_float(row, "affection", location),
+        "total_days": _require_int(row, "total_days", location),
+        "streak_days": _require_int(row, "streak_days", location),
         "last_checkin_date": _require_text(
-            row, "last_checkin_date", f"profiles[{index}]", allow_blank=True
+            row, "last_checkin_date", location, allow_blank=True
         ),
         "boost_start_date": _require_text(
-            row, "boost_start_date", f"profiles[{index}]", allow_blank=True
+            row, "boost_start_date", location, allow_blank=True
         ),
         "boost_until_date": _require_text(
-            row, "boost_until_date", f"profiles[{index}]", allow_blank=True
+            row, "boost_until_date", location, allow_blank=True
         ),
         "repeat_penalty_date": _require_text(
-            row, "repeat_penalty_date", f"profiles[{index}]", allow_blank=True
+            row, "repeat_penalty_date", location, allow_blank=True
         ),
-        "repeat_penalty_total": _require_float(
-            row, "repeat_penalty_total", f"profiles[{index}]"
+        "repeat_penalty_total": _require_float(row, "repeat_penalty_total", location),
+        "birthday_month": month,
+        "birthday_day": day,
+        "birthday_source": source,
+        "qq_birthday_checked": _require_boolish_int(
+            row, "qq_birthday_checked", location
         ),
-        "created_at": _require_text(row, "created_at", f"profiles[{index}]"),
-        "updated_at": _require_text(row, "updated_at", f"profiles[{index}]"),
+        "selected_title_id": selected_title,
+        "current_theme_id": _validated_theme_id(
+            _require_text(row, "current_theme_id", location),
+            f"{location}.current_theme_id",
+        ),
+        "created_at": _require_text(row, "created_at", location),
+        "updated_at": _require_text(row, "updated_at", location),
     }
 
 
-def _normalize_record_snapshot_row(row: Any, index: int) -> dict[str, Any]:
+def _normalize_record_row(row: Any, index: int) -> dict[str, Any]:
+    location = f"records[{index}]"
     if not isinstance(row, dict):
-        raise ValueError(f"records[{index}] 必须是对象")
+        raise ValueError(f"{location} 必须是对象")
     return {
-        "date_key": _require_text(row, "date_key", f"records[{index}]"),
-        "user_id": _require_text(row, "user_id", f"records[{index}]"),
-        "username": _require_text(row, "username", f"records[{index}]"),
-        "bot_name": _require_text(row, "bot_name", f"records[{index}]"),
-        "base_coins": _require_int(row, "base_coins", f"records[{index}]"),
-        "bonus_coins": _require_int(row, "bonus_coins", f"records[{index}]"),
-        "coins_reward": _require_int(row, "coins_reward", f"records[{index}]"),
-        "base_affection": _require_float(row, "base_affection", f"records[{index}]"),
-        "bonus_affection": _require_float(row, "bonus_affection", f"records[{index}]"),
-        "affection_reward": _require_float(
-            row, "affection_reward", f"records[{index}]"
-        ),
-        "boost_active": _require_boolish_int(row, "boost_active", f"records[{index}]"),
-        "boost_multiplier": _require_float(
-            row, "boost_multiplier", f"records[{index}]"
-        ),
-        "total_coins_after": _require_int(
-            row, "total_coins_after", f"records[{index}]"
-        ),
-        "total_affection_after": _require_float(
-            row, "total_affection_after", f"records[{index}]"
-        ),
-        "total_days_after": _require_int(row, "total_days_after", f"records[{index}]"),
-        "streak_days_after": _require_int(
-            row, "streak_days_after", f"records[{index}]"
-        ),
-        "note": _require_text(row, "note", f"records[{index}]"),
+        "date_key": _require_text(row, "date_key", location),
+        "user_id": _require_text(row, "user_id", location),
+        "username": _require_text(row, "username", location),
+        "bot_name": _require_text(row, "bot_name", location),
+        "base_coins": _require_int(row, "base_coins", location),
+        "bonus_coins": _require_int(row, "bonus_coins", location),
+        "coins_reward": _require_int(row, "coins_reward", location),
+        "base_affection": _require_float(row, "base_affection", location),
+        "bonus_affection": _require_float(row, "bonus_affection", location),
+        "affection_reward": _require_float(row, "affection_reward", location),
+        "boost_active": _require_boolish_int(row, "boost_active", location),
+        "boost_multiplier": _require_float(row, "boost_multiplier", location),
+        "total_coins_after": _require_int(row, "total_coins_after", location),
+        "total_affection_after": _require_float(row, "total_affection_after", location),
+        "total_days_after": _require_int(row, "total_days_after", location),
+        "streak_days_after": _require_int(row, "streak_days_after", location),
+        "note": _require_text(row, "note", location),
         "event_key": _optional_text(row, "event_key", ""),
         "event_label": _optional_text(row, "event_label", ""),
         "greeting": _optional_text(row, "greeting", ""),
         "greeting_source": validate_greeting_source(
             _optional_text(row, "greeting_source", "local"),
-            f"records[{index}].greeting_source",
+            f"{location}.greeting_source",
         ),
         "greeting_attribution": _optional_text(row, "greeting_attribution", ""),
         "secondary_note": _optional_text(row, "secondary_note", ""),
-        "template_version": _optional_text(row, "template_version", "v2"),
+        "template_version": _require_text(row, "template_version", location),
         "theme_id": _validated_theme_id(
-            _optional_text(row, "theme_id", DEFAULT_CHECKIN_THEME_ID),
-            f"records[{index}].theme_id",
+            _require_text(row, "theme_id", location), f"{location}.theme_id"
         ),
         "background_mode": _require_text(
-            row, "background_mode", f"records[{index}]", allow_blank=True
+            row, "background_mode", location, allow_blank=True
         ),
         "background_source": _require_text(
-            row, "background_source", f"records[{index}]", allow_blank=True
+            row, "background_source", location, allow_blank=True
         ),
         "background_illust_id": _require_text(
-            row, "background_illust_id", f"records[{index}]", allow_blank=True
+            row, "background_illust_id", location, allow_blank=True
         ),
         "background_title": _require_text(
-            row, "background_title", f"records[{index}]", allow_blank=True
+            row, "background_title", location, allow_blank=True
         ),
         "background_author": _require_text(
-            row, "background_author", f"records[{index}]", allow_blank=True
+            row, "background_author", location, allow_blank=True
         ),
-        "created_at": _require_text(row, "created_at", f"records[{index}]"),
-        "updated_at": _require_text(row, "updated_at", f"records[{index}]"),
+        "created_at": _require_text(row, "created_at", location),
+        "updated_at": _require_text(row, "updated_at", location),
     }
 
 
-def _normalize_preference_snapshot_row(row: Any, index: int) -> dict[str, Any]:
+def _normalize_user_theme_row(row: Any, index: int) -> dict[str, Any]:
+    location = f"user_themes[{index}]"
     if not isinstance(row, dict):
-        raise ValueError(f"preferences[{index}] 必须是对象")
-    month = _require_int(row, "birthday_month", f"preferences[{index}]")
-    day = _require_int(row, "birthday_day", f"preferences[{index}]")
-    source = _optional_text(row, "birthday_source", "")
-    if (month, day) != (0, 0):
-        validate_month_day(month, day)
-        if source not in {"manual", "qq"}:
-            raise ValueError(f"preferences[{index}].birthday_source 无效")
-    selected = _optional_text(row, "selected_title_id", "")
-    if selected and selected not in ACHIEVEMENTS:
-        raise ValueError(f"preferences[{index}].selected_title_id 无效")
-    selected_theme = _validated_theme_id(
-        _optional_text(row, "selected_theme_id", DEFAULT_CHECKIN_THEME_ID),
-        f"preferences[{index}].selected_theme_id",
-    )
+        raise ValueError(f"{location} 必须是对象")
+    price_paid = _require_int(row, "price_paid", location)
+    if price_paid < 0:
+        raise ValueError(f"{location}.price_paid 不能为负数")
     return {
-        "user_id": _require_text(row, "user_id", f"preferences[{index}]"),
-        "birthday_month": month,
-        "birthday_day": day,
-        "birthday_source": source,
-        "qq_birthday_checked": _require_boolish_int(
-            row, "qq_birthday_checked", f"preferences[{index}]"
+        "user_id": _require_text(row, "user_id", location),
+        "theme_id": _validated_theme_id(
+            _require_text(row, "theme_id", location), f"{location}.theme_id"
         ),
-        "selected_title_id": selected,
-        "selected_theme_id": selected_theme,
-        "created_at": _require_text(row, "created_at", f"preferences[{index}]"),
-        "updated_at": _require_text(row, "updated_at", f"preferences[{index}]"),
+        "price_paid": price_paid,
+        "acquired_at": _require_text(row, "acquired_at", location),
     }
 
 
-def _normalize_theme_purchase_snapshot_row(row: Any, index: int) -> dict[str, Any]:
-    if not isinstance(row, dict):
-        raise ValueError(f"theme_purchases[{index}] 必须是对象")
-    theme_id = _validated_theme_id(
-        _require_text(row, "theme_id", f"theme_purchases[{index}]"),
-        f"theme_purchases[{index}].theme_id",
-    )
-    if theme_id == DEFAULT_CHECKIN_THEME_ID:
-        raise ValueError(f"theme_purchases[{index}] 不应记录默认主题")
-    cost = _require_int(row, "cost", f"theme_purchases[{index}]")
-    if cost < 0:
-        raise ValueError(f"theme_purchases[{index}].cost 不能为负数")
-    return {
-        "user_id": _require_text(row, "user_id", f"theme_purchases[{index}]"),
-        "theme_id": theme_id,
-        "cost": cost,
-        "purchased_at": _require_text(row, "purchased_at", f"theme_purchases[{index}]"),
-    }
-
-
-def _validated_theme_id(value: str, location: str) -> str:
-    theme_id = str(value or "")
-    if theme_id not in CHECKIN_THEMES:
-        raise ValueError(f"{location} 无效")
-    return theme_id
-
-
-def _normalize_group_presence_snapshot_row(row: Any, index: int) -> dict[str, Any]:
-    if not isinstance(row, dict):
-        raise ValueError(f"group_presence[{index}] 必须是对象")
+def _normalize_group_presence_row(row: Any, index: int) -> dict[str, Any]:
     location = f"group_presence[{index}]"
+    if not isinstance(row, dict):
+        raise ValueError(f"{location} 必须是对象")
     date_key = _require_text(row, "date_key", location)
     try:
         date.fromisoformat(date_key)
@@ -379,54 +295,44 @@ def _normalize_group_presence_snapshot_row(row: Any, index: int) -> dict[str, An
     }
 
 
-def _normalize_global_event_snapshot_row(row: Any, index: int) -> dict[str, Any]:
+def _normalize_global_event_row(row: Any, index: int) -> dict[str, Any]:
+    location = f"global_events[{index}]"
     if not isinstance(row, dict):
-        raise ValueError(f"global_events[{index}] 必须是对象")
+        raise ValueError(f"{location} 必须是对象")
     event_type, date_value = validate_global_event_date(
-        _require_text(row, "event_type", f"global_events[{index}]"),
-        _require_text(row, "date_value", f"global_events[{index}]"),
+        _require_text(row, "event_type", location),
+        _require_text(row, "date_value", location),
     )
     return {
-        "event_id": _require_int(row, "event_id", f"global_events[{index}]"),
+        "event_id": _require_int(row, "event_id", location),
         "event_type": event_type,
         "date_value": date_value,
-        "name": clean_event_name(_require_text(row, "name", f"global_events[{index}]")),
+        "name": clean_event_name(_require_text(row, "name", location)),
         "created_by": _optional_text(row, "created_by", ""),
-        "created_at": _require_text(row, "created_at", f"global_events[{index}]"),
-        "updated_at": _require_text(row, "updated_at", f"global_events[{index}]"),
+        "created_at": _require_text(row, "created_at", location),
+        "updated_at": _require_text(row, "updated_at", location),
     }
 
 
-def _normalize_achievement_snapshot_row(row: Any, index: int) -> dict[str, Any]:
+def _normalize_achievement_row(row: Any, index: int) -> dict[str, Any]:
+    location = f"achievements[{index}]"
     if not isinstance(row, dict):
-        raise ValueError(f"achievements[{index}] 必须是对象")
-    achievement_id = _require_text(row, "achievement_id", f"achievements[{index}]")
+        raise ValueError(f"{location} 必须是对象")
+    achievement_id = _require_text(row, "achievement_id", location)
     if achievement_id not in ACHIEVEMENTS:
-        raise ValueError(f"achievements[{index}].achievement_id 无效")
+        raise ValueError(f"{location}.achievement_id 无效")
     return {
-        "user_id": _require_text(row, "user_id", f"achievements[{index}]"),
+        "user_id": _require_text(row, "user_id", location),
         "achievement_id": achievement_id,
-        "unlocked_at": _require_text(row, "unlocked_at", f"achievements[{index}]"),
+        "unlocked_at": _require_text(row, "unlocked_at", location),
     }
 
 
-def _require_text(
-    row: dict[str, Any], key: str, location: str, *, allow_blank: bool = False
-) -> str:
-    if key not in row:
-        raise ValueError(f"{location} 缺少字段 {key}")
-    value = row.get(key)
-    text = "" if value is None else str(value).strip()
-    if not text and not allow_blank:
-        raise ValueError(f"{location}.{key} 不能为空")
-    return text
-
-
-def _optional_text(row: dict[str, Any], key: str, default: str) -> str:
-    value = row.get(key, default)
-    if value is None:
-        return default
-    return str(value)
+def _validated_theme_id(value: str, location: str) -> str:
+    theme_id = str(value or "")
+    if theme_id not in CHECKIN_THEMES:
+        raise ValueError(f"{location} 无效")
+    return theme_id
 
 
 def validate_greeting_source(value: Any, location: str) -> str:
@@ -477,13 +383,28 @@ def clean_event_name(value: object) -> str:
     return text
 
 
+def _require_text(
+    row: dict[str, Any], key: str, location: str, *, allow_blank: bool = False
+) -> str:
+    if key not in row:
+        raise ValueError(f"{location} 缺少字段 {key}")
+    value = row.get(key)
+    text = "" if value is None else str(value).strip()
+    if not text and not allow_blank:
+        raise ValueError(f"{location}.{key} 不能为空")
+    return text
+
+
+def _optional_text(row: dict[str, Any], key: str, default: str) -> str:
+    value = row.get(key, default)
+    return default if value is None else str(value)
+
+
 def _require_int(row: dict[str, Any], key: str, location: str) -> int:
     if key not in row:
         raise ValueError(f"{location} 缺少字段 {key}")
     value = row.get(key)
-    if isinstance(value, bool):
-        raise ValueError(f"{location}.{key} 必须是整数")
-    if isinstance(value, float) and not value.is_integer():
+    if isinstance(value, bool) or (isinstance(value, float) and not value.is_integer()):
         raise ValueError(f"{location}.{key} 必须是整数")
     try:
         return int(value)
@@ -511,13 +432,13 @@ def _require_boolish_int(row: dict[str, Any], key: str, location: str) -> int:
         raise ValueError(f"{location} 缺少字段 {key}")
     value = row.get(key)
     if isinstance(value, bool):
-        return 1 if value else 0
+        return int(value)
     if isinstance(value, float) and not value.is_integer():
         raise ValueError(f"{location}.{key} 必须是布尔值或 0/1")
     try:
-        int_value = int(value)
+        parsed = int(value)
     except (TypeError, ValueError) as exc:
         raise ValueError(f"{location}.{key} 必须是布尔值或 0/1") from exc
-    if int_value not in (0, 1):
+    if parsed not in (0, 1):
         raise ValueError(f"{location}.{key} 只能是 0 或 1")
-    return int_value
+    return parsed
