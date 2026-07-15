@@ -12,6 +12,17 @@ LEGACY_CHECKIN_TABLES = (
     "checkin_user_preferences",
     "checkin_theme_purchases",
 )
+LEGACY_CHECKIN_RECORDS_TABLE = "_checkin_records_pre_v3"
+
+_SUPPORTED_LEGACY_THEME_IDS = (
+    "default",
+    "01",
+    "02",
+    "03",
+    "blue",
+    "red",
+    "yellow",
+)
 
 _REQUIRED_PROFILE_COLUMNS = {
     "user_id",
@@ -58,10 +69,24 @@ def backup_legacy_checkin_database(
     return backup_path
 
 
+def stage_legacy_checkin_records(conn: sqlite3.Connection) -> str | None:
+    existing = _table_names(conn)
+    if "checkin_records" not in existing:
+        return None
+    if LEGACY_CHECKIN_RECORDS_TABLE in existing:
+        raise RuntimeError("旧版签到记录暂存表已存在，无法安全迁移")
+    conn.execute(
+        f'ALTER TABLE "checkin_records" RENAME TO "{LEGACY_CHECKIN_RECORDS_TABLE}"'
+    )
+    conn.execute("DROP INDEX IF EXISTS idx_checkin_records_member_updated")
+    return LEGACY_CHECKIN_RECORDS_TABLE
+
+
 def migrate_legacy_checkin_data(
     conn: sqlite3.Connection,
     *,
     legacy_tables: tuple[str, ...],
+    legacy_records_table: str | None,
     backup_path: Path,
 ) -> LegacyMigrationSummary:
     if "checkin_profiles" not in legacy_tables:
@@ -74,7 +99,11 @@ def migrate_legacy_checkin_data(
         raise RuntimeError(f"旧版签到用户表缺少必要字段: {names}")
 
     users = _table_count(conn, "checkin_profiles")
-    records = _table_count(conn, "checkin_records")
+    records = (
+        _table_count(conn, legacy_records_table)
+        if legacy_records_table is not None
+        else 0
+    )
     preferences = (
         _table_count(conn, "checkin_user_preferences")
         if "checkin_user_preferences" in legacy_tables
@@ -175,6 +204,35 @@ def migrate_legacy_checkin_data(
         if missing_preferences:
             names = ", ".join(sorted(missing_preferences))
             raise RuntimeError(f"旧版签到偏好表缺少必要字段: {names}")
+        if "selected_theme_id" in preference_columns:
+            unsupported_theme = conn.execute(
+                """
+                SELECT selected_theme_id
+                FROM checkin_user_preferences
+                WHERE selected_theme_id IS NULL
+                   OR selected_theme_id NOT IN ('default', '01', '02', '03')
+                LIMIT 1
+                """
+            ).fetchone()
+            if unsupported_theme is not None:
+                raise RuntimeError(
+                    "旧版签到偏好记录包含未知主题: "
+                    f"{unsupported_theme[0]!s}"
+                )
+        orphaned_preference = conn.execute(
+            """
+            SELECT preference.user_id
+            FROM checkin_user_preferences AS preference
+            LEFT JOIN checkin_users AS user ON user.user_id = preference.user_id
+            WHERE user.user_id IS NULL
+            LIMIT 1
+            """
+        ).fetchone()
+        if orphaned_preference is not None:
+            raise RuntimeError(
+                "旧版签到偏好记录缺少对应用户: "
+                f"{orphaned_preference[0]!s}"
+            )
         selected_theme_expression = (
             "preference.selected_theme_id"
             if "selected_theme_id" in preference_columns
@@ -217,6 +275,34 @@ def migrate_legacy_checkin_data(
         if missing_purchases:
             names = ", ".join(sorted(missing_purchases))
             raise RuntimeError(f"旧版签到主题购买表缺少必要字段: {names}")
+        unsupported_theme = conn.execute(
+            """
+            SELECT theme_id
+            FROM checkin_theme_purchases
+            WHERE theme_id IS NULL
+               OR theme_id NOT IN ('default', '01', '02', '03')
+            LIMIT 1
+            """
+        ).fetchone()
+        if unsupported_theme is not None:
+            raise RuntimeError(
+                "旧版签到主题购买记录包含未知主题: "
+                f"{unsupported_theme[0]!s}"
+            )
+        orphaned_purchase = conn.execute(
+            """
+            SELECT purchase.user_id
+            FROM checkin_theme_purchases AS purchase
+            LEFT JOIN checkin_users AS user ON user.user_id = purchase.user_id
+            WHERE user.user_id IS NULL
+            LIMIT 1
+            """
+        ).fetchone()
+        if orphaned_purchase is not None:
+            raise RuntimeError(
+                "旧版签到主题购买记录缺少对应用户: "
+                f"{orphaned_purchase[0]!s}"
+            )
         conn.execute(
             f"""
             INSERT INTO checkin_user_themes
@@ -248,26 +334,8 @@ def migrate_legacy_checkin_data(
         ON CONFLICT(user_id, theme_id) DO NOTHING
         """
     )
-    conn.execute(
-        """
-        UPDATE checkin_records
-        SET template_version = CASE
-                WHEN template_version LIKE '%:%' THEN template_version
-                WHEN theme_id = '01' THEN 'blue:1'
-                WHEN theme_id = '02' THEN 'red:1'
-                WHEN theme_id = '03' THEN 'yellow:1'
-                WHEN theme_id = 'default' THEN 'default:1'
-                ELSE template_version
-            END,
-            theme_id = CASE theme_id
-                WHEN '01' THEN 'blue'
-                WHEN '02' THEN 'red'
-                WHEN '03' THEN 'yellow'
-                ELSE theme_id
-            END
-        WHERE theme_id IN ('default', '01', '02', '03')
-        """
-    )
+    if legacy_records_table is not None:
+        _migrate_legacy_records(conn, legacy_records_table)
 
     migrated_users = int(
         conn.execute(
@@ -300,6 +368,8 @@ def migrate_legacy_checkin_data(
 
     for table in reversed(legacy_tables):
         conn.execute(f'DROP TABLE "{table}"')
+    if legacy_records_table is not None:
+        conn.execute(f'DROP TABLE "{legacy_records_table}"')
 
     return LegacyMigrationSummary(
         users=users,
@@ -312,11 +382,15 @@ def migrate_legacy_checkin_data(
 
 
 def _legacy_tables(conn: sqlite3.Connection) -> tuple[str, ...]:
+    existing = _table_names(conn)
+    return tuple(table for table in LEGACY_CHECKIN_TABLES if table in existing)
+
+
+def _table_names(conn: sqlite3.Connection) -> set[str]:
     rows = conn.execute(
         "SELECT name FROM sqlite_master WHERE type = 'table'"
     ).fetchall()
-    existing = {str(row[0]) for row in rows}
-    return tuple(table for table in LEGACY_CHECKIN_TABLES if table in existing)
+    return {str(row[0]) for row in rows}
 
 
 def _table_columns(conn: sqlite3.Connection, table: str) -> set[str]:
@@ -327,6 +401,117 @@ def _table_columns(conn: sqlite3.Connection, table: str) -> set[str]:
 
 def _table_count(conn: sqlite3.Connection, table: str) -> int:
     return int(conn.execute(f'SELECT COUNT(*) FROM "{table}"').fetchone()[0])
+
+
+def _migrate_legacy_records(conn: sqlite3.Connection, source_table: str) -> None:
+    source_columns = _table_columns(conn, source_table)
+    required_columns = {"date_key", "user_id", "created_at", "updated_at"}
+    missing = required_columns - source_columns
+    if missing:
+        names = ", ".join(sorted(missing))
+        raise RuntimeError(f"旧版签到记录表缺少必要字段: {names}")
+
+    theme_expression = (
+        'source."theme_id"' if "theme_id" in source_columns else "'default'"
+    )
+    if "theme_id" in source_columns:
+        placeholders = ", ".join("?" for _ in _SUPPORTED_LEGACY_THEME_IDS)
+        unsupported_theme = conn.execute(
+            f"""
+            SELECT source.theme_id
+            FROM "{source_table}" AS source
+            WHERE source.theme_id IS NULL
+               OR source.theme_id NOT IN ({placeholders})
+            LIMIT 1
+            """,
+            _SUPPORTED_LEGACY_THEME_IDS,
+        ).fetchone()
+        if unsupported_theme is not None:
+            raise RuntimeError(
+                "旧版签到记录包含未知主题: " f"{unsupported_theme[0]!s}"
+            )
+
+    orphaned_user = conn.execute(
+        f"""
+        SELECT source.user_id
+        FROM "{source_table}" AS source
+        LEFT JOIN checkin_users AS user ON user.user_id = source.user_id
+        WHERE user.user_id IS NULL
+        LIMIT 1
+        """
+    ).fetchone()
+    if orphaned_user is not None:
+        raise RuntimeError(
+            "旧版签到记录缺少对应用户: " f"{orphaned_user[0]!s}"
+        )
+
+    columns_with_defaults = (
+        ("date_key", None),
+        ("user_id", None),
+        ("username", "''"),
+        ("bot_name", "''"),
+        ("base_coins", "0"),
+        ("bonus_coins", "0"),
+        ("coins_reward", "0"),
+        ("base_affection", "0"),
+        ("bonus_affection", "0"),
+        ("affection_reward", "0"),
+        ("boost_active", "0"),
+        ("boost_multiplier", "1"),
+        ("total_coins_after", "0"),
+        ("total_affection_after", "0"),
+        ("total_days_after", "0"),
+        ("streak_days_after", "0"),
+        ("note", "''"),
+        ("event_key", "''"),
+        ("event_label", "''"),
+        ("greeting", "''"),
+        ("greeting_source", "'local'"),
+        ("greeting_attribution", "''"),
+        ("secondary_note", "''"),
+        ("template_version", None),
+        ("theme_id", None),
+        ("background_mode", "''"),
+        ("background_source", "''"),
+        ("background_illust_id", "''"),
+        ("background_title", "''"),
+        ("background_author", "''"),
+        ("created_at", None),
+        ("updated_at", None),
+    )
+    target_columns = [name for name, _ in columns_with_defaults]
+    select_expressions: list[str] = []
+    for name, fallback in columns_with_defaults:
+        if name == "theme_id":
+            select_expressions.append(_theme_id_sql(theme_expression))
+        elif name == "template_version":
+            template_expression = (
+                'source."template_version"'
+                if "template_version" in source_columns
+                else "''"
+            )
+            select_expressions.append(
+                "CASE "
+                f"WHEN {template_expression} LIKE '%:%' THEN {template_expression} "
+                f"WHEN {theme_expression} IN ('01', 'blue') THEN 'blue:1' "
+                f"WHEN {theme_expression} IN ('02', 'red') THEN 'red:1' "
+                f"WHEN {theme_expression} IN ('03', 'yellow') THEN 'yellow:1' "
+                "ELSE 'default:1' END"
+            )
+        elif name in source_columns:
+            select_expressions.append(f'source."{name}"')
+        elif fallback is not None:
+            select_expressions.append(fallback)
+        else:
+            raise RuntimeError(f"旧版签到记录表缺少必要字段: {name}")
+
+    conn.execute(
+        f"""
+        INSERT INTO checkin_records ({", ".join(target_columns)})
+        SELECT {", ".join(select_expressions)}
+        FROM "{source_table}" AS source
+        """
+    )
 
 
 def _theme_id_sql(expression: str) -> str:

@@ -8,6 +8,7 @@ from .legacy_migration import (
     backup_legacy_checkin_database,
     detect_legacy_checkin_tables,
     migrate_legacy_checkin_data,
+    stage_legacy_checkin_records,
 )
 from .themes import CHECKIN_THEMES
 
@@ -37,12 +38,16 @@ class SchemaMixin:
                 backup_path = backup_legacy_checkin_database(conn, self._db_path)
             try:
                 conn.execute("BEGIN IMMEDIATE")
+                legacy_records_table = (
+                    stage_legacy_checkin_records(conn) if legacy_tables else None
+                )
                 self._create_checkin_schema(conn)
                 self._sync_builtin_themes(conn)
                 if legacy_tables and backup_path is not None:
                     self.legacy_migration_summary = migrate_legacy_checkin_data(
                         conn,
                         legacy_tables=legacy_tables,
+                        legacy_records_table=legacy_records_table,
                         backup_path=backup_path,
                     )
                 conn.execute(f"PRAGMA user_version = {CHECKIN_DB_SCHEMA_VERSION}")
