@@ -51,13 +51,6 @@ def get_checkin_card_template(theme_id: str = DEFAULT_CHECKIN_THEME_ID) -> str:
     return html.replace(_CSS_MARKER, css)
 
 
-def _load_checkin_card_template() -> str:
-    return get_checkin_card_template(DEFAULT_CHECKIN_THEME_ID)
-
-
-CHECKIN_CARD_TEMPLATE = get_checkin_card_template()
-
-
 @dataclass(frozen=True)
 class CardBackground:
     image_path: str = ""

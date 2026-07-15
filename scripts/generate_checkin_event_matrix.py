@@ -17,9 +17,9 @@ sys.path.insert(0, str(PROJECT_ROOT.parent))
 
 from astrbot_plugin_get_px.checkin import CheckinProfile, CheckinRecord  # noqa: E402
 from astrbot_plugin_get_px.checkin.card import (  # noqa: E402
-    CHECKIN_CARD_TEMPLATE,
     CardBackground,
     build_checkin_card_data,
+    get_checkin_card_template,
 )
 from astrbot_plugin_get_px.checkin.content import resolve_checkin_content  # noqa: E402
 from astrbot_plugin_get_px.checkin.holiday import OnlineHoliday  # noqa: E402
@@ -217,7 +217,7 @@ async def render_matrix() -> list[dict[str, object]]:
                 user_title="今日旅人",
                 content=content,
             )
-            html = Template(CHECKIN_CARD_TEMPLATE).render(data)
+            html = Template(get_checkin_card_template()).render(data)
             html_path = OUTPUT_DIR / f"{scenario.slug}.html"
             html_path.write_text(html, encoding="utf-8")
             await page.goto(html_path.resolve().as_uri())

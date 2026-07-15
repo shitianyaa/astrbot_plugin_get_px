@@ -8,6 +8,9 @@ from astrbot.api import logger
 
 LOG_PREFIX = "[GetPx]"
 
+# Pixiv access_token 有效期约 3600 秒，提前 10 分钟刷新避免临界过期
+TOKEN_REFRESH_INTERVAL_SECONDS = 3000.0
+
 
 def _is_missing_illust_error(exc: Exception) -> bool:
     for attr in ("status", "status_code", "code"):
@@ -70,7 +73,7 @@ class PixivClient:
 
         self._api = api
         self._cached_token = self.refresh_token
-        self._expires_at = now + 3000
+        self._expires_at = now + TOKEN_REFRESH_INTERVAL_SECONDS
         logger.info(f"{LOG_PREFIX} Pixiv 登录成功")
 
     async def _acquire_api(self):
@@ -95,11 +98,22 @@ class PixivClient:
         except asyncio.TimeoutError as exc:
             raise TimeoutError(f"Pixiv {operation}超时") from exc
 
+    async def _wait_for_with_retry(self, factory, *, operation: str):
+        """幂等请求失败时做一次轻量重试，缓解瞬时网络抖动。"""
+        try:
+            return await self._wait_for(factory(), operation=operation)
+        except Exception as exc:
+            if self._closed:
+                raise
+            logger.warning(f"{LOG_PREFIX} Pixiv {operation}失败，1 秒后重试: {exc}")
+            await asyncio.sleep(1.0)
+            return await self._wait_for(factory(), operation=operation)
+
     async def search(self, tag: str, offset: int = 0) -> list[dict]:
         api = await self._acquire_api()
         try:
-            resp = await self._wait_for(
-                api.search_illust(
+            resp = await self._wait_for_with_retry(
+                lambda: api.search_illust(
                     tag,
                     search_target="partial_match_for_tags",
                     sort="date_desc",
@@ -114,8 +128,8 @@ class PixivClient:
     async def ranking(self, mode: str = "week", offset: int = 0) -> list[dict]:
         api = await self._acquire_api()
         try:
-            resp = await self._wait_for(
-                api.illust_ranking(mode=mode, offset=offset),
+            resp = await self._wait_for_with_retry(
+                lambda: api.illust_ranking(mode=mode, offset=offset),
                 operation="排行榜请求",
             )
         finally:

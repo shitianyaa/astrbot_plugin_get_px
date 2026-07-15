@@ -90,7 +90,7 @@ class CheckinCardCache:
             )
         try:
             async with lock:
-                cached = self.get(date_key, key)
+                cached = await asyncio.to_thread(self.get, date_key, key)
                 if cached is not None:
                     return cached
 
@@ -190,12 +190,6 @@ class CheckinCardCache:
         if not deferred_expired_store:
             self._last_cleanup_date = current
         return removed
-
-    def _begin_store(self, date_key: str) -> None:
-        with self._active_store_lock:
-            self._active_store_dates[date_key] = (
-                self._active_store_dates.get(date_key, 0) + 1
-            )
 
     def _end_store(self, date_key: str) -> None:
         with self._active_store_lock:

@@ -298,7 +298,7 @@ class SearchMixin:
                         )
                         forward_success = True
                         break
-                    except (asyncio.TimeoutError, Exception) as e:
+                    except Exception as e:
                         if attempt < max_retries:
                             wait_sec = attempt * 2
                             logger.warning(
@@ -339,7 +339,7 @@ class SearchMixin:
                                 )
                                 sent_illust_ids.add(str(illust.get("id") or ""))
                                 break
-                            except (asyncio.TimeoutError, Exception) as e:
+                            except Exception as e:
                                 if attempt < max_retries:
                                     await asyncio.sleep(attempt * 2)
                                 else:
@@ -392,7 +392,7 @@ class SearchMixin:
                             )
                             sent_illust_ids.add(str(illust.get("id") or ""))
                             break
-                        except (asyncio.TimeoutError, Exception) as e:
+                        except Exception as e:
                             if attempt < max_retries:
                                 wait_sec = attempt * 2
                                 logger.warning(

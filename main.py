@@ -15,10 +15,11 @@
     /pi <作品ID>               查看作品详情
     /签到                      每日签到
     /签到测试                  管理员预览签到卡片
-    /ph                        查看帮助
 """
 
-from __future__ import annotations
+# 注意：不要在本模块使用 `from __future__ import annotations`。
+# AstrBot 的指令解析器按运行时注解识别 GreedyStr（`annotation is GreedyStr`），
+# 字符串化注解会让贪婪参数失效。
 
 import asyncio
 from pathlib import Path
@@ -29,6 +30,7 @@ import weakref
 from astrbot.api.all import AstrBotConfig, Image, logger
 from astrbot.api.event import AstrMessageEvent, filter
 from astrbot.api.star import Context, Star
+from astrbot.core.star.filter.command import GreedyStr
 from astrbot.core.star.star_tools import StarTools
 from .checkin import CheckinStore, UnversionedCheckinDatabaseError
 from .checkin.application import CheckinApplicationMixin
@@ -49,7 +51,7 @@ from .plugin_api import PluginWebApi
 
 LOG_PREFIX = "[GetPx]"
 PLUGIN_NAME = "astrbot_plugin_get_px"
-PLUGIN_VERSION = "3.1.0"
+PLUGIN_VERSION = "v3.2.0"
 WEB_INTERNAL_ERROR_MESSAGE = "服务内部错误，请稍后重试"
 
 AUTO_TRIGGER_PATTERN = r"^/?(来\s*(.*?)(份|个|张|点))(.*?)(福利|色|瑟|涩|塞)?图$"
@@ -114,6 +116,7 @@ class GetPxPlugin(
         self.checkin_greeting = CheckinGreetingGenerator(context)
         self.holiday_calendar: HolidayCalendar | None = None
         self._holiday_refresh_task: asyncio.Task | None = None
+        self._terminating = False
         self._checkin_flow_locks: weakref.WeakValueDictionary[str, asyncio.Lock] = (
             weakref.WeakValueDictionary()
         )
@@ -127,11 +130,12 @@ class GetPxPlugin(
         data_dir = StarTools.get_data_dir(PLUGIN_NAME)
         self.data_dir = Path(data_dir)
         self._init_client()
-        self.image_index = ImageIndexStore(data_dir)
+        # SQLite DDL/迁移是同步操作，放入线程池避免阻塞事件循环
+        self.image_index = await asyncio.to_thread(ImageIndexStore, data_dir)
         await self.image_index.cleanup_old_days()
         checkin_database_existed = (self.data_dir / "checkin.sqlite3").exists()
         try:
-            self.checkin_store = CheckinStore(data_dir)
+            self.checkin_store = await asyncio.to_thread(CheckinStore, data_dir)
         except UnversionedCheckinDatabaseError:
             logger.error(
                 f"{LOG_PREFIX} 签到数据库缺少 schema 版本号且已包含数据表，"
@@ -146,7 +150,7 @@ class GetPxPlugin(
             f"version={PLUGIN_VERSION}, path={self.checkin_store._db_path}"
         )
         self.checkin_cache = CheckinCardCache(self.data_dir / "checkin_card_cache")
-        self.checkin_cache.cleanup_expired(force=True)
+        await asyncio.to_thread(self.checkin_cache.cleanup_expired, force=True)
         self.holiday_calendar = HolidayCalendar(
             self.data_dir,
             plugin_version=PLUGIN_VERSION,
@@ -202,7 +206,10 @@ class GetPxPlugin(
         return await self._web_api().checkin_import()
 
     async def terminate(self):
-        """插件卸载/停用时清理资源。"""
+        """插件卸载/停用时清理资源。可重入，二次调用直接返回。"""
+        if self._terminating:
+            return
+        self._terminating = True
         if self._holiday_refresh_task is not None:
             self._holiday_refresh_task.cancel()
             await asyncio.gather(self._holiday_refresh_task, return_exceptions=True)
@@ -211,6 +218,7 @@ class GetPxPlugin(
             await self.client.close()
             self.client = None
         await self.downloader.close()
+        await self.checkin_greeting.close()
         self._last_request.clear()
         locks = getattr(self, "_checkin_flow_locks", None)
         if locks is not None:
@@ -226,7 +234,7 @@ class GetPxPlugin(
     # ──────────────────────────────────────────────────────────────
 
     @filter.command("p")
-    async def cmd_p(self, event: AstrMessageEvent, tag: str = "", count: str = ""):
+    async def cmd_p(self, event: AstrMessageEvent, query: GreedyStr):
         """搜索 Pixiv 并发送图片。用法: /p [标签] [数量]"""
         if not self._ensure_client_or_error(event):
             yield event.plain_result(
@@ -234,13 +242,19 @@ class GetPxPlugin(
             )
             return
         event.stop_event()
-        # 如果 tag 是纯数字，视为数量（无标签搜索排行榜）
-        if tag and tag.isdigit():
-            async for result in self._handle_search(event, tag="", count_str=tag):
-                yield result
-        else:
-            async for result in self._handle_search(event, tag=tag, count_str=count):
-                yield result
+        tag, count = self._split_tag_and_count(str(query))
+        async for result in self._handle_search(event, tag=tag, count_str=count):
+            yield result
+
+    @staticmethod
+    def _split_tag_and_count(query: str) -> tuple[str, str]:
+        """把 GreedyStr 参数拆成标签与尾部数量；纯数字视为数量（无标签搜排行榜）。"""
+        tokens = query.split()
+        if not tokens:
+            return "", ""
+        if tokens[-1].isdigit():
+            return " ".join(tokens[:-1]), tokens[-1]
+        return " ".join(tokens), ""
 
     # ──────────────────────────────────────────────────────────────
     # 管理指令
@@ -284,7 +298,9 @@ class GetPxPlugin(
             yield result
 
     @filter.command("pd")
-    async def cmd_download(self, event: AstrMessageEvent, illust_id: str = ""):
+    async def cmd_download(
+        self, event: AstrMessageEvent, illust_id: str = "", page: str = ""
+    ):
         """通过作品ID下载并发送图片。用法: /pd <作品ID> [页码]"""
         if not self._ensure_client_or_error(event):
             yield event.plain_result(
@@ -296,38 +312,13 @@ class GetPxPlugin(
                 "⚠️ 用法: /pd <作品ID> [页码]\n示例: /pd 12345678\n多页作品可指定页码: /pd 12345678 2"
             )
             return
-        event.stop_event()
-
-        # 解析参数：/pd 12345678 或 /pd 12345678 2
-        parts = illust_id.split()
-        if len(parts) == 1:
-            id_str = parts[0]
-            page_str = "1"
-        elif len(parts) == 2:
-            id_str, page_str = parts
-        else:
-            yield event.plain_result(
-                "⚠️ 用法: /pd <作品ID> [页码]\n示例: /pd 12345678\n多页作品可指定页码: /pd 12345678 2"
-            )
-            return
-
-        if not id_str.isdigit():
+        if not illust_id.isdigit():
             yield event.plain_result("⚠️ 作品ID必须是数字\n用法: /pd <作品ID> [页码]")
             return
-
-        try:
-            page = int(page_str) if page_str.isdigit() else 1
-        except (TypeError, ValueError):
-            page = 1
-
-        async for result in self._handle_download(event, int(id_str), page):
-            yield result
-
-    @filter.command("ph")
-    async def cmd_help(self, event: AstrMessageEvent):
-        """查看 Pixiv 插件帮助。"""
         event.stop_event()
-        yield event.plain_result(self._build_help())
+        page_number = int(page) if page.isdigit() else 1
+        async for result in self._handle_download(event, int(illust_id), page_number):
+            yield result
 
     @filter.command("签到")
     async def cmd_checkin(self, event: AstrMessageEvent):
@@ -521,78 +512,6 @@ class GetPxPlugin(
             event, tag=tag_part, count_str=count_str
         ):
             yield result
-
-    # ──────────────────────────────────────────────────────────────
-    # 子指令实现
-    # ──────────────────────────────────────────────────────────────
-
-    @staticmethod
-    def _build_help() -> str:
-        lines = [
-            "📖 Pixiv 发图 — 使用帮助",
-            "",
-            "🔍 /p [标签] [数量]",
-            "　　按标签搜索并发送图片（默认 1 张）",
-            "　　示例: /p 初音ミク 3",
-            "",
-            "📊 /pr [排行类型] [数量]",
-            "　　获取排行榜",
-            "　　发送 /prl 查看所有类型",
-            "",
-            "🔎 /pi <作品ID>",
-            "　　查看作品详情",
-            "　　示例: /pi 12345678",
-            "",
-            "📥 /pd <作品ID> [页码]",
-            "　　通过作品ID下载并发送图片",
-            "　　多页作品可指定页码",
-            "　　示例: /pd 12345678",
-            "　　示例: /pd 12345678 2",
-            "",
-            "签到",
-            "　　每日签到，也可直接发送 签到",
-            "",
-            "签到帮助",
-            "　　发送完整签到功能帮助图片",
-            "",
-            "签到测试",
-            "　　管理员预览签到卡片，不写入签到数据",
-            "",
-            "签到导出",
-            "　　管理员导出签到完整备份文件",
-            "",
-            "签到状态",
-            "　　查看累计签到、金币、好感度和加持状态",
-            "",
-            "签到排行 [今日|月榜|连签|累计]",
-            "　　查看当前群独立统计的签到排行",
-            "",
-            "签到商店 / 购买加持 / 刷新签到背景",
-            "　　使用金币购买好感度加持或重新抽取当日背景",
-            "",
-            "签到主题 / 查看主题 <编号>",
-            "　　查看主题列表或直接预览指定主题",
-            "购买主题 <编号> / 切换主题 <编号>",
-            "　　解锁并切换签到卡片主题",
-            "",
-            "签到生日 / 签到成就 / 签到称号 / 佩戴称号",
-            "　　查看或自动读取生日，查看成就并切换卡片称号",
-            "",
-            "签到事件（管理员）",
-            "　　添加、查看或删除全局年度/单次纪念日",
-            "",
-            "🤖 自然语言触发（需配置开启 auto_trigger_enabled）",
-            "　　来一份图 → 发送 1 张排行榜图片",
-            "　　来三张初音ミク图 → 搜标签发送 3 张",
-            "　　来两张萝莉图 → 搜标签发送 2 张",
-            "",
-            "⚙️ 漫画过滤（filter_manga）:",
-            "　　开启后，只要作品类型为漫画就自动过滤",
-            "　　漫画日榜 day_manga 作为主动请求保留后门",
-            "",
-            "❓ /ph 显示本帮助",
-        ]
-        return "\n".join(lines)
 
     # ──────────────────────────────────────────────────────────────
     # 工具方法

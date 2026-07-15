@@ -50,14 +50,15 @@ class CheckinCardTemplateTest(unittest.TestCase):
         self.assertIsNone(re.search(r"https?://", html + css))
 
     def test_runtime_template_embeds_local_css(self):
-        from astrbot_plugin_get_px.checkin.card import CHECKIN_CARD_TEMPLATE
+        from astrbot_plugin_get_px.checkin.card import get_checkin_card_template
 
-        self.assertNotIn("/*__CHECKIN_CARD_CSS__*/", CHECKIN_CARD_TEMPLATE)
-        self.assertNotIn('href="./style.css"', CHECKIN_CARD_TEMPLATE)
-        self.assertNotIn("__CHECKIN_CARD_FONT_DATA__", CHECKIN_CARD_TEMPLATE)
-        self.assertIn(".paper-sheet", CHECKIN_CARD_TEMPLATE)
-        self.assertIn('url("data:font/woff2;base64,', CHECKIN_CARD_TEMPLATE)
-        self.assertIsNone(re.search(r"https?://", CHECKIN_CARD_TEMPLATE))
+        template = get_checkin_card_template()
+        self.assertNotIn("/*__CHECKIN_CARD_CSS__*/", template)
+        self.assertNotIn('href="./style.css"', template)
+        self.assertNotIn("__CHECKIN_CARD_FONT_DATA__", template)
+        self.assertIn(".paper-sheet", template)
+        self.assertIn('url("data:font/woff2;base64,', template)
+        self.assertIsNone(re.search(r"https?://", template))
 
     def test_local_font_asset_is_bundled_and_reasonably_sized(self):
         css = (TEMPLATE_DIR / "style.css").read_text(encoding="utf-8")

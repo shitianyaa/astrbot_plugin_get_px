@@ -181,7 +181,7 @@ class DeliveryMixin:
                     )
                     send_success = True
                     break
-                except (asyncio.TimeoutError, Exception) as e:
+                except Exception as e:
                     if attempt < max_retries:
                         wait_sec = attempt * 2  # 递增等待：2秒、4秒
                         logger.warning(

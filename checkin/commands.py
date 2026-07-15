@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 from dataclasses import replace
 from datetime import date, timedelta
 from pathlib import Path
@@ -817,7 +818,8 @@ class CheckinCommandMixin:
                 return renderer_source_path
 
             if cache is not None:
-                cache_key = self._checkin_card_cache_key(
+                cache_key = await asyncio.to_thread(
+                    self._checkin_card_cache_key,
                     event,
                     profile=profile,
                     record=record,

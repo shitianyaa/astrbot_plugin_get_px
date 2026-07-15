@@ -160,7 +160,9 @@ class CheckinArtworkMixin:
         width = CHECKIN_CARD_WIDTH
         height = CHECKIN_CARD_HEIGHT
         quality = self._cfg_int("checkin_card_quality", 95, 60, 100)
-        data = build_checkin_card_data(
+        # 视图模型构建含背景图 Data URL 编码（读文件 + base64），放入线程池
+        data = await asyncio.to_thread(
+            build_checkin_card_data,
             profile=profile,
             record=record,
             bot_name=bot_name,

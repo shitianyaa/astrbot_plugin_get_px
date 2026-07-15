@@ -5,9 +5,10 @@
 一个面向 AstrBot 的 Pixiv 发图插件：安全搜索普通分级插画、查看排行榜、下载作品、每日签到，并在 WebUI 管理群排行、成员数值、内容安全和签到数据。
 
 ![AstrBot](https://img.shields.io/badge/AstrBot-plugin-5865f2?style=flat-square)
-![Version](https://img.shields.io/badge/version-3.1.0-22c55e?style=flat-square)
+![Version](https://img.shields.io/badge/version-3.2.0-22c55e?style=flat-square)
 ![Python](https://img.shields.io/badge/Python-3.10%2B-3776ab?style=flat-square)
 ![Platform](https://img.shields.io/badge/platform-OneBot%20%2F%20aiocqhttp-f97316?style=flat-square)
+![License](https://img.shields.io/badge/license-MIT-3b82f6?style=flat-square)
 
 </div>
 
@@ -58,7 +59,7 @@
    - 或粘贴仓库地址：`https://github.com/shitianyaa/astrbot_plugin_get_px`
 2. 填写 `pixiv_refresh_token`（[如何获取](#获取-pixiv-token)）。
 3. 需要代理时填写 `pixiv_proxy_url`，例如 `http://127.0.0.1:7890`。
-4. 发送 `/ph` 查看帮助，或直接试试：
+4. 直接试试：
 
 ```text
 /p 初音ミク 3
@@ -94,9 +95,10 @@
 | `/签到商店` | 加持、背景刷新、主题 | `/签到商店` |
 | `/签到主题` | 当前/已购/可购主题 | `/签到主题` |
 | `/查看主题 <编号>` | 免费主题预览 | `/查看主题 1` |
-| `/ph` | 插件帮助 | `/ph` |
 
 完整指令（含商店购买、生日、成就、管理员事件/导出等）见 [指令参考](docs/user/commands.md)。
+
+> 指令名如与其他插件冲突，可在 AstrBot Dashboard 的指令管理（`alter_cmd`）中调整对应指令的权限或停用状态。
 
 ## 自然语言触发
 
