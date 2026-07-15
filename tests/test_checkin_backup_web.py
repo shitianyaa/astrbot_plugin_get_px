@@ -1,7 +1,5 @@
 import io
 import json
-from contextlib import closing
-import sqlite3
 import sys
 import tempfile
 import unittest
@@ -100,6 +98,49 @@ class CheckinBackupWebTest(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(len(event.sent[0]), 1)
             self.assertIsInstance(event.sent[0][0], File)
 
+    async def test_import_snapshot_with_rollback_holds_lock_across_both_steps(self):
+        with (
+            tempfile.TemporaryDirectory() as src_tmp,
+            tempfile.TemporaryDirectory() as dst_tmp,
+        ):
+            source = FrozenCheckinStore(src_tmp, date_key="2026-05-26")
+            await source.checkin(user_id="20002", username="source", bot_name="neko")
+            snapshot = await source.export_snapshot()
+
+            store = FrozenCheckinStore(dst_tmp, date_key="2026-05-26")
+            await store.checkin(user_id="10001", username="target", bot_name="neko")
+            lock_held_states = []
+
+            def write_rollback(rollback):
+                lock_held_states.append(store._lock.locked())
+                self.assertEqual(len(rollback["users"]), 1)
+                self.assertEqual(rollback["users"][0]["user_id"], "10001")
+                return Path(dst_tmp) / "rollback.json"
+
+            import_lock_states = []
+            original_import = store._import_snapshot_sync
+
+            def import_with_lock_state(snapshot_arg):
+                import_lock_states.append(store._lock.locked())
+                return original_import(snapshot_arg)
+
+            with patch.object(
+                store,
+                "_import_snapshot_sync",
+                side_effect=import_with_lock_state,
+            ):
+                rollback_path, result = await store.import_snapshot_with_rollback(
+                    snapshot, write_rollback
+                )
+
+            self.assertEqual(lock_held_states, [True])
+            self.assertEqual(import_lock_states, [True])
+            self.assertFalse(store._lock.locked())
+            self.assertEqual(rollback_path, Path(dst_tmp) / "rollback.json")
+            self.assertEqual(result["users"], 1)
+            imported = await store.get_profile("20002")
+            self.assertEqual(imported.total_days, 1)
+
     async def test_web_checkin_import_accepts_exported_snapshot(self):
         with (
             tempfile.TemporaryDirectory() as src_tmp,
@@ -157,117 +198,8 @@ class CheckinBackupWebTest(unittest.IsolatedAsyncioTestCase):
                 for call in method.call_args_list
             )
             self.assertIn("开始导入签到 JSON 备份", log_text)
-            self.assertIn("旧签到数据已备份", log_text)
-            self.assertIn("旧签到数据已由 JSON 备份覆盖", log_text)
-
-    async def test_web_checkin_import_replaces_database_and_deletes_old_one(self):
-        with (
-            tempfile.TemporaryDirectory() as src_tmp,
-            tempfile.TemporaryDirectory() as dst_tmp,
-        ):
-            source = FrozenCheckinStore(src_tmp, date_key="2026-05-26")
-            source_result = await source.checkin(
-                user_id="20002", username="source", bot_name="neko"
-            )
-            with closing(sqlite3.connect(source._db_path)) as conn:
-                conn.execute("PRAGMA wal_checkpoint(TRUNCATE)")
-            database_bytes = Path(source._db_path).read_bytes()
-
-            plugin = object.__new__(GetPxPlugin)
-            plugin.data_dir = Path(dst_tmp)
-            plugin.checkin_store = FrozenCheckinStore(dst_tmp, date_key="2026-05-26")
-            await plugin.checkin_store.checkin(
-                user_id="10001", username="target", bot_name="neko"
-            )
-            app = Quart(__name__)
-            app.add_url_rule(
-                "/checkin-import-database",
-                view_func=plugin._web_checkin_import,
-                methods=["POST"],
-            )
-
-            with patch("astrbot_plugin_get_px.plugin_api.api.logger") as mock_logger:
-                async with app.test_app():
-                    response = await app.test_client().post(
-                        "/checkin-import-database",
-                        files={
-                            "file": FileStorage(
-                                stream=io.BytesIO(database_bytes),
-                                filename="new-checkin.sqlite3",
-                                name="file",
-                                content_type="application/vnd.sqlite3",
-                            )
-                        },
-                    )
-                    payload = await response.get_json()
-
-            self.assertEqual(response.status_code, 200)
-            self.assertTrue(payload["success"])
-            self.assertTrue(payload["database_replaced"])
-            self.assertTrue(payload["old_database_deleted"])
-            self.assertEqual(payload["users"], 1)
-            self.assertEqual(payload["records"], 1)
-            self.assertEqual(
-                (Path(dst_tmp) / "checkin.sqlite3").read_bytes(), database_bytes
-            )
-            self.assertFalse(list((Path(dst_tmp) / "checkin_backups").glob("*.json")))
-            self.assertIsNone(await plugin.checkin_store.find_profile("10001"))
-            imported = await plugin.checkin_store.find_profile("20002")
-            self.assertIsNotNone(imported)
-            self.assertEqual(imported.affection, source_result.profile.affection)
-            self.assertFalse(list(Path(dst_tmp).glob(".checkin-import-*")))
-            log_text = "\n".join(
-                str(call.args[0])
-                for method in (mock_logger.info, mock_logger.warning)
-                for call in method.call_args_list
-            )
-            self.assertIn("开始导入签到数据库", log_text)
-            self.assertIn("签到数据库导入完成", log_text)
-            self.assertIn("旧签到数据库已永久替换", log_text)
-
-    async def test_web_checkin_import_rejects_legacy_database_without_replacing(self):
-        with tempfile.TemporaryDirectory() as tmp:
-            legacy_path = Path(tmp) / "legacy.sqlite3"
-            with closing(sqlite3.connect(legacy_path)) as conn:
-                conn.execute(
-                    "CREATE TABLE checkin_profiles "
-                    "(user_id TEXT PRIMARY KEY, affection REAL NOT NULL)"
-                )
-                conn.commit()
-
-            plugin = object.__new__(GetPxPlugin)
-            plugin.data_dir = Path(tmp) / "current"
-            plugin.checkin_store = FrozenCheckinStore(
-                plugin.data_dir, date_key="2026-05-26"
-            )
-            await plugin.checkin_store.checkin(
-                user_id="10001", username="target", bot_name="neko"
-            )
-            app = Quart(__name__)
-            app.add_url_rule(
-                "/checkin-import-legacy-database",
-                view_func=plugin._web_checkin_import,
-                methods=["POST"],
-            )
-
-            async with app.test_app():
-                response = await app.test_client().post(
-                    "/checkin-import-legacy-database",
-                    files={
-                        "file": FileStorage(
-                            stream=io.BytesIO(legacy_path.read_bytes()),
-                            filename="legacy.sqlite3",
-                            name="file",
-                            content_type="application/vnd.sqlite3",
-                        )
-                    },
-                )
-                payload = await response.get_json()
-
-            self.assertEqual(response.status_code, 400)
-            self.assertFalse(payload["success"])
-            self.assertIsNotNone(await plugin.checkin_store.find_profile("10001"))
-            self.assertFalse(list(plugin.data_dir.glob(".checkin-import-*")))
+            self.assertIn("现有签到数据已备份", log_text)
+            self.assertIn("现有签到数据已由 JSON 备份覆盖", log_text)
 
     async def test_web_checkin_import_rejects_old_snapshot_version(self):
         with (

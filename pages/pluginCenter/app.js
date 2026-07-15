@@ -28,7 +28,6 @@ const state = {
 };
 
 const MAX_BACKUP_BYTES = 5 * 1024 * 1024;
-const MAX_DATABASE_BYTES = 64 * 1024 * 1024;
 const dateFormatter = new Intl.DateTimeFormat("zh-CN", {
   month: "2-digit",
   day: "2-digit",
@@ -631,15 +630,10 @@ function renderData() {
 
 function backupFileError(file) {
   if (!file) return "请先选择备份文件。";
-  const name = file.name.toLocaleLowerCase("zh-CN");
-  const isDatabase = name.endsWith(".sqlite3") || name.endsWith(".db");
-  if (!isDatabase && !name.endsWith(".json")) {
-    return "只能选择 JSON 备份或新版 SQLite 数据库。";
+  if (!file.name.toLocaleLowerCase("zh-CN").endsWith(".json")) {
+    return "只能选择 JSON 备份文件。";
   }
-  if (isDatabase && file.size > MAX_DATABASE_BYTES) {
-    return "数据库文件不能超过 64 MiB。";
-  }
-  if (!isDatabase && file.size > MAX_BACKUP_BYTES) {
+  if (file.size > MAX_BACKUP_BYTES) {
     return "备份文件不能超过 5 MiB。";
   }
   return "";
@@ -833,34 +827,21 @@ function bindEvents() {
       els.importFile.focus();
       return;
     }
-    const lowerName = file?.name.toLocaleLowerCase("zh-CN") || "";
-    const isDatabase = lowerName.endsWith(".sqlite3") || lowerName.endsWith(".db");
-    const confirmText = isDatabase
-      ? "这会用上传的新版数据库永久替换当前签到数据库，并删除旧数据库及其 WAL/SHM 文件，不会保留旧数据库副本。确认要继续吗？"
-      : "这将会覆盖当前所有签到记录与用户购买主题数据！恢复前系统会自动将现有数据创建为回滚备份。确认要继续吗？";
-    if (!file || !await confirmAction(isDatabase ? "替换签到数据库" : "恢复签到数据", confirmText)) return;
+    if (!await confirmAction("恢复签到数据", "这将会覆盖当前所有签到记录与用户购买主题数据！恢复前系统会自动将现有数据创建为回滚备份。确认要继续吗？")) return;
 
     els.importBtn.disabled = true;
-    els.importResult.textContent = isDatabase
-      ? "正在校验并替换数据库，请稍候…"
-      : "正在上传并恢复，请稍候…";
+    els.importResult.textContent = "正在上传并恢复，请稍候…";
 
     try {
       const result = apiResult(await bridge.upload("checkin-import", file));
-      els.importResult.textContent = result.database_replaced
-        ? `数据库替换成功，旧数据库已删除。当前数据：
-        ${result.users || 0} 位用户，
-        ${result.records || 0} 条签到历史，
-        ${result.group_presence || 0} 条群活跃记录，
-        ${result.user_themes || 0} 个用户主题。`
-        : `恢复成功！已导入：
+      els.importResult.textContent = `恢复成功！已导入：
         ${result.users || 0} 位用户，
         ${result.records || 0} 条签到历史，
         ${result.group_presence || 0} 条群活跃记录，
         ${result.user_themes || 0} 个用户主题，
         回滚文件为 ${result.rollback_file || "未知"}。`;
       els.importFile.value = "";
-      showToast(result.database_replaced ? "新版签到数据库已启用" : "签到备份已成功恢复！");
+      showToast("签到备份已成功恢复！");
       await reloadAll();
     } catch (error) {
       els.importResult.textContent = `恢复失败：${error.message || "未知错误"}`;

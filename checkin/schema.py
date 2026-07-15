@@ -3,17 +3,14 @@ from __future__ import annotations
 from contextlib import closing
 import sqlite3
 
-from .legacy_migration import (
-    LegacyMigrationSummary,
-    backup_legacy_checkin_database,
-    detect_legacy_checkin_tables,
-    migrate_legacy_checkin_data,
-    stage_legacy_checkin_records,
-)
 from .themes import CHECKIN_THEMES
 
 
 CHECKIN_DB_SCHEMA_VERSION = 1
+
+
+class UnversionedCheckinDatabaseError(RuntimeError):
+    """签到数据库存在数据表但缺少 schema 版本号（user_version=0）。"""
 
 
 class SchemaMixin:
@@ -24,32 +21,25 @@ class SchemaMixin:
         return conn
 
     def _init_db(self) -> None:
-        self.legacy_migration_summary: LegacyMigrationSummary | None = None
         with closing(self._connect()) as conn:
-            conn.execute("PRAGMA journal_mode = WAL")
             schema_version = int(conn.execute("PRAGMA user_version").fetchone()[0])
             if schema_version not in (0, CHECKIN_DB_SCHEMA_VERSION):
                 raise RuntimeError(
                     f"unsupported check-in database schema: {schema_version}"
                 )
-            legacy_tables = detect_legacy_checkin_tables(self._db_path)
-            backup_path = None
-            if legacy_tables:
-                backup_path = backup_legacy_checkin_database(conn, self._db_path)
-            try:
-                conn.execute("BEGIN IMMEDIATE")
-                legacy_records_table = (
-                    stage_legacy_checkin_records(conn) if legacy_tables else None
+            if schema_version == 0 and conn.execute(
+                "SELECT 1 FROM sqlite_master "
+                "WHERE type = 'table' AND name NOT LIKE 'sqlite_%' LIMIT 1"
+            ).fetchone():
+                raise UnversionedCheckinDatabaseError(
+                    "unversioned non-empty check-in database is unsupported"
                 )
+            # WAL 切换不能在事务内执行，需先于 BEGIN IMMEDIATE。
+            conn.execute("PRAGMA journal_mode = WAL")
+            conn.execute("BEGIN IMMEDIATE")
+            try:
                 self._create_checkin_schema(conn)
                 self._sync_builtin_themes(conn)
-                if legacy_tables and backup_path is not None:
-                    self.legacy_migration_summary = migrate_legacy_checkin_data(
-                        conn,
-                        legacy_tables=legacy_tables,
-                        legacy_records_table=legacy_records_table,
-                        backup_path=backup_path,
-                    )
                 conn.execute(f"PRAGMA user_version = {CHECKIN_DB_SCHEMA_VERSION}")
                 conn.commit()
             except Exception:

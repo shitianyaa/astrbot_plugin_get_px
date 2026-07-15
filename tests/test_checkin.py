@@ -9,6 +9,7 @@ from pathlib import Path
 from checkin import (
     BOOST_PRODUCTS,
     CheckinStore,
+    UnversionedCheckinDatabaseError,
     affection_level,
     boost_remaining_days,
     dump_checkin_snapshot_json,
@@ -51,6 +52,16 @@ class RacingCheckinStore(FrozenCheckinStore):
 
 
 class CheckinStoreTest(unittest.IsolatedAsyncioTestCase):
+    async def test_unversioned_nonempty_database_is_rejected(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            database_path = Path(tmp) / "checkin.sqlite3"
+            with closing(sqlite3.connect(database_path)) as conn:
+                conn.execute("CREATE TABLE obsolete_data (value TEXT)")
+                conn.commit()
+
+            with self.assertRaises(UnversionedCheckinDatabaseError):
+                CheckinStore(tmp)
+
     async def test_first_checkin_rewards_and_records_global_user_state(self):
         with tempfile.TemporaryDirectory() as tmp:
             store = FrozenCheckinStore(tmp)

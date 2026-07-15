@@ -10,8 +10,8 @@
 checkin/
 │  ├─ models.py          数据模型与成就定义
 │  ├─ rules.py           金币、好感度、连签和加持规则
-│  ├─ snapshot.py        V1-V5 快照校验
-│  ├─ schema.py          SQLite 建表与字段迁移
+│  ├─ snapshot.py        schema v6 快照校验
+│  ├─ schema.py          SQLite 建表与版本校验
 │  ├─ record_store.py    签到资料、奖励和卡片记录
 │  ├─ feature_store.py   生日、成就、称号和全局事件
 │  ├─ backup_store.py    快照导入导出

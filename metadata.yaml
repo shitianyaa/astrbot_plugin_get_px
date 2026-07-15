@@ -2,7 +2,7 @@ name: astrbot_plugin_get_px
 display_name: 画境拾珍
 short_desc: 安全获取 Pixiv 普通作品，支持排行榜、每日签到、群排行、主题商店和管理中心
 desc: 通过标签搜索 Pixiv 普通分级插画并发送图片。支持多种排行榜、内容安全策略、作品详情与下载、每日签到、群签到排行、主题商店、WebUI 管理中心、请求频率限制、代理配置和发送重试。
-version: 3.0.0
+version: 3.1.0
 author: Sham1k0
 repo: https://github.com/shitianyaa/astrbot_plugin_get_px
 astrbot_version: ">=4.16"

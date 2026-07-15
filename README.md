@@ -5,7 +5,7 @@
 一个面向 AstrBot 的 Pixiv 发图插件：安全搜索普通分级插画、查看排行榜、下载作品、每日签到，并在 WebUI 管理群排行、成员数值、内容安全和签到数据。
 
 ![AstrBot](https://img.shields.io/badge/AstrBot-plugin-5865f2?style=flat-square)
-![Version](https://img.shields.io/badge/version-3.0.0-22c55e?style=flat-square)
+![Version](https://img.shields.io/badge/version-3.1.0-22c55e?style=flat-square)
 ![Python](https://img.shields.io/badge/Python-3.10%2B-3776ab?style=flat-square)
 ![Platform](https://img.shields.io/badge/platform-OneBot%20%2F%20aiocqhttp-f97316?style=flat-square)
 
@@ -117,7 +117,7 @@ AstrBot WebUI 插件页的「pluginCenter」可：
 - 按群查看今日 / 月度 / 连签 / 累计排行与 7/30 天趋势
 - 搜索成员并调整金币、好感度、累计与连续签到当前值
 - 维护自定义屏蔽词与作品 ID 黑名单
-- 下载 / 上传签到备份（schema v6 JSON），或导入新版 SQLite 数据库并永久替换旧库
+- 下载 / 上传签到备份（schema v6，仅接受当前版本 JSON）
 
 成员数值编辑只改当前资料，不回写历史奖励、群排行或已生成卡片。
 

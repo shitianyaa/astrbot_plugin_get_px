@@ -23,6 +23,17 @@ def test_plugin_center_page_exposes_management_workspaces() -> None:
     assert "schema v6" in html
 
 
+def test_plugin_center_import_accepts_json_backups_only() -> None:
+    html = (PAGE_DIR / "index.html").read_text(encoding="utf-8")
+    script = (PAGE_DIR / "app.js").read_text(encoding="utf-8")
+    assert 'accept="application/json,.json"' in html
+    assert "只能选择 JSON 备份文件。" in script
+    assert "备份文件不能超过 5 MiB。" in script
+    assert "恢复签到数据" in script
+    assert "sqlite" not in html.lower()
+    assert "sqlite" not in script.lower()
+
+
 def test_plugin_center_uses_relative_bridge_endpoints() -> None:
     source = (PAGE_DIR / "app.js").read_text(encoding="utf-8")
     assert "window.AstrBotPluginPage" in source
@@ -47,7 +58,6 @@ def test_plugin_center_keeps_responsive_and_accessible_states() -> None:
     assert 'name="custom_safety_term"' in html
     assert 'name="pixiv_illust_id"' in html
     assert 'name="checkin_backup"' in html
-    assert ".sqlite3,.db" in html
     assert 'name="checkin_member_search"' in html
     assert 'id="memberDialog"' in html
     assert ":root" in source
@@ -60,8 +70,6 @@ def test_plugin_center_keeps_responsive_and_accessible_states() -> None:
     assert "onerror=" not in script
     assert "Promise.allSettled" in script
     assert "MAX_BACKUP_BYTES" in script
-    assert "MAX_DATABASE_BYTES" in script
-    assert "database_replaced" in script
     assert 'apiGet("checkin-members"' in script
     assert 'apiPost("checkin-members/update"' in script
     assert source.count("/*") == source.count("*/")
