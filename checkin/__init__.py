@@ -29,6 +29,7 @@ from .rules import (
     boost_status_text,
     is_boost_active,
 )
+from .schema import UnversionedCheckinDatabaseError
 from .snapshot import dump_checkin_snapshot_json, load_checkin_snapshot_json
 from .store import CheckinStore
 
@@ -57,6 +58,7 @@ __all__ = [
     "CheckinResult",
     "CheckinStore",
     "CheckinUserPreference",
+    "UnversionedCheckinDatabaseError",
     "affection_level",
     "boost_remaining_days",
     "boost_status_text",

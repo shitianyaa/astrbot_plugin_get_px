@@ -2,19 +2,21 @@ import asyncio
 import json
 import inspect
 import shutil
+import sqlite3
 import sys
 import tempfile
 import unittest
+from contextlib import closing
 from dataclasses import replace
 from pathlib import Path
-from unittest.mock import AsyncMock
+from unittest.mock import AsyncMock, patch
 
 from quart import Quart
 from PIL import Image as PILImage
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 
-from astrbot_plugin_get_px.main import GetPxPlugin  # noqa: E402
+from astrbot_plugin_get_px.main import GetPxPlugin, PLUGIN_VERSION  # noqa: E402
 from astrbot_plugin_get_px.checkin.application import (  # noqa: E402
     CheckinApplicationMixin,
 )
@@ -23,6 +25,7 @@ from astrbot_plugin_get_px.checkin import (  # noqa: E402
     CheckinProfile,
     CheckinRecord,
     CheckinResult,
+    UnversionedCheckinDatabaseError,
 )
 from astrbot_plugin_get_px.checkin.card import CardBackground  # noqa: E402
 
@@ -275,6 +278,40 @@ class _ConcurrentCheckinStore(_FakeCheckinStore):
 
 
 class MainErrorHandlingTest(unittest.IsolatedAsyncioTestCase):
+    async def test_initialize_logs_v3_migration_guidance_for_old_database(self):
+        plugin = object.__new__(GetPxPlugin)
+        plugin._init_client = lambda: None
+
+        class FakeImageIndex:
+            async def cleanup_old_days(self):
+                return None
+
+        with (
+            tempfile.TemporaryDirectory() as tmp,
+            patch(
+                "astrbot_plugin_get_px.main.StarTools.get_data_dir",
+                return_value=tmp,
+            ),
+            patch(
+                "astrbot_plugin_get_px.main.ImageIndexStore",
+                return_value=FakeImageIndex(),
+            ),
+            patch("astrbot_plugin_get_px.main.logger") as mock_logger,
+        ):
+            with closing(sqlite3.connect(Path(tmp) / "checkin.sqlite3")) as conn:
+                conn.execute("CREATE TABLE obsolete_data (value TEXT)")
+                conn.commit()
+
+            with self.assertRaises(UnversionedCheckinDatabaseError):
+                await plugin.initialize()
+
+        log_text = "\n".join(
+            str(call.args[0]) for call in mock_logger.error.call_args_list
+        )
+        self.assertIn("缺少 schema 版本号", log_text)
+        self.assertIn("3.0.0", log_text)
+        self.assertIn(PLUGIN_VERSION, log_text)
+
     async def test_auto_trigger_stops_event_before_search(self):
         plugin = object.__new__(GetPxPlugin)
         plugin.config = {"auto_trigger_enabled": True}

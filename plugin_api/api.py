@@ -12,11 +12,6 @@ from quart import jsonify, request, send_file
 
 try:
     from ..checkin import load_checkin_snapshot_json
-    from ..checkin.database_replace import (
-        CHECKIN_DATABASE_SUFFIXES,
-        replace_checkin_database,
-        stage_uploaded_checkin_database,
-    )
     from ..pixiv.downloader import cleanup, pick_image_url_exact
     from ..pixiv.safety import (
         BUILTIN_SAFETY_TERMS,
@@ -27,11 +22,6 @@ try:
     )
 except ImportError:  # Direct imports used by the test suite.
     from checkin import load_checkin_snapshot_json
-    from checkin.database_replace import (
-        CHECKIN_DATABASE_SUFFIXES,
-        replace_checkin_database,
-        stage_uploaded_checkin_database,
-    )
     from pixiv.downloader import cleanup, pick_image_url_exact
     from pixiv.safety import (
         BUILTIN_SAFETY_TERMS,
@@ -133,12 +123,7 @@ class PluginWebApi:
                 "Get blacklist thumbnails",
             ),
             ("checkin-export", self.checkin_export, ["GET"], "Export check-in backup"),
-            (
-                "checkin-import",
-                self.checkin_import,
-                ["POST"],
-                "Import check-in backup or replace database",
-            ),
+            ("checkin-import", self.checkin_import, ["POST"], "Import check-in backup"),
             ("config", self.config, ["GET"], "Get management center configuration"),
         )
         for path, handler, methods, description in routes:
@@ -555,48 +540,8 @@ class PluginWebApi:
                 ), 400
             upload = uploaded[0]
             filename = str(getattr(upload, "filename", "") or "").strip()
-            suffix = Path(filename).suffix.lower()
-            if suffix in CHECKIN_DATABASE_SUFFIXES:
-                logger.info(
-                    f"{self.log_prefix} 开始导入签到数据库: file={filename!r}"
-                )
-                candidate = stage_uploaded_checkin_database(
-                    upload, Path(self.plugin.checkin_store._db_path).parent
-                )
-                try:
-                    result = await replace_checkin_database(
-                        self.plugin.checkin_store, candidate
-                    )
-                finally:
-                    candidate.unlink(missing_ok=True)
-                old_database_replaced = bool(result["old_database_replaced"])
-                logger.info(
-                    f"{self.log_prefix} 签到数据库导入完成: file={filename!r}, "
-                    f"users={result['users']}, records={result['records']}"
-                )
-                if old_database_replaced:
-                    logger.warning(
-                        f"{self.log_prefix} 旧签到数据库已永久替换: "
-                        f"sidecars_deleted={result['old_sidecars_deleted']}"
-                    )
-                else:
-                    logger.info(f"{self.log_prefix} 首次导入，无旧签到数据库需要删除")
-                return jsonify(
-                    {
-                        "success": True,
-                        "filename": filename,
-                        **result,
-                        "database_replaced": True,
-                        "old_database_deleted": old_database_replaced,
-                    }
-                )
-            if suffix != ".json":
-                return jsonify(
-                    {
-                        "success": False,
-                        "error": "只支持 JSON 备份或新版 SQLite 数据库",
-                    }
-                ), 400
+            if Path(filename).suffix.lower() != ".json":
+                return jsonify({"success": False, "error": "只支持 JSON 备份文件"}), 400
             logger.info(f"{self.log_prefix} 开始导入签到 JSON 备份: file={filename!r}")
             raw = await self.plugin._read_uploaded_file_bytes(upload)
             snapshot = load_checkin_snapshot_json(raw)
@@ -604,12 +549,12 @@ class PluginWebApi:
                 prefix="checkin-import-backup"
             )
             logger.info(
-                f"{self.log_prefix} 旧签到数据已备份: "
+                f"{self.log_prefix} 现有签到数据已备份: "
                 f"file={Path(rollback_path).name!r}"
             )
             result = await self.plugin.checkin_store.import_snapshot(snapshot)
             logger.warning(
-                f"{self.log_prefix} 旧签到数据已由 JSON 备份覆盖: "
+                f"{self.log_prefix} 现有签到数据已由 JSON 备份覆盖: "
                 f"file={filename!r}, users={result['users']}, "
                 f"records={result['records']}"
             )
