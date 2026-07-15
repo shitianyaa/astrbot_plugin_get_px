@@ -117,11 +117,24 @@ class CheckinBackupWebTest(unittest.IsolatedAsyncioTestCase):
                 self.assertEqual(rollback["users"][0]["user_id"], "10001")
                 return Path(dst_tmp) / "rollback.json"
 
-            rollback_path, result = await store.import_snapshot_with_rollback(
-                snapshot, write_rollback
-            )
+            import_lock_states = []
+            original_import = store._import_snapshot_sync
+
+            def import_with_lock_state(snapshot_arg):
+                import_lock_states.append(store._lock.locked())
+                return original_import(snapshot_arg)
+
+            with patch.object(
+                store,
+                "_import_snapshot_sync",
+                side_effect=import_with_lock_state,
+            ):
+                rollback_path, result = await store.import_snapshot_with_rollback(
+                    snapshot, write_rollback
+                )
 
             self.assertEqual(lock_held_states, [True])
+            self.assertEqual(import_lock_states, [True])
             self.assertFalse(store._lock.locked())
             self.assertEqual(rollback_path, Path(dst_tmp) / "rollback.json")
             self.assertEqual(result["users"], 1)
