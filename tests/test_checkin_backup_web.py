@@ -98,6 +98,36 @@ class CheckinBackupWebTest(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(len(event.sent[0]), 1)
             self.assertIsInstance(event.sent[0][0], File)
 
+    async def test_import_snapshot_with_rollback_holds_lock_across_both_steps(self):
+        with (
+            tempfile.TemporaryDirectory() as src_tmp,
+            tempfile.TemporaryDirectory() as dst_tmp,
+        ):
+            source = FrozenCheckinStore(src_tmp, date_key="2026-05-26")
+            await source.checkin(user_id="20002", username="source", bot_name="neko")
+            snapshot = await source.export_snapshot()
+
+            store = FrozenCheckinStore(dst_tmp, date_key="2026-05-26")
+            await store.checkin(user_id="10001", username="target", bot_name="neko")
+            lock_held_states = []
+
+            def write_rollback(rollback):
+                lock_held_states.append(store._lock.locked())
+                self.assertEqual(len(rollback["users"]), 1)
+                self.assertEqual(rollback["users"][0]["user_id"], "10001")
+                return Path(dst_tmp) / "rollback.json"
+
+            rollback_path, result = await store.import_snapshot_with_rollback(
+                snapshot, write_rollback
+            )
+
+            self.assertEqual(lock_held_states, [True])
+            self.assertFalse(store._lock.locked())
+            self.assertEqual(rollback_path, Path(dst_tmp) / "rollback.json")
+            self.assertEqual(result["users"], 1)
+            imported = await store.get_profile("20002")
+            self.assertEqual(imported.total_days, 1)
+
     async def test_web_checkin_import_accepts_exported_snapshot(self):
         with (
             tempfile.TemporaryDirectory() as src_tmp,

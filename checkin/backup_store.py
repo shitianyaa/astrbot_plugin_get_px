@@ -1,7 +1,9 @@
 from __future__ import annotations
 
 import asyncio
+from collections.abc import Callable
 from contextlib import closing
+from pathlib import Path
 from typing import Any
 
 from .models import (
@@ -20,6 +22,22 @@ class BackupStoreMixin:
     async def import_snapshot(self, snapshot: dict[str, Any]) -> dict[str, Any]:
         async with self._lock:
             return await asyncio.to_thread(self._import_snapshot_sync, snapshot)
+
+    async def import_snapshot_with_rollback(
+        self,
+        snapshot: dict[str, Any],
+        write_rollback: Callable[[dict[str, Any]], Path],
+    ) -> tuple[Path, dict[str, Any]]:
+        """在同一把锁内导出回滚备份并导入快照。
+
+        回滚备份和导入必须原子完成，否则两步之间的并发签到会被导入
+        覆盖、却不在回滚备份里。
+        """
+        async with self._lock:
+            rollback_snapshot = await asyncio.to_thread(self._export_snapshot_sync)
+            rollback_path = await asyncio.to_thread(write_rollback, rollback_snapshot)
+            result = await asyncio.to_thread(self._import_snapshot_sync, snapshot)
+        return rollback_path, result
 
     def _export_snapshot_sync(self) -> dict[str, Any]:
         with closing(self._connect()) as conn:

@@ -23,6 +23,17 @@ def test_plugin_center_page_exposes_management_workspaces() -> None:
     assert "schema v6" in html
 
 
+def test_plugin_center_import_accepts_json_backups_only() -> None:
+    html = (PAGE_DIR / "index.html").read_text(encoding="utf-8")
+    script = (PAGE_DIR / "app.js").read_text(encoding="utf-8")
+    assert 'accept="application/json,.json"' in html
+    assert "只能选择 JSON 备份文件。" in script
+    assert "备份文件不能超过 5 MiB。" in script
+    assert "恢复签到数据" in script
+    assert "sqlite" not in html.lower()
+    assert "sqlite" not in script.lower()
+
+
 def test_plugin_center_uses_relative_bridge_endpoints() -> None:
     source = (PAGE_DIR / "app.js").read_text(encoding="utf-8")
     assert "window.AstrBotPluginPage" in source

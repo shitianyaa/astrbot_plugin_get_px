@@ -545,14 +545,18 @@ class PluginWebApi:
             logger.info(f"{self.log_prefix} 开始导入签到 JSON 备份: file={filename!r}")
             raw = await self.plugin._read_uploaded_file_bytes(upload)
             snapshot = load_checkin_snapshot_json(raw)
-            rollback_path = await self.plugin._write_checkin_snapshot_backup(
-                prefix="checkin-import-backup"
+            rollback_path, result = (
+                await self.plugin.checkin_store.import_snapshot_with_rollback(
+                    snapshot,
+                    lambda rollback: self.plugin._write_checkin_snapshot_file(
+                        rollback, prefix="checkin-import-backup"
+                    ),
+                )
             )
             logger.info(
                 f"{self.log_prefix} 现有签到数据已备份: "
                 f"file={Path(rollback_path).name!r}"
             )
-            result = await self.plugin.checkin_store.import_snapshot(snapshot)
             logger.warning(
                 f"{self.log_prefix} 现有签到数据已由 JSON 备份覆盖: "
                 f"file={filename!r}, users={result['users']}, "
