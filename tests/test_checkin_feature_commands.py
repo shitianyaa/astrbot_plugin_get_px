@@ -14,6 +14,7 @@ import pytest
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 
 from astrbot_plugin_get_px.checkin import CheckinStore
+from astrbot_plugin_get_px.checkin.shop import build_checkin_shop_items
 from astrbot_plugin_get_px.main import GetPxPlugin
 
 
@@ -43,6 +44,22 @@ def make_plugin(data_dir: str) -> GetPxPlugin:
     plugin = object.__new__(GetPxPlugin)
     plugin.checkin_store = CheckinStore(data_dir)
     return plugin
+
+
+def test_shop_catalog_has_stable_ids_and_categories() -> None:
+    items = build_checkin_shop_items(refresh_cost=5)
+    by_id = {item.item_id: item for item in items}
+
+    assert by_id["boost:1"].category == "boost"
+    assert (
+        by_id["background:refresh"].render_line()
+        == "签到中心 商店 刷新背景 - 5 金币"
+    )
+    assert (
+        by_id["theme:blue"].render_line()
+        == "签到中心 商店 主题 购买 01 - 浅蓝，1500 金币"
+    )
+    assert by_id["theme:default"].price_label == "免费"
 
 
 @pytest.mark.asyncio
@@ -150,8 +167,8 @@ async def test_theme_shop_purchase_and_switch_commands() -> None:
             conn.commit()
 
         shop = plugin._build_checkin_shop()
-        assert "/刷新签到背景 - 5 金币" in shop
-        assert "/购买主题 01 - 浅蓝，1500 金币" in shop
+        assert "签到中心 商店 刷新背景 - 5 金币" in shop
+        assert "签到中心 商店 主题 购买 01 - 浅蓝，1500 金币" in shop
 
         purchased = await plugin._handle_buy_checkin_theme(event, "01")
         assert "购买成功" in purchased
@@ -183,7 +200,7 @@ async def test_theme_preview_is_available_without_purchase_or_database_write() -
         assert before == after
 
         usage = await plugin._handle_checkin_theme_preview(event, "unknown")
-        assert "用法：/查看主题 <编号>" in usage
+        assert "用法：签到中心 商店 主题 查看 <编号>" in usage
 
 
 @pytest.mark.asyncio

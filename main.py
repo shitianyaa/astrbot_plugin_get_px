@@ -11,7 +11,7 @@
 
 签到指令：
     /签到                      每日签到
-    /签到测试                  管理员预览签到卡片
+    /签到中心                  查看签到功能分组
 """
 
 # 注意：不要在本模块使用 `from __future__ import annotations`。
@@ -24,7 +24,7 @@ import re
 import time
 import weakref
 
-from astrbot.api.all import AstrBotConfig, Image, logger
+from astrbot.api.all import AstrBotConfig, logger
 from astrbot.api.event import AstrMessageEvent, filter
 from astrbot.api.star import Context, Star
 from astrbot.core.star.filter.command import GreedyStr
@@ -36,6 +36,7 @@ from .checkin.cache import CheckinCardCache
 from .checkin.commands import CheckinCommandMixin
 from .checkin.greeting import CheckinGreetingGenerator
 from .checkin.holiday import HolidayCalendar
+from .checkin.shop import CheckinShopMixin
 from .pixiv import DeliveryMixin, FiltersMixin, SearchMixin
 from .pixiv.client import PixivClient
 from .pixiv.downloader import ImageDownloader
@@ -54,7 +55,6 @@ WEB_INTERNAL_ERROR_MESSAGE = "服务内部错误，请稍后重试"
 
 AUTO_TRIGGER_PATTERN = r"^/?(来\s*(.*?)(份|个|张|点))(.*?)(福利|色|瑟|涩|塞)?图$"
 CHECKIN_REGEX_PATTERN = r"^(?!/)签到$"
-CHECKIN_HELP_IMAGE = Path(__file__).resolve().parent / "assets" / "checkin_help.png"
 
 CHINESE_NUMBER_MAP = {
     "一": "1",
@@ -78,6 +78,7 @@ CHINESE_NUMBER_MAP = {
 class GetPxPlugin(
     CheckinApplicationMixin,
     CheckinCommandMixin,
+    CheckinShopMixin,
     CheckinArtworkMixin,
     SearchMixin,
     DeliveryMixin,
@@ -256,7 +257,7 @@ class GetPxPlugin(
 
     @filter.command("p")
     async def cmd_p(self, event: AstrMessageEvent, query: GreedyStr = ""):
-        """搜索并发送图片。用法: /p [标签] [数量]"""
+        """搜索并发送图片。参数: [标签] [数量]"""
         if not self._ensure_client_or_error(event):
             yield event.plain_result(
                 "⚠️ 图片源暂不可用，请配置 Lolicon API，或填写 pixiv_refresh_token 作为回退"
@@ -288,38 +289,58 @@ class GetPxPlugin(
         async for result in self._handle_checkin(event):
             yield result
 
-    @filter.command("签到排行")
+    @filter.command_group("签到中心")
+    def checkin_center(self):
+        """签到功能中心。"""
+
+    @checkin_center.group("我的")
+    def checkin_personal(self):
+        """个人签到资料。"""
+
+    @checkin_personal.command("状态")
+    async def cmd_checkin_status(self, event: AstrMessageEvent):
+        """查看金币、好感度和连续签到状态。"""
+        event.stop_event()
+        async for result in self._handle_checkin_status(event):
+            yield result
+
+    @checkin_personal.command("生日")
+    async def cmd_checkin_birthday(
+        self, event: AstrMessageEvent, action: str = "", value: str = ""
+    ):
+        """查看、设置或清除签到生日。"""
+        event.stop_event()
+        yield event.plain_result(
+            await self._handle_checkin_birthday(event, action, value)
+        )
+
+    @checkin_personal.command("成就")
+    async def cmd_checkin_achievements(self, event: AstrMessageEvent):
+        """查看签到成就。"""
+        event.stop_event()
+        yield event.plain_result(await self._handle_checkin_achievements(event))
+
+    @checkin_personal.group("称号")
+    def checkin_titles(self):
+        """查看和佩戴签到称号。"""
+
+    @checkin_titles.command("查看")
+    async def cmd_checkin_titles(self, event: AstrMessageEvent):
+        """查看已解锁的签到称号。"""
+        event.stop_event()
+        yield event.plain_result(await self._handle_checkin_titles(event))
+
+    @checkin_titles.command("佩戴")
+    async def cmd_select_checkin_title(self, event: AstrMessageEvent, title: str = ""):
+        """佩戴已解锁的签到称号。"""
+        event.stop_event()
+        yield event.plain_result(await self._handle_select_checkin_title(event, title))
+
+    @checkin_center.command("排行")
     async def cmd_checkin_ranking(self, event: AstrMessageEvent, mode: str = ""):
         """查看当前群的签到排行。"""
         event.stop_event()
         yield event.plain_result(await self._handle_checkin_ranking(event, mode))
-
-    @filter.command("签到帮助")
-    async def cmd_checkin_help(self, event: AstrMessageEvent):
-        """发送签到功能帮助图片。"""
-        event.stop_event()
-        if not CHECKIN_HELP_IMAGE.is_file():
-            logger.error(f"{LOG_PREFIX} 签到帮助图片不存在: {CHECKIN_HELP_IMAGE}")
-            yield event.plain_result("签到帮助图片缺失，请联系管理员重新安装插件")
-            return
-        yield event.chain_result([Image.fromFileSystem(str(CHECKIN_HELP_IMAGE))])
-
-    @filter.permission_type(filter.PermissionType.ADMIN)
-    @filter.command("签到测试")
-    async def cmd_checkin_preview(self, event: AstrMessageEvent):
-        """用真实用户资料和问候配置预览卡片，不写入签到数据。"""
-        event.stop_event()
-        async for result in self._handle_checkin_preview(event):
-            yield result
-
-    @filter.permission_type(filter.PermissionType.ADMIN)
-    @filter.command("签到导出")
-    async def cmd_checkin_export(self, event: AstrMessageEvent):
-        """管理员导出签到完整备份。"""
-        event.stop_event()
-        result = await self._handle_checkin_export(event)
-        if result is not None:
-            yield result
 
     @filter.regex(CHECKIN_REGEX_PATTERN)
     async def checkin_auto_trigger(self, event: AstrMessageEvent):
@@ -330,14 +351,11 @@ class GetPxPlugin(
         async for result in self._handle_checkin(event, silent_when_disabled=True):
             yield result
 
-    @filter.command("签到状态")
-    async def cmd_checkin_status(self, event: AstrMessageEvent):
-        """查看签到状态。"""
-        event.stop_event()
-        async for result in self._handle_checkin_status(event):
-            yield result
+    @checkin_center.group("商店")
+    def checkin_shop(self):
+        """签到金币商店。"""
 
-    @filter.command("签到商店")
+    @checkin_shop.command("查看")
     async def cmd_checkin_shop(self, event: AstrMessageEvent):
         """查看签到商店。"""
         event.stop_event()
@@ -346,74 +364,71 @@ class GetPxPlugin(
             return
         yield event.plain_result(self._build_checkin_shop())
 
-    @filter.command("购买加持")
+    @checkin_shop.command("加持")
     async def cmd_buy_checkin_boost(self, event: AstrMessageEvent, days: str = ""):
         """购买好感度双倍加持。"""
         event.stop_event()
         async for result in self._handle_buy_checkin_boost(event, days):
             yield result
 
-    @filter.command("签到主题")
+    @checkin_shop.group("主题")
+    def checkin_themes(self):
+        """签到主题商店。"""
+
+    @checkin_themes.command("列表")
     async def cmd_checkin_themes(self, event: AstrMessageEvent):
         """查看已购买和可购买的签到主题。"""
         event.stop_event()
         yield event.plain_result(await self._handle_checkin_themes(event))
 
-    @filter.command("查看主题")
+    @checkin_themes.command("查看")
     async def cmd_preview_checkin_theme(self, event: AstrMessageEvent, theme: str = ""):
         """查看指定签到主题的静态预览图。"""
         event.stop_event()
         yield await self._handle_checkin_theme_preview(event, theme)
 
-    @filter.command("购买主题")
+    @checkin_themes.command("购买")
     async def cmd_buy_checkin_theme(self, event: AstrMessageEvent, theme: str = ""):
         """购买签到主题，购买成功后自动切换。"""
         event.stop_event()
         yield event.plain_result(await self._handle_buy_checkin_theme(event, theme))
 
-    @filter.command("切换主题")
+    @checkin_themes.command("切换")
     async def cmd_select_checkin_theme(self, event: AstrMessageEvent, theme: str = ""):
         """切换到默认或已购买的签到主题。"""
         event.stop_event()
         yield event.plain_result(await self._handle_select_checkin_theme(event, theme))
 
-    @filter.command("刷新签到背景")
+    @checkin_shop.command("刷新背景")
     async def cmd_refresh_checkin_background(self, event: AstrMessageEvent):
         """花费金币重新抽取今天的签到背景。"""
         event.stop_event()
         async for result in self._handle_refresh_checkin_background(event):
             yield result
 
-    @filter.command("签到生日")
-    async def cmd_checkin_birthday(
-        self, event: AstrMessageEvent, action: str = "", value: str = ""
-    ):
-        """查看或自动读取签到生日，也可手动设置或清除。"""
-        event.stop_event()
-        yield event.plain_result(
-            await self._handle_checkin_birthday(event, action, value)
-        )
-
-    @filter.command("签到成就")
-    async def cmd_checkin_achievements(self, event: AstrMessageEvent):
-        """查看签到成就。"""
-        event.stop_event()
-        yield event.plain_result(await self._handle_checkin_achievements(event))
-
-    @filter.command("签到称号")
-    async def cmd_checkin_titles(self, event: AstrMessageEvent):
-        """查看签到称号。"""
-        event.stop_event()
-        yield event.plain_result(await self._handle_checkin_titles(event))
-
-    @filter.command("佩戴称号")
-    async def cmd_select_checkin_title(self, event: AstrMessageEvent, title: str = ""):
-        """佩戴已解锁的签到称号。"""
-        event.stop_event()
-        yield event.plain_result(await self._handle_select_checkin_title(event, title))
+    @checkin_center.group("管理")
+    def checkin_admin(self):
+        """管理员签到维护功能。"""
 
     @filter.permission_type(filter.PermissionType.ADMIN)
-    @filter.command("签到事件")
+    @checkin_admin.command("预览")
+    async def cmd_checkin_preview(self, event: AstrMessageEvent):
+        """用真实用户资料和问候配置预览卡片，不写入签到数据。"""
+        event.stop_event()
+        async for result in self._handle_checkin_preview(event):
+            yield result
+
+    @filter.permission_type(filter.PermissionType.ADMIN)
+    @checkin_admin.command("导出")
+    async def cmd_checkin_export(self, event: AstrMessageEvent):
+        """管理员导出签到完整备份。"""
+        event.stop_event()
+        result = await self._handle_checkin_export(event)
+        if result is not None:
+            yield result
+
+    @filter.permission_type(filter.PermissionType.ADMIN)
+    @checkin_admin.command("事件")
     async def cmd_checkin_event_admin(
         self,
         event: AstrMessageEvent,
@@ -424,13 +439,12 @@ class GetPxPlugin(
     ):
         """管理员维护全局签到纪念日。"""
         event.stop_event()
-        raw = event.get_message_str().strip().lstrip("/")
-        parts = raw.split(maxsplit=4)
-        if parts and parts[0] == "签到事件":
-            action = parts[1] if len(parts) > 1 else action
-            event_type = parts[2] if len(parts) > 2 else event_type
-            date_value = parts[3] if len(parts) > 3 else date_value
-            name = parts[4] if len(parts) > 4 else name
+        parts = event.get_message_str().strip().split(maxsplit=6)
+        if parts[:3] == ["签到中心", "管理", "事件"]:
+            action = parts[3] if len(parts) > 3 else action
+            event_type = parts[4] if len(parts) > 4 else event_type
+            date_value = parts[5] if len(parts) > 5 else date_value
+            name = parts[6] if len(parts) > 6 else name
         yield event.plain_result(
             await self._handle_checkin_event_admin(
                 event, action, event_type, date_value, name
