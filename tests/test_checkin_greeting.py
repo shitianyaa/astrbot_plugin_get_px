@@ -255,6 +255,7 @@ async def test_hitokoto_does_not_recreate_session_after_close(monkeypatch) -> No
     assert result == ("本地问候。", "local", "")
     assert len(sessions) == 1
     assert sessions[0].closed
+    assert generator._session is None
 
 
 @pytest.mark.asyncio
