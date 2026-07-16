@@ -2,7 +2,7 @@
 
 ## 入口层
 
-`main.py` 负责 AstrBot 生命周期、命令装饰器、公共配置读取和领域对象装配。签到与 Pixiv 的复杂流程由领域 Mixin 实现，入口类直接组合这些 Mixin，不使用动态属性代理。
+`main.py` 负责 AstrBot 生命周期、命令装饰器、公共配置读取和领域对象装配。签到与图片来源的复杂流程由领域 Mixin 实现，入口类直接组合这些 Mixin，不使用动态属性代理。
 
 ## 领域模块
 
@@ -22,11 +22,12 @@ checkin/
 │  ├─ artwork.py         卡片渲染与背景作品选择
 │  └─ holiday.py         联网节假日数据更新与查询
 pixiv/
-│  ├─ search.py          搜索、排行和作品列表流程
-│  ├─ delivery.py        详情、下载与消息发送
+│  ├─ search.py          Lolicon 主源与 Pixiv 搜索/推荐回退流程
+│  ├─ delivery.py        消息发送错误处理
 │  ├─ filters.py         普通分级、漫画和安全策略过滤
 │  ├─ safety.py          内置安全词与文本规范化
 │  ├─ client.py          Pixiv API 客户端
+│  ├─ lolicon.py         Lolicon API 客户端与数据规范化
 │  ├─ downloader.py      图片下载与质量降级
 │  ├─ index.py           去重索引、安全词与作品黑名单
 plugin_api/
@@ -47,7 +48,7 @@ plugin_api/
 main.py
   → checkin / pixiv / plugin_api
     → rules / stores / renderers / clients
-      → SQLite、文件系统、Pixiv、AstrBot、Hitokoto
+      → SQLite、文件系统、Lolicon、Pixiv、AstrBot、Hitokoto
 ```
 
 数据模型和规则不依赖 AstrBot 事件对象。AstrBot 事件、消息链和 Plugin Pages bridge 只出现在入口、服务与 Web API 层。

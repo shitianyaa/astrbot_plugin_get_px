@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import asyncio
-import re
 
 from astrbot.api.all import Image, Plain, logger
 from astrbot.api.event import AstrMessageEvent
@@ -12,28 +11,23 @@ from .downloader import cleanup
 
 LOG_PREFIX = "[GetPx]"
 DEFAULT_AUTO_DOWNGRADE_ORIGINAL_LIMIT_MB = 3.0
-RANKING_MODES = {
-    "day": "今日",
-    "week": "本周",
-    "month": "本月",
-    "day_male": "男性向",
-    "day_female": "女性向",
-    "week_original": "原创",
-    "week_rookie": "新人",
-    "day_manga": "漫画",
-}
-
-
 class SearchMixin:
-    """Search, ranking and illustration-detail flows."""
+    """Search and source-fallback flows."""
 
     def _ensure_client_or_error(self, event: AstrMessageEvent) -> bool:
-        if self.client and self.client.api:
+        lolicon_client = getattr(self, "lolicon_client", None)
+        if lolicon_client and lolicon_client.available:
             return True
-        if not self._cfg_str("pixiv_refresh_token"):
-            return False
+        if getattr(self, "client", None) and self.client.api:
+            return True
         self._init_client()
-        return self.client is not None
+        return bool(
+            (
+                getattr(self, "lolicon_client", None)
+                and self.lolicon_client.available
+            )
+            or getattr(self, "client", None)
+        )
 
     @staticmethod
     def _event_scope(event: AstrMessageEvent) -> str:
@@ -43,33 +37,63 @@ class SearchMixin:
         return f"private:{event.get_sender_id() or ''}"
 
     @staticmethod
-    def _source_key(tag: str, ranking_mode: str) -> str:
-        return f"search:{tag.strip().casefold()}" if tag else f"rank:{ranking_mode}"
+    def _source_key(tag: str, source: str) -> str:
+        prefix = "search" if tag.strip() else "random"
+        return f"{source}:{prefix}:{tag.strip().casefold()}" if tag.strip() else f"{source}:random"
 
-    async def _fetch_paginated(
+    async def _fetch_source_candidates(
         self,
         event: AstrMessageEvent,
-        tag: str | None,
-        ranking_mode: str,
+        tag: str,
+        *,
+        count: int = 20,
+        offset: int = 0,
+        aspect_ratio: str = "",
+        use_page_cursor: bool = True,
     ) -> tuple[list[dict], int, str]:
-        source_key = self._source_key(tag or "", ranking_mode)
-        page_offset = 0
-        if self.image_index is not None:
+        """优先请求 Lolicon，失败后按有无标签回退 Pixiv。"""
+        lolicon_client = getattr(self, "lolicon_client", None)
+        if lolicon_client and lolicon_client.available:
+            try:
+                if tag:
+                    illusts = await lolicon_client.search(
+                        tag, count=count, aspect_ratio=aspect_ratio
+                    )
+                    source_key = self._source_key(tag, "lolicon")
+                else:
+                    illusts = await lolicon_client.random(
+                        count=count, aspect_ratio=aspect_ratio
+                    )
+                    source_key = "lolicon:random"
+                if illusts:
+                    return illusts, len(illusts), source_key
+            except Exception as exc:
+                logger.warning(f"{LOG_PREFIX} Lolicon 请求失败(tag={tag!r})，尝试 Pixiv 回退: {exc}")
+
+        pixiv_source_key = self._source_key(tag, "pixiv") if tag else "pixiv:recommended"
+        page_offset = offset
+        if use_page_cursor and page_offset == 0 and self.image_index is not None:
             try:
                 page_offset = await self.image_index.get_page_offset(
-                    self._event_scope(event), source_key
+                    self._event_scope(event), pixiv_source_key
                 )
             except Exception as exc:
-                logger.warning(f"{LOG_PREFIX} 读取分页游标失败: {exc}")
+                logger.warning(f"{LOG_PREFIX} 读取 Pixiv 回退分页游标失败: {exc}")
 
+        if self.client is None:
+            self._init_client()
+        if self.client is None:
+            return [], 0, pixiv_source_key
         try:
             if tag:
                 illusts = await self.client.search(tag, offset=page_offset)
+                source_key = pixiv_source_key
             else:
-                illusts = await self.client.ranking(ranking_mode, offset=page_offset)
+                illusts = await self.client.recommended(offset=page_offset)
+                source_key = pixiv_source_key
         except Exception as exc:
-            logger.warning(f"{LOG_PREFIX} Pixiv 请求失败(tag={tag!r}): {exc}")
-            return [], 0, source_key
+            logger.warning(f"{LOG_PREFIX} Pixiv 回退请求失败(tag={tag!r}): {exc}")
+            return [], 0, pixiv_source_key
         return illusts, len(illusts), source_key
 
     async def _record_image_usage(
@@ -102,10 +126,8 @@ class SearchMixin:
         event: AstrMessageEvent,
         tag: str,
         count_str: str,
-        *,
-        ranking_override: str = "",
     ):
-        """搜索并发送图片。ranking_override 非空时覆盖配置中的排行榜类型。"""
+        """搜索并发送图片；Lolicon 失败时按需回退 Pixiv。"""
         # 频率限制
         wait = self._check_rate_limit(event.get_sender_id())
         if wait > 0:
@@ -129,7 +151,6 @@ class SearchMixin:
         except RuntimeError:
             yield event.plain_result("🚫 内容安全服务暂不可用，本次请求已拒绝")
             return
-        ranking_mode = ranking_override or self._cfg_str("pixiv_ranking_mode", "week")
         timeout_sec = self._cfg_float("request_timeout", 30.0, 5.0, 120.0)
         quality = self._cfg_str("image_quality", "original")
         downgrade_limit_mb = self._cfg_float(
@@ -141,25 +162,20 @@ class SearchMixin:
         downgrade_limit_bytes = int(downgrade_limit_mb * 1024 * 1024)
         filter_manga = self._cfg_bool("filter_manga", True)
 
-        if ranking_mode not in RANKING_MODES:
-            ranking_mode = "week"
-
-        # 获取作品列表（带分页游标）
-        illusts, raw_count, source_key = await self._fetch_paginated(
-            event, tag, ranking_mode
+        # 获取作品列表：Lolicon 主源，Pixiv 搜索/推荐回退。
+        illusts, raw_count, source_key = await self._fetch_source_candidates(
+            event, tag, count=max_count
         )
         logger.info(
-            f"{LOG_PREFIX} 搜索: tag={tag!r} rank={ranking_mode} count={count} "
+            f"{LOG_PREFIX} 搜索: tag={tag!r} source={source_key} count={count} "
             f"quality={quality} raw_count={raw_count}"
         )
 
         if not illusts:
-            yield event.plain_result("❌ Pixiv 请求失败或无结果，换个标签试试")
+            yield event.plain_result("❌ 图片源请求失败或无结果，换个标签试试")
             return
 
-        # 漫画过滤：普通搜索/排行中只要作品类型命中 manga 就过滤；漫画日榜保留后门。
-        is_manga_ranking = not tag and ranking_mode == "day_manga"
-        if filter_manga and not is_manga_ranking:
+        if filter_manga:
             illusts = self._filter_manga(illusts)
             if not illusts:
                 yield event.plain_result(
@@ -185,8 +201,7 @@ class SearchMixin:
             event,
             illusts,
             pick_count,
-            tag=tag,
-            ranking_mode=ranking_mode,
+            source_key=source_key,
             dedupe_enabled=dedupe_ttl_hours > 0,
             raw_count=raw_count,
         )
@@ -426,70 +441,3 @@ class SearchMixin:
                         )
                     except Exception as e:
                         logger.warning(f"{LOG_PREFIX} 释放当天发图占用失败: {e}")
-
-    async def _handle_rank(
-        self, event: AstrMessageEvent, mode: str, count_str: str = ""
-    ):
-        """排行榜模式。"""
-        mode = mode.lower().strip() if mode else "week"
-
-        if mode not in RANKING_MODES:
-            yield event.plain_result(
-                f"⚠️ 未知排行榜类型: {mode}\n发送 /prl 查看所有类型"
-            )
-            return
-
-        # 走搜索逻辑，通过参数传递排行榜类型
-        async for result in self._handle_search(
-            event, tag="", count_str=count_str, ranking_override=mode
-        ):
-            yield result
-
-    async def _handle_info(self, event: AstrMessageEvent, illust_id: int):
-        """查看作品详情。"""
-
-        try:
-            illust = await self.client.illust_detail(illust_id)
-        except Exception as e:
-            logger.warning(f"{LOG_PREFIX} 获取作品详情失败 illust_id={illust_id}: {e}")
-            yield event.plain_result("❌ 获取作品详情失败，请稍后再试")
-            return
-
-        if not illust:
-            yield event.plain_result(f"😶 未找到作品 {illust_id}")
-            return
-
-        try:
-            reason = await self._blacklist_reason_for_illust(illust, str(illust_id))
-        except RuntimeError:
-            yield event.plain_result("🚫 内容安全服务暂不可用，本次请求已拒绝")
-            return
-        if reason:
-            yield event.plain_result(f"🚫 {reason}")
-            return
-
-        title = illust.get("title", "无标题")
-        author = (illust.get("user") or {}).get("name", "未知")
-        tags = "、".join(t.get("name", "") for t in (illust.get("tags") or [])[:5])
-        desc = (illust.get("caption") or "").strip()
-        pages = len(illust.get("meta_pages") or [])
-        total_view = illust.get("total_view", 0)
-        total_bookmark = illust.get("total_bookmark", 0)
-
-        lines = [
-            "🎨 作品详情",
-            f"ID: {illust_id}",
-            f"标题: {title}",
-            f"作者: {author}",
-            f"标签: {tags or '无'}",
-            f"页数: {pages or 1}",
-            "内容分级: 普通",
-            f"浏览: {total_view:,}　收藏: {total_bookmark:,}",
-        ]
-        if desc:
-            desc = re.sub(r"<[^>]+>", "", desc).strip()
-            if desc:
-                lines.append(f"简介: {desc[:200]}")
-        lines.append(f"链接: https://www.pixiv.net/artworks/{illust_id}")
-
-        yield event.plain_result("\n".join(lines))

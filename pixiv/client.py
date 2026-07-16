@@ -107,6 +107,8 @@ class PixivClient:
                 raise
             logger.warning(f"{LOG_PREFIX} Pixiv {operation}失败，1 秒后重试: {exc}")
             await asyncio.sleep(1.0)
+            if self._closed:
+                raise RuntimeError("Pixiv 客户端已关闭") from exc
             return await self._wait_for(factory(), operation=operation)
 
     async def search(self, tag: str, offset: int = 0) -> list[dict]:
@@ -125,12 +127,12 @@ class PixivClient:
             await self._release_api()
         return list(resp.get("illusts") or [])
 
-    async def ranking(self, mode: str = "week", offset: int = 0) -> list[dict]:
+    async def recommended(self, offset: int = 0) -> list[dict]:
         api = await self._acquire_api()
         try:
             resp = await self._wait_for_with_retry(
-                lambda: api.illust_ranking(mode=mode, offset=offset),
-                operation="排行榜请求",
+                lambda: api.illust_recommended(offset=offset),
+                operation="推荐作品请求",
             )
         finally:
             await self._release_api()

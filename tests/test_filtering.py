@@ -67,6 +67,29 @@ class SafetyFilteringTest(unittest.IsolatedAsyncioTestCase):
                 [{"id": "1", "x_restrict": 0, "title": "safe", "tags": []}]
             )
 
+    async def test_lolicon_page_id_is_blocked_by_pixiv_pid(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            mixin = object.__new__(FiltersMixin)
+            mixin.image_index = ImageIndexStore(tmp)
+            try:
+                await mixin.image_index.add_blacklist_illust(illust_id="123")
+
+                filtered = await mixin._filter_blacklisted_illusts(
+                    [
+                        {
+                            "id": "123:1",
+                            "pid": "123",
+                            "x_restrict": 0,
+                            "title": "safe",
+                            "tags": [],
+                        }
+                    ]
+                )
+
+                self.assertEqual(filtered, [])
+            finally:
+                mixin.image_index.close()
+
 
 if __name__ == "__main__":
     unittest.main()

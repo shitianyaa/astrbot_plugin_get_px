@@ -3,6 +3,7 @@ import sys
 import time
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 
@@ -37,6 +38,33 @@ def _logged_in_client(api) -> PixivClient:
 
 
 class PixivClientIllustDetailTest(unittest.IsolatedAsyncioTestCase):
+    async def test_retry_aborts_when_client_closes_during_backoff(self):
+        client = PixivClient("token")
+        factory_calls = 0
+
+        def factory():
+            nonlocal factory_calls
+            factory_calls += 1
+
+            async def fail():
+                raise RuntimeError("temporary failure")
+
+            return fail()
+
+        async def close_during_backoff(_delay):
+            client._closed = True
+
+        with (
+            patch(
+                "astrbot_plugin_get_px.pixiv.client.asyncio.sleep",
+                new=close_during_backoff,
+            ),
+            self.assertRaisesRegex(RuntimeError, "客户端已关闭"),
+        ):
+            await client._wait_for_with_retry(factory, operation="测试请求")
+
+        self.assertEqual(factory_calls, 1)
+
     async def test_close_releases_api_and_prevents_future_login(self):
         api = _FakeApi()
         client = _logged_in_client(api)

@@ -2,7 +2,7 @@
 
 # 画境拾珍
 
-一个面向 AstrBot 的 Pixiv 发图插件：安全搜索普通分级插画、查看排行榜、下载作品、每日签到，并在 WebUI 管理群排行、成员数值、内容安全和签到数据。
+一个面向 AstrBot 的安全发图与签到插件：Lolicon 优先取图，失败时可用 Pixiv refresh_token 回退，并在 WebUI 管理群排行、成员数值、内容安全和签到数据。
 
 ![AstrBot](https://img.shields.io/badge/AstrBot-plugin-5865f2?style=flat-square)
 ![Version](https://img.shields.io/badge/version-3.2.0-22c55e?style=flat-square)
@@ -42,11 +42,10 @@
 
 | 场景 | 能力 |
 | --- | --- |
-| 搜图发图 | 按标签搜索 Pixiv 插画，支持数量限制、多页作品、原图自动降级 |
-| 排行榜 | 日/周/月、男性向、女性向、原创、新人、漫画 8 种榜单 |
-| 作品工具 | 查询详情，按作品 ID 下载指定页 |
+| 搜图发图 | Lolicon 标签搜索或随机取图，失败时回退 Pixiv 搜索/推荐，支持数量限制与原图自动降级 |
+| 图片来源 | Lolicon 为首选；`pixiv_refresh_token` 可选，仅作回退 |
 | 内容安全 | 强制普通分级、内置安全词（不可关）、自定义安全词、作品 ID 黑名单 |
-| 每日签到 | H 纸张画册卡片、竖向 Pixiv 背景、金币、好感度、连签、商店与主题 |
+| 每日签到 | H 纸张画册卡片、竖向随机背景、金币、好感度、连签、商店与主题 |
 | 管理中心 | 群排行与趋势、成员数值、安全词与黑名单、签到备份 |
 | 稳定性 | 频率限制、当天去重、发送失败重试、临时文件自动清理 |
 
@@ -57,13 +56,12 @@
 1. 在 AstrBot WebUI 插件页安装本插件：
    - 下载本仓库 zip 后选择「导入压缩包」
    - 或粘贴仓库地址：`https://github.com/shitianyaa/astrbot_plugin_get_px`
-2. 填写 `pixiv_refresh_token`（[如何获取](#获取-pixiv-token)）。
-3. 需要代理时填写 `pixiv_proxy_url`，例如 `http://127.0.0.1:7890`。
+2. 默认使用 Lolicon API，无需 Token；需要 Pixiv 作为备用时再填写 `pixiv_refresh_token`（[如何获取](#获取-pixiv-token)）。
+3. Pixiv 回退需要代理时填写 `pixiv_proxy_url`，例如 `http://127.0.0.1:7890`。
 4. 直接试试：
 
 ```text
 /p 初音ミク 3
-/pr week 3
 /签到
 ```
 
@@ -84,11 +82,7 @@
 | 指令 | 说明 | 示例 |
 | --- | --- | --- |
 | `/p [标签] [数量]` | 按标签搜索发图 | `/p 初音ミク 3` |
-| `/p [数量]` | 无标签时拉默认排行榜 | `/p 5` |
-| `/pr [类型] [数量]` | 指定排行榜（默认类型 `week`，全部见 `/prl`） | `/pr week 3` |
-| `/prl` | 全部排行榜类型 | `/prl` |
-| `/pi <作品ID>` | 作品详情 | `/pi 12345678` |
-| `/pd <作品ID> [页码]` | 下载并发送 | `/pd 12345678 2` |
+| `/p [数量]` | 无标签时随机发图 | `/p 5` |
 | `/签到` | 每日签到 | `/签到` |
 | `/签到帮助` | 签到帮助图 | `/签到帮助` |
 | `/签到状态` | 金币、好感、连签等 | `/签到状态` |
@@ -106,7 +100,7 @@
 
 | 触发语 | 效果 |
 | --- | --- |
-| `来一份图` | 1 张默认排行榜图 |
+| `来一份图` | 1 张随机图片 |
 | `来三张初音ミク图` | 搜索并发送 3 张 |
 | `来两张萝莉图` | 搜索并发送 2 张 |
 | `来张风景图` | 搜索并发送 1 张 |
@@ -135,8 +129,8 @@ AstrBot WebUI 插件页的「pluginCenter」可：
 
 | 配置 | 建议 |
 | --- | --- |
-| `pixiv_refresh_token` | 必填 |
-| `pixiv_proxy_url` | Pixiv 不稳定时填代理 |
+| `pixiv_refresh_token` | 可选，作为 Lolicon 失败后的 Pixiv 回退 |
+| `pixiv_proxy_url` | Pixiv 回退不稳定时填代理 |
 | `image_quality` | 省流量用 `large`，优先原图用 `original` |
 | `send_as_forward` | QQ 场景建议开启 |
 | `checkin_card_quality` | 推荐 `95`；文字糊可提到 `97–100` |
@@ -148,10 +142,11 @@ AstrBot WebUI 插件页的「pluginCenter」可：
 
 | 配置 | 说明 | 默认值 |
 | --- | --- | --- |
-| `pixiv_refresh_token` | Pixiv refresh_token，必填 | 空 |
+| `pixiv_refresh_token` | Pixiv refresh_token，可选回退 | 空 |
+| `lolicon_api_url` | Lolicon 首选图片源地址；留空时停用 Lolicon | `https://api.lolicon.app/setu/v2` |
+| `lolicon_exclude_ai` | 请求 Lolicon 时排除 AI 作品；R18 始终关闭 | `true` |
 | `pixiv_proxy_url` | 代理地址，支持 `http://`、`socks5://` | 空 |
-| `filter_manga` | 过滤漫画作品；主动请求 `day_manga` 时保留后门 | `true` |
-| `pixiv_ranking_mode` | 无标签时使用的默认排行榜类型 | `week` |
+| `filter_manga` | 过滤 Pixiv 回退结果中的漫画作品 | `true` |
 | `max_count` | 单次最大发送数量，范围 1-20 | `5` |
 | `dedupe_ttl_hours` | 普通发图当天去重；范围 `0–24`，设为 `0` 关闭；当前按自然日去重，不按小时滚动过期 | `24` |
 | `request_timeout` | 单张图片下载超时，单位秒 | `30` |
@@ -161,9 +156,9 @@ AstrBot WebUI 插件页的「pluginCenter」可：
 | `auto_trigger_enabled` | 自然语言自动触发 | `false` |
 | `checkin_enabled` | 签到开关 | `true` |
 | `checkin_bot_name` | 签到卡片中的 bot 角色名 | `neko` |
-| `checkin_background_mode` | 签到背景模式：`pixiv_daily` 或 `custom`；自定义背景不可用时会继续尝试 Pixiv 背景 | `pixiv_daily` |
-| `checkin_background_refresh_cost` | 用户更新当天 Pixiv 签到背景所需金币；范围 `0–500`，`0` 为免费 | `100` |
-| `checkin_background_tag` | 签到 Pixiv 背景标签，多个标签可用逗号、顿号、分号或换行分隔；每次随机确定尝试顺序，一个标签无可用候选时继续尝试下一个 | 空 |
+| `checkin_background_mode` | 签到背景模式：`pixiv_daily` 或 `custom`；自定义背景不可用时继续尝试在线图片源 | `pixiv_daily` |
+| `checkin_background_refresh_cost` | 用户更新当天在线背景所需金币；范围 `0–500`，`0` 为免费 | `100` |
+| `checkin_background_tag` | 签到背景标签；留空时 Lolicon 随机取图，失败后使用 Pixiv 推荐作品 | 空 |
 | `checkin_custom_background` | 本地图片路径；默认主题按竖向作品相框完整显示 | 空 |
 | `checkin_avatar_enabled` | 签到卡片显示用户头像 | `true` |
 | `checkin_card_quality` | 签到卡片 JPEG 清晰度，范围 60–100；修改后自动生成新的当天缓存 | `95` |
@@ -182,7 +177,7 @@ AstrBot WebUI 插件页的「pluginCenter」可：
 
 | 文档 | 内容 |
 | --- | --- |
-| [指令参考](docs/user/commands.md) | 全部指令、排行榜类型、自然语言 |
+| [指令参考](docs/user/commands.md) | 全部指令与自然语言触发 |
 | [签到说明](docs/user/checkin.md) | 发奖、商店、好感、卡片、问候、生日事件与称号 |
 | [项目架构](docs/project/architecture.md) | 模块划分（开发用） |
 
@@ -190,7 +185,7 @@ AstrBot WebUI 插件页的「pluginCenter」可：
 
 ## 获取 Pixiv Token
 
-使用 [piglig/pixiv-token](https://github.com/piglig/pixiv-token) 获取 `refresh_token`，填入 `pixiv_refresh_token`。该工具基于 Playwright 自动完成 Pixiv OAuth 登录并取回 token，按仓库说明运行即可。
+Pixiv 仅作为可选回退。使用 [piglig/pixiv-token](https://github.com/piglig/pixiv-token) 获取 `refresh_token`，填入 `pixiv_refresh_token`。该工具基于 Playwright 自动完成 Pixiv OAuth 登录并取回 token，按仓库说明运行即可。
 
 ## 依赖
 
@@ -203,7 +198,8 @@ lunar-python
 
 ## 致谢
 
-- Pixiv 图片获取基于 [pixivpy-async](https://github.com/Mikubill/pixivpy-async)
+- 首选图片源由 [Lolicon API](https://api.lolicon.app/) 提供
+- Pixiv 回退基于 [pixivpy-async](https://github.com/Mikubill/pixivpy-async)
 - Pixiv `refresh_token` 获取方案来自 [piglig/pixiv-token](https://github.com/piglig/pixiv-token)，感谢 [piglig](https://github.com/piglig) 提供基于 Playwright 的 OAuth 自动取码工具
 - 作品黑名单缩略图生成基于 [Pillow](https://python-pillow.org/)
 - 签到每日一言由 [Hitokoto API](https://github.com/hitokoto-osc/hitokoto-api) 提供，感谢一言开源社区和公共 API 服务

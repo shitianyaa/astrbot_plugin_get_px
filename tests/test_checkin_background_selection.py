@@ -27,11 +27,11 @@ class FakePixivClient:
     def __init__(self, pages, search_pages=None):
         self.pages = pages
         self.search_pages = search_pages or {}
-        self.ranking_offsets = []
+        self.recommended_offsets = []
         self.search_calls = []
 
-    async def ranking(self, mode: str = "week", offset: int = 0):
-        self.ranking_offsets.append(offset)
+    async def recommended(self, offset: int = 0):
+        self.recommended_offsets.append(offset)
         return list(self.pages.get(offset, []))
 
     async def search(self, tag: str, offset: int = 0):
@@ -189,7 +189,7 @@ class CheckinBackgroundSelectionTest(unittest.IsolatedAsyncioTestCase):
                 return CardBackground(
                     image_path="picked.jpg",
                     mode="pixiv_daily",
-                    source="rank:week",
+                    source="pixiv:recommended",
                     illust_id="42",
                 )
 
@@ -211,7 +211,6 @@ class CheckinBackgroundSelectionTest(unittest.IsolatedAsyncioTestCase):
             plugin.config = {
                 "checkin_background_mode": "pixiv_daily",
                 "pixiv_refresh_token": "token",
-                "pixiv_ranking_mode": "week",
                 "filter_manga": True,
                 "image_quality": "large",
                 "pixiv_proxy_url": "",
@@ -256,11 +255,11 @@ class CheckinBackgroundSelectionTest(unittest.IsolatedAsyncioTestCase):
                 )
                 self.assertEqual(
                     await plugin.image_index.get_used_illust_ids(
-                        "group:20001", "rank:week"
+                        "group:20001", "pixiv:recommended"
                     ),
                     set(),
                 )
-                self.assertEqual(plugin.client.ranking_offsets, [0, 0, 0])
+                self.assertEqual(plugin.client.recommended_offsets, [0, 0, 0])
                 self.assertEqual(plugin.downloader.qualities, ["medium"] * 3)
                 self.assertEqual(plugin.downloader.downgrade_limits, [0] * 3)
             finally:
@@ -290,7 +289,6 @@ class CheckinBackgroundSelectionTest(unittest.IsolatedAsyncioTestCase):
             plugin = object.__new__(GetPxPlugin)
             plugin.config = {
                 "pixiv_refresh_token": "token",
-                "pixiv_ranking_mode": "week",
                 "filter_manga": True,
                 "checkin_background_tag": "empty\uff0cavailable",
                 "pixiv_proxy_url": "",
@@ -313,7 +311,7 @@ class CheckinBackgroundSelectionTest(unittest.IsolatedAsyncioTestCase):
                         preview_nonce=1,
                     )
                 self.assertIsNotNone(background)
-                self.assertEqual(background.source, "search:available")
+                self.assertEqual(background.source, "pixiv:search:available")
                 self.assertEqual(
                     plugin.client.search_calls,
                     [("empty", 0), ("available", 0)],
@@ -326,7 +324,6 @@ class CheckinBackgroundSelectionTest(unittest.IsolatedAsyncioTestCase):
             plugin = object.__new__(GetPxPlugin)
             plugin.config = {
                 "pixiv_refresh_token": "token",
-                "pixiv_ranking_mode": "week",
                 "filter_manga": True,
                 "checkin_background_aspect_ratio": "16:9",
                 "checkin_background_aspect_tolerance": 0.25,
@@ -348,7 +345,7 @@ class CheckinBackgroundSelectionTest(unittest.IsolatedAsyncioTestCase):
                 for illust_id in range(20):
                     await plugin.image_index.record_usage(
                         scope="group:20001",
-                        source_key="rank:week",
+                        source_key="pixiv:recommended",
                         illust_id=str(illust_id),
                         feature="checkin",
                         user_id="10001",
@@ -361,7 +358,7 @@ class CheckinBackgroundSelectionTest(unittest.IsolatedAsyncioTestCase):
 
                 self.assertIsNotNone(background)
                 self.assertEqual(background.illust_id, "20")
-                self.assertEqual(plugin.client.ranking_offsets, [0, 20])
+                self.assertEqual(plugin.client.recommended_offsets, [0, 20])
             finally:
                 plugin.image_index.close()
 
@@ -370,7 +367,6 @@ class CheckinBackgroundSelectionTest(unittest.IsolatedAsyncioTestCase):
             plugin = object.__new__(GetPxPlugin)
             plugin.config = {
                 "pixiv_refresh_token": "token",
-                "pixiv_ranking_mode": "week",
                 "filter_manga": True,
                 "checkin_background_aspect_ratio": "16:9",
                 "checkin_background_aspect_tolerance": 0.25,
@@ -392,7 +388,7 @@ class CheckinBackgroundSelectionTest(unittest.IsolatedAsyncioTestCase):
                 self.assertIsNotNone(background)
                 self.assertEqual(
                     await plugin.image_index.get_used_illust_ids(
-                        "group:20001", "rank:week"
+                        "group:20001", "pixiv:recommended"
                     ),
                     {"30"},
                 )
@@ -401,7 +397,7 @@ class CheckinBackgroundSelectionTest(unittest.IsolatedAsyncioTestCase):
 
                 self.assertEqual(
                     await plugin.image_index.get_used_illust_ids(
-                        "group:20001", "rank:week"
+                        "group:20001", "pixiv:recommended"
                     ),
                     set(),
                 )
@@ -417,7 +413,6 @@ class CheckinBackgroundSelectionTest(unittest.IsolatedAsyncioTestCase):
             plugin = object.__new__(GetPxPlugin)
             plugin.config = {
                 "pixiv_refresh_token": "token",
-                "pixiv_ranking_mode": "week",
                 "filter_manga": True,
                 "pixiv_proxy_url": "",
                 "request_timeout": 30.0,
@@ -434,7 +429,7 @@ class CheckinBackgroundSelectionTest(unittest.IsolatedAsyncioTestCase):
                     )
                 self.assertEqual(
                     await plugin.image_index.get_used_illust_ids(
-                        "group:20001", "rank:week"
+                        "group:20001", "pixiv:recommended"
                     ),
                     set(),
                 )
@@ -446,7 +441,6 @@ class CheckinBackgroundSelectionTest(unittest.IsolatedAsyncioTestCase):
             plugin = object.__new__(GetPxPlugin)
             plugin.config = {
                 "pixiv_refresh_token": "token",
-                "pixiv_ranking_mode": "week",
                 "filter_manga": True,
                 "checkin_background_aspect_ratio": "16:9",
                 "checkin_background_aspect_tolerance": 0.25,
@@ -472,8 +466,110 @@ class CheckinBackgroundSelectionTest(unittest.IsolatedAsyncioTestCase):
 
                 self.assertIsNotNone(background)
                 self.assertEqual(background.illust_id, "20")
-                self.assertEqual(plugin.client.ranking_offsets, [0, 20])
+                self.assertEqual(plugin.client.recommended_offsets, [0, 20])
                 self.assertEqual(plugin.downloader.illust_ids, ["20"])
+            finally:
+                plugin.image_index.close()
+
+    async def test_pixiv_fallback_resumes_from_persisted_cursor(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            plugin = object.__new__(GetPxPlugin)
+            plugin.config = {
+                "filter_manga": True,
+                "pixiv_proxy_url": "",
+                "request_timeout": 30.0,
+            }
+            plugin.image_index = ImageIndexStore(tmp)
+            plugin.downloader = FakeDownloader()
+            plugin.client = FakePixivClient(
+                {
+                    40: [
+                        _illust(40 + i, width=1600, height=900)
+                        for i in range(20)
+                    ],
+                    60: [_illust(60)],
+                }
+            )
+            try:
+                await plugin.image_index.advance_page_offset(
+                    "group:20001", "pixiv:recommended", 20
+                )
+                await plugin.image_index.advance_page_offset(
+                    "group:20001", "pixiv:recommended", 20
+                )
+
+                background = await plugin._download_checkin_pixiv_background(
+                    FakeEvent(),
+                    SimpleNamespace(date_key="2026-05-26", user_id="10001"),
+                )
+
+                self.assertIsNotNone(background)
+                self.assertEqual(background.illust_id, "60")
+                self.assertEqual(plugin.client.recommended_offsets, [40, 60])
+            finally:
+                plugin.image_index.close()
+
+    async def test_lolicon_background_restore_uses_pixiv_page_when_token_exists(self):
+        class DetailClient(FakePixivClient):
+            def __init__(self):
+                super().__init__({})
+                self.detail_calls = []
+
+            async def illust_detail(self, illust_id):
+                self.detail_calls.append(illust_id)
+                return {
+                    "id": illust_id,
+                    "title": "title",
+                    "x_restrict": 0,
+                    "width": 750,
+                    "height": 1000,
+                    "user": {"name": "artist"},
+                    "meta_pages": [
+                        {"image_urls": {"original": "page-0.jpg"}},
+                        {"image_urls": {"original": "page-1.jpg"}},
+                    ],
+                }
+
+        class RecordingDownloader(FakeDownloader):
+            def __init__(self):
+                super().__init__()
+                self.last_illust = None
+
+            async def download_for_send(self, illust, *args, **kwargs):
+                self.last_illust = illust
+                return await super().download_for_send(illust, *args, **kwargs)
+
+        with tempfile.TemporaryDirectory() as tmp:
+            plugin = object.__new__(GetPxPlugin)
+            plugin.config = {
+                "pixiv_refresh_token": "token",
+                "pixiv_proxy_url": "",
+                "request_timeout": 30.0,
+            }
+            plugin.image_index = ImageIndexStore(tmp)
+            plugin.client = DetailClient()
+            plugin.downloader = RecordingDownloader()
+            record = SimpleNamespace(
+                background_mode="pixiv_daily",
+                background_source="lolicon:random",
+                background_illust_id="123:1",
+                background_title="title",
+                background_author="artist",
+            )
+            try:
+                background = await plugin._restore_checkin_background(
+                    FakeEvent(), record
+                )
+
+                self.assertEqual(plugin.client.detail_calls, [123])
+                self.assertEqual(
+                    plugin.downloader.last_illust["meta_single_page"][
+                        "original_image_url"
+                    ],
+                    "page-1.jpg",
+                )
+                self.assertEqual(background.illust_id, "123:1")
+                self.assertEqual(background.mode, "pixiv_daily")
             finally:
                 plugin.image_index.close()
 
@@ -482,7 +578,6 @@ class CheckinBackgroundSelectionTest(unittest.IsolatedAsyncioTestCase):
             plugin = object.__new__(GetPxPlugin)
             plugin.config = {
                 "pixiv_refresh_token": "token",
-                "pixiv_ranking_mode": "week",
                 "filter_manga": True,
                 "checkin_background_aspect_ratio": "16:9",
                 "checkin_background_aspect_tolerance": 0.25,
@@ -509,7 +604,7 @@ class CheckinBackgroundSelectionTest(unittest.IsolatedAsyncioTestCase):
                 )
 
                 self.assertEqual(background.mode, "fallback")
-                self.assertEqual(plugin.client.ranking_offsets, [0, 20, 40, 60, 80])
+                self.assertEqual(plugin.client.recommended_offsets, [0, 20, 40, 60, 80])
                 self.assertEqual(plugin.downloader.illust_ids, [])
             finally:
                 plugin.image_index.close()

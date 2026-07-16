@@ -171,6 +171,7 @@ async def render_matrix() -> list[dict[str, object]]:
     OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
     artwork_path = make_artwork()
     report: list[dict[str, object]] = []
+    template = Template(get_checkin_card_template())
 
     async with async_playwright() as playwright:
         browser = await playwright.chromium.launch(headless=True)
@@ -217,7 +218,7 @@ async def render_matrix() -> list[dict[str, object]]:
                 user_title="今日旅人",
                 content=content,
             )
-            html = Template(get_checkin_card_template()).render(data)
+            html = template.render(data)
             html_path = OUTPUT_DIR / f"{scenario.slug}.html"
             html_path.write_text(html, encoding="utf-8")
             await page.goto(html_path.resolve().as_uri())

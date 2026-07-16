@@ -1,18 +1,15 @@
-"""AstrBot 插件 — Pixiv 发图
+"""AstrBot 插件 — 安全插画发图与签到
 
-通过标签搜索 Pixiv 插画并发送图片，支持排行榜、内容安全过滤、多页作品、代理配置、自然语言自动触发和签到。
+通过标签搜索插画并发送图片，支持 Lolicon 主源、Pixiv 回退、内容安全过滤、多页作品、代理配置、自然语言自动触发和签到。
 
 搜索指令：
     /p [标签] [数量]           搜索并发送图片
 
 自动触发（需在配置中开启）：
-    来一份图                   发送 1 张排行榜图片
+    来一份图                   发送 1 张随机图片
     来三张初音ミク图             搜索标签「初音ミク」发送 3 张
 
-管理指令：
-    /pr [排行类型] [数量]      获取排行榜
-    /prl                       查看所有排行榜类型
-    /pi <作品ID>               查看作品详情
+签到指令：
     /签到                      每日签到
     /签到测试                  管理员预览签到卡片
 """
@@ -43,6 +40,7 @@ from .pixiv import DeliveryMixin, FiltersMixin, SearchMixin
 from .pixiv.client import PixivClient
 from .pixiv.downloader import ImageDownloader
 from .pixiv.index import ImageIndexStore
+from .pixiv.lolicon import LoliconClient
 from .plugin_api import PluginWebApi
 
 # ──────────────────────────────────────────────────────────────────────
@@ -72,17 +70,6 @@ CHINESE_NUMBER_MAP = {
     "十": "10",
 }
 
-RANKING_MODES = {
-    "day": "今日",
-    "week": "本周",
-    "month": "本月",
-    "day_male": "男性向",
-    "day_female": "女性向",
-    "week_original": "原创",
-    "week_rookie": "新人",
-    "day_manga": "漫画",
-}
-
 # ──────────────────────────────────────────────────────────────────────
 # 插件主类
 # ──────────────────────────────────────────────────────────────────────
@@ -101,6 +88,7 @@ class GetPxPlugin(
         super().__init__(context, config)
         self.config = config
         self.client: PixivClient | None = None
+        self.lolicon_client: LoliconClient | None = None
         self.downloader = ImageDownloader()
         self._last_request: dict[str, float] = {}
         self.data_dir: Path | None = None
@@ -116,7 +104,7 @@ class GetPxPlugin(
         self.checkin_greeting = CheckinGreetingGenerator(context)
         self.holiday_calendar: HolidayCalendar | None = None
         self._holiday_refresh_task: asyncio.Task | None = None
-        self._terminating = False
+        self._termination_task: asyncio.Task[None] | None = None
         self._checkin_flow_locks: weakref.WeakValueDictionary[str, asyncio.Lock] = (
             weakref.WeakValueDictionary()
         )
@@ -174,10 +162,21 @@ class GetPxPlugin(
             logger.warning(f"{LOG_PREFIX} 节假日数据更新失败，继续使用本地规则: {exc}")
 
     def _init_client(self):
-        """根据配置初始化 Pixiv 客户端。"""
+        """初始化 Lolicon 主源和可选的 Pixiv 回退客户端。"""
+        lolicon_url = self._cfg_str(
+            "lolicon_api_url", "https://api.lolicon.app/setu/v2"
+        )
+        if getattr(self, "lolicon_client", None) is None:
+            self.lolicon_client = LoliconClient(
+                api_url=lolicon_url,
+                exclude_ai=self._cfg_bool("lolicon_exclude_ai", True),
+                request_timeout=self._cfg_float(
+                    "request_timeout", 30.0, 5.0, 120.0
+                ),
+            )
         token = self._cfg_str("pixiv_refresh_token")
         if not token:
-            logger.warning(f"{LOG_PREFIX} 未配置 pixiv_refresh_token，插件将不可用")
+            logger.info(f"{LOG_PREFIX} 未配置 Pixiv refresh_token，仅使用 Lolicon 主源")
             return
 
         proxy = self._cfg_str("pixiv_proxy_url")
@@ -186,7 +185,7 @@ class GetPxPlugin(
             proxy=proxy,
             request_timeout=self._cfg_float("request_timeout", 30.0, 5.0, 120.0),
         )
-        logger.info(f"{LOG_PREFIX} 客户端已初始化")
+        logger.info(f"{LOG_PREFIX} Lolicon 主源和 Pixiv 回退客户端已初始化")
 
     def _web_api(self) -> PluginWebApi:
         service = getattr(self, "plugin_web_api", None)
@@ -206,17 +205,39 @@ class GetPxPlugin(
         return await self._web_api().checkin_import()
 
     async def terminate(self):
-        """插件卸载/停用时清理资源。可重入，二次调用直接返回。"""
-        if self._terminating:
-            return
-        self._terminating = True
+        """插件卸载/停用时清理资源，并让并发调用等待同一清理任务。"""
+        task = self._termination_task
+        if task is not None and task.done() and (
+            task.cancelled() or task.exception() is not None
+        ):
+            self._termination_task = None
+            task = None
+        if task is None:
+            task = asyncio.create_task(self._terminate_resources())
+            self._termination_task = task
+        try:
+            await asyncio.shield(task)
+        except asyncio.CancelledError:
+            if task.cancelled() and self._termination_task is task:
+                self._termination_task = None
+            raise
+        except Exception:
+            if self._termination_task is task:
+                self._termination_task = None
+            raise
+
+    async def _terminate_resources(self) -> None:
+        """执行一次插件资源清理。"""
         if self._holiday_refresh_task is not None:
             self._holiday_refresh_task.cancel()
             await asyncio.gather(self._holiday_refresh_task, return_exceptions=True)
             self._holiday_refresh_task = None
-        if self.client is not None:
+        if getattr(self, "client", None) is not None:
             await self.client.close()
             self.client = None
+        if getattr(self, "lolicon_client", None) is not None:
+            await self.lolicon_client.close()
+            self.lolicon_client = None
         await self.downloader.close()
         await self.checkin_greeting.close()
         self._last_request.clear()
@@ -234,11 +255,11 @@ class GetPxPlugin(
     # ──────────────────────────────────────────────────────────────
 
     @filter.command("p")
-    async def cmd_p(self, event: AstrMessageEvent, query: GreedyStr):
-        """搜索 Pixiv 并发送图片。用法: /p [标签] [数量]"""
+    async def cmd_p(self, event: AstrMessageEvent, query: GreedyStr = ""):
+        """搜索并发送图片。用法: /p [标签] [数量]"""
         if not self._ensure_client_or_error(event):
             yield event.plain_result(
-                "⚠️ 未配置 Pixiv Token，请在插件设置中填写 pixiv_refresh_token"
+                "⚠️ 图片源暂不可用，请配置 Lolicon API，或填写 pixiv_refresh_token 作为回退"
             )
             return
         event.stop_event()
@@ -248,7 +269,7 @@ class GetPxPlugin(
 
     @staticmethod
     def _split_tag_and_count(query: str) -> tuple[str, str]:
-        """把 GreedyStr 参数拆成标签与尾部数量；纯数字视为数量（无标签搜排行榜）。"""
+        """把 GreedyStr 参数拆成标签与尾部数量；纯数字视为随机发图数量。"""
         tokens = query.split()
         if not tokens:
             return "", ""
@@ -257,68 +278,8 @@ class GetPxPlugin(
         return " ".join(tokens), ""
 
     # ──────────────────────────────────────────────────────────────
-    # 管理指令
+    # 签到指令
     # ──────────────────────────────────────────────────────────────
-
-    @filter.command("pr")
-    async def cmd_rank(self, event: AstrMessageEvent, mode: str = "", count: str = ""):
-        """获取 Pixiv 排行榜。用法: /pr [类型] [数量]"""
-        if not self._ensure_client_or_error(event):
-            yield event.plain_result(
-                "⚠️ 未配置 Pixiv Token，请在插件设置中填写 pixiv_refresh_token"
-            )
-            return
-        event.stop_event()
-        async for result in self._handle_rank(event, mode, count):
-            yield result
-
-    @filter.command("prl")
-    async def cmd_rank_list(self, event: AstrMessageEvent):
-        """查看所有 Pixiv 排行榜类型。"""
-        event.stop_event()
-        lines = ["📊 可用排行榜类型："]
-        for k, v in RANKING_MODES.items():
-            lines.append(f"  · {k} — {v}")
-        lines.append("\n用法: /pr [类型] [数量]")
-        yield event.plain_result("\n".join(lines))
-
-    @filter.command("pi")
-    async def cmd_info(self, event: AstrMessageEvent, illust_id: str = ""):
-        """查看 Pixiv 作品详情。用法: /pi <作品ID>"""
-        if not self._ensure_client_or_error(event):
-            yield event.plain_result(
-                "⚠️ 未配置 Pixiv Token，请在插件设置中填写 pixiv_refresh_token"
-            )
-            return
-        if not illust_id or not illust_id.isdigit():
-            yield event.plain_result("⚠️ 用法: /pi <作品ID>\n示例: /pi 12345678")
-            return
-        event.stop_event()
-        async for result in self._handle_info(event, int(illust_id)):
-            yield result
-
-    @filter.command("pd")
-    async def cmd_download(
-        self, event: AstrMessageEvent, illust_id: str = "", page: str = ""
-    ):
-        """通过作品ID下载并发送图片。用法: /pd <作品ID> [页码]"""
-        if not self._ensure_client_or_error(event):
-            yield event.plain_result(
-                "⚠️ 未配置 Pixiv Token，请在插件设置中填写 pixiv_refresh_token"
-            )
-            return
-        if not illust_id:
-            yield event.plain_result(
-                "⚠️ 用法: /pd <作品ID> [页码]\n示例: /pd 12345678\n多页作品可指定页码: /pd 12345678 2"
-            )
-            return
-        if not illust_id.isdigit():
-            yield event.plain_result("⚠️ 作品ID必须是数字\n用法: /pd <作品ID> [页码]")
-            return
-        event.stop_event()
-        page_number = int(page) if page.isdigit() else 1
-        async for result in self._handle_download(event, int(illust_id), page_number):
-            yield result
 
     @filter.command("签到")
     async def cmd_checkin(self, event: AstrMessageEvent):
@@ -478,7 +439,7 @@ class GetPxPlugin(
 
     @filter.regex(AUTO_TRIGGER_PATTERN)
     async def auto_trigger(self, event: AstrMessageEvent):
-        """自然语言自动触发 Pixiv 发图。"""
+        """自然语言自动触发发图。"""
         if not self._cfg_bool("auto_trigger_enabled", False):
             return
         if not self._ensure_client_or_error(event):
