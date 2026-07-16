@@ -62,13 +62,17 @@ class CheckinGreetingGenerator:
     def __init__(self, context: Any):
         self.context = context
         self._session: aiohttp.ClientSession | None = None
+        self._closed = False
 
     def _ensure_session(self) -> aiohttp.ClientSession:
+        if self._closed:
+            raise RuntimeError("check-in greeting generator is closed")
         if self._session is None or self._session.closed:
             self._session = aiohttp.ClientSession()
         return self._session
 
     async def close(self) -> None:
+        self._closed = True
         if self._session is not None and not self._session.closed:
             await self._session.close()
         self._session = None
@@ -152,6 +156,7 @@ class CheckinGreetingGenerator:
         except (
             aiohttp.ClientError,
             asyncio.TimeoutError,
+            RuntimeError,
             TypeError,
             ValueError,
         ) as exc:

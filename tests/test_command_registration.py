@@ -5,7 +5,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 
 from astrbot.core.star.filter.command import CommandFilter
 from astrbot.core.star.filter.command_group import CommandGroupFilter
-from astrbot.core.star.filter.permission import PermissionTypeFilter
+from astrbot.core.star.filter.permission import PermissionType, PermissionTypeFilter
 from astrbot.core.star.filter.regex import RegexFilter
 from astrbot.core.star.star_handler import EventType, star_handlers_registry
 
@@ -105,6 +105,7 @@ def test_checkin_admin_subcommands_keep_admin_permission() -> None:
     for handler_name in admin_handlers:
         assert any(
             isinstance(event_filter, PermissionTypeFilter)
+            and event_filter.permission_type == PermissionType.ADMIN
             for event_filter in handlers[handler_name].event_filters
         )
 

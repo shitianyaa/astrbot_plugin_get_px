@@ -9,7 +9,8 @@ import unittest
 from contextlib import closing
 from dataclasses import replace
 from pathlib import Path
-from unittest.mock import AsyncMock, patch
+from types import SimpleNamespace
+from unittest.mock import AsyncMock, Mock, patch
 
 from quart import Quart
 from PIL import Image as PILImage
@@ -341,6 +342,29 @@ class MainErrorHandlingTest(unittest.IsolatedAsyncioTestCase):
 
         await plugin.terminate()
         self.assertEqual(cleanup_calls, 2)
+
+    async def test_terminate_continues_after_individual_close_failures(self):
+        plugin = object.__new__(GetPxPlugin)
+        plugin._holiday_refresh_task = None
+        plugin.client = SimpleNamespace(
+            close=AsyncMock(side_effect=RuntimeError("pixiv close failed"))
+        )
+        plugin.lolicon_client = SimpleNamespace(close=AsyncMock())
+        plugin.downloader = SimpleNamespace(close=AsyncMock())
+        plugin.checkin_greeting = SimpleNamespace(close=AsyncMock())
+        plugin._last_request = {"user": 1.0}
+        plugin._checkin_flow_locks = {"user": asyncio.Lock()}
+        plugin.image_index = SimpleNamespace(close=Mock())
+        plugin.checkin_store = object()
+
+        await plugin._terminate_resources()
+
+        plugin.downloader.close.assert_awaited_once()
+        plugin.checkin_greeting.close.assert_awaited_once()
+        self.assertIsNone(plugin.client)
+        self.assertIsNone(plugin.lolicon_client)
+        self.assertIsNone(plugin.image_index)
+        self.assertIsNone(plugin.checkin_store)
 
     async def test_search_command_accepts_empty_query(self):
         plugin = object.__new__(GetPxPlugin)

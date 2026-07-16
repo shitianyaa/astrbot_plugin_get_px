@@ -68,6 +68,25 @@ def _illust(illust_id: int, *, width: int = 750, height: int = 1000) -> dict:
 
 
 class CheckinBackgroundSelectionTest(unittest.IsolatedAsyncioTestCase):
+    def test_restored_pixiv_page_uses_page_qualified_id(self):
+        illust = {
+            "id": "123",
+            "meta_pages": [
+                {"image_urls": {"original": "https://example/0.jpg"}},
+                {"image_urls": {"original": "https://example/1.jpg"}},
+            ],
+        }
+
+        selected = GetPxPlugin._select_pixiv_detail_page(illust, 1)
+
+        self.assertIsNotNone(selected)
+        self.assertEqual(selected["id"], "123:1")
+        self.assertEqual(len(selected["meta_pages"]), 1)
+        self.assertEqual(
+            selected["meta_single_page"]["original_image_url"],
+            "https://example/1.jpg",
+        )
+
     def test_split_config_tags_accepts_common_delimiters(self):
         self.assertEqual(
             GetPxPlugin._split_config_tags(

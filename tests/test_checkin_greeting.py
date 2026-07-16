@@ -81,6 +81,15 @@ class FakeHitokotoSession:
         return FakeHitokotoResponse(self.payload)
 
 
+class CloseableHitokotoSession(FakeHitokotoSession):
+    def __init__(self, payload: object, calls: list[dict[str, object]], **kwargs):
+        super().__init__(payload, calls, **kwargs)
+        self.closed = False
+
+    async def close(self) -> None:
+        self.closed = True
+
+
 def make_greeting_context(username: str = "Alice") -> GreetingContext:
     return GreetingContext(
         bot_name="neko",
@@ -221,6 +230,31 @@ async def test_hitokoto_source_returns_valid_short_sentence(monkeypatch) -> None
     )
     assert calls[0]["url"] == checkin_greeting.HITOKOTO_API_URL
     assert calls[0]["params"] == [("encode", "json"), ("max_length", "24")]
+
+
+@pytest.mark.asyncio
+async def test_hitokoto_does_not_recreate_session_after_close(monkeypatch) -> None:
+    sessions: list[CloseableHitokotoSession] = []
+
+    def create_session(**kwargs):
+        session = CloseableHitokotoSession(
+            {"hitokoto": "不应再次请求。"}, [], **kwargs
+        )
+        sessions.append(session)
+        return session
+
+    monkeypatch.setattr(checkin_greeting.aiohttp, "ClientSession", create_session)
+    generator = CheckinGreetingGenerator(FakeContext())
+    generator._ensure_session()
+    await generator.close()
+
+    result = await generator.generate_hitokoto(
+        make_greeting_context(), timeout=5.0
+    )
+
+    assert result == ("本地问候。", "local", "")
+    assert len(sessions) == 1
+    assert sessions[0].closed
 
 
 @pytest.mark.asyncio

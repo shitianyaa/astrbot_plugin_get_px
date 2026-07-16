@@ -165,6 +165,7 @@ class CheckinArtworkMixin:
         page_data = meta_pages[page] or {}
         page_urls = page_data.get("image_urls") or {}
         selected = dict(illust)
+        selected["id"] = f"{illust['id']}:{page}"
         selected["meta_single_page"] = {
             "original_image_url": str(page_urls.get("original") or "")
         }

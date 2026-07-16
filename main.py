@@ -234,19 +234,36 @@ class GetPxPlugin(
             await asyncio.gather(self._holiday_refresh_task, return_exceptions=True)
             self._holiday_refresh_task = None
         if getattr(self, "client", None) is not None:
-            await self.client.close()
-            self.client = None
+            try:
+                await self.client.close()
+            except Exception as exc:
+                logger.warning(f"{LOG_PREFIX} 关闭 Pixiv 客户端失败: {exc}")
+            finally:
+                self.client = None
         if getattr(self, "lolicon_client", None) is not None:
-            await self.lolicon_client.close()
-            self.lolicon_client = None
-        await self.downloader.close()
-        await self.checkin_greeting.close()
+            try:
+                await self.lolicon_client.close()
+            except Exception as exc:
+                logger.warning(f"{LOG_PREFIX} 关闭 Lolicon 客户端失败: {exc}")
+            finally:
+                self.lolicon_client = None
+        try:
+            await self.downloader.close()
+        except Exception as exc:
+            logger.warning(f"{LOG_PREFIX} 关闭图片下载器失败: {exc}")
+        try:
+            await self.checkin_greeting.close()
+        except Exception as exc:
+            logger.warning(f"{LOG_PREFIX} 关闭签到问候会话失败: {exc}")
         self._last_request.clear()
         locks = getattr(self, "_checkin_flow_locks", None)
         if locks is not None:
             locks.clear()
         if self.image_index is not None:
-            self.image_index.close()
+            try:
+                self.image_index.close()
+            except Exception as exc:
+                logger.warning(f"{LOG_PREFIX} 关闭图片索引失败: {exc}")
         self.image_index = None
         self.checkin_store = None
         logger.info(f"{LOG_PREFIX} 插件已停止")
