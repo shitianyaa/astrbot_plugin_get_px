@@ -10,6 +10,9 @@
 ![Platform](https://img.shields.io/badge/platform-OneBot%20%2F%20aiocqhttp-f97316?style=flat-square)
 ![License](https://img.shields.io/badge/license-MIT-3b82f6?style=flat-square)
 
+<br>
+<img src="logo.png" alt="画境拾珍 Logo" width="180">
+
 </div>
 
 ## 目录
