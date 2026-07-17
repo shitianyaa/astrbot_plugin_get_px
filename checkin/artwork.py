@@ -36,16 +36,6 @@ PLUGIN_NAME = "astrbot_plugin_get_px"
 CHECKIN_BACKGROUND_PAGE_ATTEMPTS = 5
 CHECKIN_PREVIEW_BACKGROUND_TTL_SECONDS = 300.0
 CHECKIN_BACKGROUND_QUALITY = "medium"
-RANKING_MODES = {
-    "day": "今日",
-    "week": "本周",
-    "month": "本月",
-    "day_male": "男性向",
-    "day_female": "女性向",
-    "week_original": "原创",
-    "week_rookie": "新人",
-    "day_manga": "漫画",
-}
 
 
 class CheckinArtworkMixin:
@@ -89,15 +79,35 @@ class CheckinArtworkMixin:
 
         if not record.background_illust_id:
             return replace(saved, mode="fallback")
-        if self.client is None:
+        source = str(record.background_source or "")
+        detail_id_text = str(record.background_illust_id)
+        detail_page = 0
+        if source.startswith("lolicon:"):
+            detail_id_text, separator, page_text = detail_id_text.partition(":")
+            if separator:
+                try:
+                    detail_page = int(page_text)
+                except ValueError:
+                    return replace(saved, mode="fallback")
+            if not self._cfg_str("pixiv_refresh_token"):
+                return replace(saved, mode="fallback")
+        try:
+            detail_id = int(detail_id_text)
+        except ValueError:
+            return replace(saved, mode="fallback")
+        if getattr(self, "client", None) is None:
             self._init_client()
         if self.client is None:
             return replace(saved, mode="fallback")
 
         try:
-            illust = await self.client.illust_detail(int(record.background_illust_id))
+            illust = await self.client.illust_detail(detail_id)
             if not illust:
                 return replace(saved, mode="fallback")
+            if source.startswith("lolicon:"):
+                illust = self._select_pixiv_detail_page(illust, detail_page)
+                if not illust:
+                    return replace(saved, mode="fallback")
             if await self._blacklist_reason_for_illust(
                 illust, record.background_illust_id
             ):
@@ -142,6 +152,27 @@ class CheckinArtworkMixin:
             )
             return replace(saved, mode="fallback")
 
+    @staticmethod
+    def _select_pixiv_detail_page(illust: dict, page: int) -> dict | None:
+        """把 Pixiv 详情转换为 Lolicon 记录所指向的具体页面。"""
+        if page < 0:
+            return None
+        meta_pages = illust.get("meta_pages") or []
+        if not meta_pages:
+            return illust if page == 0 else None
+        if page >= len(meta_pages):
+            return None
+        page_data = meta_pages[page] or {}
+        page_urls = page_data.get("image_urls") or {}
+        selected = dict(illust)
+        selected["id"] = f"{illust['id']}:{page}"
+        selected["meta_single_page"] = {
+            "original_image_url": str(page_urls.get("original") or "")
+        }
+        selected["image_urls"] = dict(page_urls)
+        selected["meta_pages"] = [page_data]
+        return selected
+
     async def _render_checkin_card(
         self,
         event: AstrMessageEvent,
@@ -160,7 +191,9 @@ class CheckinArtworkMixin:
         width = CHECKIN_CARD_WIDTH
         height = CHECKIN_CARD_HEIGHT
         quality = self._cfg_int("checkin_card_quality", 95, 60, 100)
-        data = build_checkin_card_data(
+        # 视图模型构建含背景图 Data URL 编码（读文件 + base64），放入线程池
+        data = await asyncio.to_thread(
+            build_checkin_card_data,
             profile=profile,
             record=record,
             bot_name=bot_name,
@@ -206,7 +239,7 @@ class CheckinArtworkMixin:
                     mode="custom",
                     source="custom",
                 )
-            logger.warning(f"{LOG_PREFIX} 签到自定义背景不可用\uff0c回退 Pixiv 背景")
+            logger.warning(f"{LOG_PREFIX} 签到自定义背景不可用\uff0c回退在线图片源背景")
         elif mode != "pixiv_daily":
             mode = "pixiv_daily"
         preview_nonce = 0
@@ -292,19 +325,6 @@ class CheckinArtworkMixin:
         preview_excluded_ids: set[str] | None = None,
         _selected_tag: str | None = None,
     ) -> CardBackground | None:
-        token = self._cfg_str("pixiv_refresh_token")
-        if not token:
-            logger.info(f"{LOG_PREFIX} 签到背景跳过 Pixiv\uff1a未配置 refresh_token")
-            return None
-        if self.client is None:
-            self._init_client()
-        if self.client is None:
-            return None
-
-        ranking_mode = self._cfg_str("pixiv_ranking_mode", "week")
-        if ranking_mode not in RANKING_MODES:
-            ranking_mode = "week"
-
         if _selected_tag is None:
             tag_config = self._cfg_str("checkin_background_tag", "")
             for selected_tag in self._checkin_background_tag_candidates(tag_config):
@@ -322,40 +342,40 @@ class CheckinArtworkMixin:
 
         selected_tag = _selected_tag
 
-        source_key = self._source_key(selected_tag, ranking_mode)
-        used_ids = await self._checkin_background_used_ids(event, source_key)
-        used_ids.update(preview_excluded_ids or ())
+        source_key = ""
+        used_ids: set[str] = set(preview_excluded_ids or ())
+        used_source_key = ""
         illusts: list[dict] = []
         raw_count = 0
         transient_offset = 0
 
         for page_attempt in range(1, CHECKIN_BACKGROUND_PAGE_ATTEMPTS + 1):
-            if preview_nonce:
-                try:
-                    if selected_tag:
-                        illusts = await self.client.search(
-                            selected_tag, offset=transient_offset
-                        )
-                    else:
-                        illusts = await self.client.ranking(
-                            ranking_mode, offset=transient_offset
-                        )
-                except Exception as e:
-                    logger.warning(
-                        f"{LOG_PREFIX} 签到测试背景请求失败(tag={selected_tag!r}): {e}"
-                    )
-                    return None
-                raw_count = len(illusts)
-                transient_offset += raw_count
-            else:
-                illusts, raw_count, source_key = await self._fetch_paginated(
-                    event, selected_tag, ranking_mode
+            try:
+                illusts, raw_count, source_key = await self._fetch_source_candidates(
+                    event,
+                    selected_tag,
+                    count=20,
+                    offset=transient_offset if preview_nonce else 0,
+                    aspect_ratio="vertical",
+                    use_page_cursor=not preview_nonce,
                 )
+            except Exception as e:
+                logger.warning(
+                    f"{LOG_PREFIX} 签到背景请求失败(tag={selected_tag!r}): {e}"
+                )
+                return None
+            if preview_nonce:
+                transient_offset += raw_count
+            if source_key != used_source_key:
+                used_ids = set(preview_excluded_ids or ())
+                used_ids.update(
+                    await self._checkin_background_used_ids(event, source_key)
+                )
+                used_source_key = source_key
             if not illusts:
                 return None
 
-            is_manga_ranking = not selected_tag and ranking_mode == "day_manga"
-            if self._cfg_bool("filter_manga", True) and not is_manga_ranking:
+            if self._cfg_bool("filter_manga", True):
                 illusts = self._filter_manga(illusts)
             illusts = await self._filter_blacklisted_illusts(illusts)
             illusts = filter_illusts_by_aspect_ratio(
@@ -393,7 +413,7 @@ class CheckinArtworkMixin:
                 continue
             if self.image_index is None:
                 logger.info(
-                    f"{LOG_PREFIX} 签到背景候选均已在当天去重索引中，跳过 Pixiv 背景"
+                    f"{LOG_PREFIX} 签到背景候选均已在当天去重索引中，跳过图片源背景"
                 )
                 return None
 

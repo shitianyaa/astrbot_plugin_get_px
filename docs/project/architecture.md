@@ -2,7 +2,7 @@
 
 ## 入口层
 
-`main.py` 负责 AstrBot 生命周期、命令装饰器、公共配置读取和领域对象装配。签到与 Pixiv 的复杂流程由领域 Mixin 实现，入口类直接组合这些 Mixin，不使用动态属性代理。
+`main.py` 负责 AstrBot 生命周期、命令装饰器、公共配置读取和领域对象装配。签到与图片来源的复杂流程由领域 Mixin 实现，入口类直接组合这些 Mixin，不使用动态属性代理。
 
 ## 领域模块
 
@@ -19,14 +19,16 @@ checkin/
 │  ├─ store.py           CheckinStore 组合入口
 │  ├─ application.py     每日签到流程与问候内容
 │  ├─ commands.py        签到功能命令业务
+│  ├─ shop.py            商店商品目录、购买处理与付费背景刷新
 │  ├─ artwork.py         卡片渲染与背景作品选择
 │  └─ holiday.py         联网节假日数据更新与查询
 pixiv/
-│  ├─ search.py          搜索、排行和作品列表流程
-│  ├─ delivery.py        详情、下载与消息发送
+│  ├─ search.py          Lolicon 主源与 Pixiv 搜索/推荐回退流程
+│  ├─ delivery.py        消息发送错误处理
 │  ├─ filters.py         普通分级、漫画和安全策略过滤
 │  ├─ safety.py          内置安全词与文本规范化
 │  ├─ client.py          Pixiv API 客户端
+│  ├─ lolicon.py         Lolicon API 客户端与数据规范化
 │  ├─ downloader.py      图片下载与质量降级
 │  ├─ index.py           去重索引、安全词与作品黑名单
 plugin_api/
@@ -36,6 +38,14 @@ plugin_api/
 根目录不再保留单文件业务实现或兼容 wrapper。`__init__.py` 集中注册旧包路径别名，已有预览脚本可以继续使用，但新代码和测试必须直接导入领域包。
 
 模块按职责划分，不按行数强制拆分。`__init__.py` 和组合入口可以很小；普通业务模块只有在具备独立职责和测试边界时才单独存在。
+
+## 签到指令入口
+
+签到业务使用 `/签到`、`/签到中心` 和 `/签到帮助` 三个顶层入口；纯文本“签到”继续由正则触发。`/签到中心` 是唯一的 AstrBot 嵌套指令组，按“我的、排行、商店、管理”组织功能，根路径由 AstrBot 显示指令树；`/签到帮助` 是独立普通指令，仅发送完整帮助图，避免与指令组同名而被指令管理判定冲突。旧平铺业务指令不再保留。指令装饰器集中在 `main.py`，处理函数继续委托给 `CheckinCommandMixin` 与 `CheckinShopMixin`，避免命令结构与业务实现相互耦合。
+
+## 签到商店扩展
+
+`checkin/shop.py` 中的 `build_checkin_shop_items()` 是商品展示目录的统一注册点，每个商品拥有稳定 `item_id`、分类、指令、名称和价格。新增商品时先在目录中注册展示项，再在 `CheckinShopMixin` 增加购买处理，并将需要原子扣款的数据操作放入 `CheckinStore` 对应 store 模块；入口层只保留 AstrBot 指令装饰器。商品目录和购买行为应分别补充测试。
 
 ## 前端页面
 
@@ -47,7 +57,7 @@ plugin_api/
 main.py
   → checkin / pixiv / plugin_api
     → rules / stores / renderers / clients
-      → SQLite、文件系统、Pixiv、AstrBot、Hitokoto
+      → SQLite、文件系统、Lolicon、Pixiv、AstrBot、Hitokoto
 ```
 
 数据模型和规则不依赖 AstrBot 事件对象。AstrBot 事件、消息链和 Plugin Pages bridge 只出现在入口、服务与 Web API 层。

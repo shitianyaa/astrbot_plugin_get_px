@@ -99,7 +99,7 @@ jobs:
             echo "Unable to read version from metadata.yaml" >&2
             exit 1
           }
-          [[ "${RELEASE_TAG#v}" == "$metadata_version" ]] || {
+          [[ "$RELEASE_TAG" == "$metadata_version" ]] || {
             echo "Tag $RELEASE_TAG does not match metadata version $metadata_version" >&2
             exit 1
           }

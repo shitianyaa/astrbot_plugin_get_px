@@ -9,7 +9,8 @@ import unittest
 from contextlib import closing
 from dataclasses import replace
 from pathlib import Path
-from unittest.mock import AsyncMock, patch
+from types import SimpleNamespace
+from unittest.mock import AsyncMock, Mock, patch
 
 from quart import Quart
 from PIL import Image as PILImage
@@ -66,11 +67,6 @@ class _FakeEvent:
         self.stopped = True
 
 
-class _FailingClient:
-    async def illust_detail(self, _illust_id):
-        raise RuntimeError(r"token expired at C:\secret\pixiv.db")
-
-
 async def _collect(async_iterable):
     return [item async for item in async_iterable]
 
@@ -112,7 +108,7 @@ def _record(*, persisted=True, with_background=True) -> CheckinRecord:
         streak_days_after=3,
         note="今日小记",
         background_mode="pixiv_daily" if with_background else "",
-        background_source="rank:week" if with_background else "",
+        background_source="pixiv:recommended" if with_background else "",
         background_illust_id="445566" if with_background else "",
         background_title="Blue Sky" if with_background else "",
         background_author="Someone" if with_background else "",
@@ -278,6 +274,142 @@ class _ConcurrentCheckinStore(_FakeCheckinStore):
 
 
 class MainErrorHandlingTest(unittest.IsolatedAsyncioTestCase):
+    async def test_concurrent_terminate_calls_wait_for_same_cleanup(self):
+        plugin = object.__new__(GetPxPlugin)
+        plugin._termination_task = None
+        cleanup_started = asyncio.Event()
+        release_cleanup = asyncio.Event()
+        cleanup_calls = 0
+
+        async def cleanup():
+            nonlocal cleanup_calls
+            cleanup_calls += 1
+            cleanup_started.set()
+            await release_cleanup.wait()
+
+        plugin._terminate_resources = cleanup
+        first = asyncio.create_task(plugin.terminate())
+        await cleanup_started.wait()
+        second = asyncio.create_task(plugin.terminate())
+        await asyncio.sleep(0)
+
+        self.assertFalse(second.done())
+        release_cleanup.set()
+        await asyncio.gather(first, second)
+        self.assertEqual(cleanup_calls, 1)
+
+    async def test_cancelled_terminate_waiter_does_not_cancel_cleanup(self):
+        plugin = object.__new__(GetPxPlugin)
+        plugin._termination_task = None
+        cleanup_started = asyncio.Event()
+        release_cleanup = asyncio.Event()
+        cleanup_calls = 0
+
+        async def cleanup():
+            nonlocal cleanup_calls
+            cleanup_calls += 1
+            cleanup_started.set()
+            await release_cleanup.wait()
+
+        plugin._terminate_resources = cleanup
+        first = asyncio.create_task(plugin.terminate())
+        await cleanup_started.wait()
+        first.cancel()
+        with self.assertRaises(asyncio.CancelledError):
+            await first
+
+        second = asyncio.create_task(plugin.terminate())
+        await asyncio.sleep(0)
+        self.assertFalse(second.done())
+        release_cleanup.set()
+        await second
+        self.assertEqual(cleanup_calls, 1)
+
+    async def test_failed_terminate_cleanup_can_be_retried(self):
+        plugin = object.__new__(GetPxPlugin)
+        plugin._termination_task = None
+        cleanup_calls = 0
+
+        async def cleanup():
+            nonlocal cleanup_calls
+            cleanup_calls += 1
+            if cleanup_calls == 1:
+                raise RuntimeError("cleanup failed")
+
+        plugin._terminate_resources = cleanup
+        with self.assertRaisesRegex(RuntimeError, "cleanup failed"):
+            await plugin.terminate()
+
+        await plugin.terminate()
+        self.assertEqual(cleanup_calls, 2)
+
+    async def test_terminate_continues_after_individual_close_failures(self):
+        for failing_resource in (
+            "client",
+            "lolicon_client",
+            "downloader",
+            "checkin_greeting",
+            "image_index",
+        ):
+            with self.subTest(failing_resource=failing_resource):
+                plugin = object.__new__(GetPxPlugin)
+                plugin._holiday_refresh_task = None
+                closers = {
+                    "client": AsyncMock(),
+                    "lolicon_client": AsyncMock(),
+                    "downloader": AsyncMock(),
+                    "checkin_greeting": AsyncMock(),
+                    "image_index": Mock(),
+                }
+                closers[failing_resource].side_effect = RuntimeError(
+                    f"{failing_resource} close failed"
+                )
+                plugin.client = SimpleNamespace(close=closers["client"])
+                plugin.lolicon_client = SimpleNamespace(
+                    close=closers["lolicon_client"]
+                )
+                plugin.downloader = SimpleNamespace(close=closers["downloader"])
+                plugin.checkin_greeting = SimpleNamespace(
+                    close=closers["checkin_greeting"]
+                )
+                plugin._last_request = {"user": 1.0}
+                plugin._checkin_flow_locks = {"user": asyncio.Lock()}
+                plugin.image_index = SimpleNamespace(close=closers["image_index"])
+                plugin.checkin_store = object()
+
+                await plugin._terminate_resources()
+
+                for name in (
+                    "client",
+                    "lolicon_client",
+                    "downloader",
+                    "checkin_greeting",
+                ):
+                    closers[name].assert_awaited_once()
+                closers["image_index"].assert_called_once()
+                self.assertIsNone(plugin.client)
+                self.assertIsNone(plugin.lolicon_client)
+                self.assertIsNone(plugin.image_index)
+                self.assertIsNone(plugin.checkin_store)
+                self.assertEqual(plugin._last_request, {})
+                self.assertEqual(plugin._checkin_flow_locks, {})
+
+    async def test_search_command_accepts_empty_query(self):
+        plugin = object.__new__(GetPxPlugin)
+        plugin._ensure_client_or_error = lambda _event: True
+        received = []
+
+        async def handle_search(_event, *, tag, count_str):
+            received.append((tag, count_str))
+            yield "ok"
+
+        plugin._handle_search = handle_search
+        event = _FakeEvent()
+
+        self.assertEqual(await _collect(plugin.cmd_p(event)), ["ok"])
+        self.assertEqual(received, [("", "")])
+        self.assertTrue(event.stopped)
+
     async def test_initialize_logs_v3_migration_guidance_for_old_database(self):
         plugin = object.__new__(GetPxPlugin)
         plugin._init_client = lambda: None
@@ -374,23 +506,6 @@ class MainErrorHandlingTest(unittest.IsolatedAsyncioTestCase):
             "连续 {CHECKIN_BACKGROUND_PAGE_ATTEMPTS} 页候选均已使用", source
         )
 
-    async def test_handle_info_hides_pixiv_detail_exception(self):
-        plugin = object.__new__(GetPxPlugin)
-        plugin.client = _FailingClient()
-
-        results = await _collect(plugin._handle_info(_FakeEvent(), 123456))
-
-        self.assertEqual(results, ["❌ 获取作品详情失败，请稍后再试"])
-
-    async def test_handle_download_hides_pixiv_detail_exception(self):
-        plugin = object.__new__(GetPxPlugin)
-        plugin.client = _FailingClient()
-        plugin._check_rate_limit = lambda _sender_id: 0
-
-        results = await _collect(plugin._handle_download(_FakeEvent(), 123456))
-
-        self.assertEqual(results, ["❌ 获取作品详情失败，请稍后再试"])
-
     async def test_web_internal_error_response_is_sanitized(self):
         plugin = object.__new__(GetPxPlugin)
         app = Quart(__name__)
@@ -485,7 +600,7 @@ class MainErrorHandlingTest(unittest.IsolatedAsyncioTestCase):
             selected = CardBackground(
                 image_path=str(source),
                 mode="pixiv_daily",
-                source="rank:week",
+                source="pixiv:recommended",
                 illust_id="445566",
                 title="Blue Sky",
                 author="Someone",
@@ -572,7 +687,7 @@ class MainErrorHandlingTest(unittest.IsolatedAsyncioTestCase):
             background = CardBackground(
                 image_path=str(source),
                 mode="pixiv_daily",
-                source="rank:week",
+                source="pixiv:recommended",
                 illust_id="445566",
                 title="Blue Sky",
                 author="Someone",
@@ -604,7 +719,7 @@ class MainErrorHandlingTest(unittest.IsolatedAsyncioTestCase):
             plugin._prepare_checkin_background.return_value = CardBackground(
                 image_path=str(source),
                 mode="pixiv_daily",
-                source="rank:week",
+                source="pixiv:recommended",
                 illust_id="445566",
                 title="Blue Sky",
                 author="Someone",
@@ -638,7 +753,7 @@ class MainErrorHandlingTest(unittest.IsolatedAsyncioTestCase):
             plugin._prepare_checkin_background.return_value = CardBackground(
                 image_path=str(source),
                 mode="pixiv_daily",
-                source="rank:week",
+                source="pixiv:recommended",
                 illust_id="445566",
                 title="Blue Sky",
                 author="Someone",
@@ -676,7 +791,7 @@ class MainErrorHandlingTest(unittest.IsolatedAsyncioTestCase):
             plugin._prepare_checkin_background.return_value = CardBackground(
                 image_path=str(source),
                 mode="pixiv_daily",
-                source="rank:week",
+                source="pixiv:recommended",
                 illust_id="445566",
                 title="Blue Sky",
                 author="Someone",
@@ -713,7 +828,7 @@ class MainErrorHandlingTest(unittest.IsolatedAsyncioTestCase):
             plugin._prepare_checkin_background.return_value = CardBackground(
                 image_path=str(source),
                 mode="pixiv_daily",
-                source="rank:week",
+                source="pixiv:recommended",
                 illust_id="445566",
                 title="Blue Sky",
                 author="Someone",
@@ -734,7 +849,7 @@ class MainErrorHandlingTest(unittest.IsolatedAsyncioTestCase):
             plugin._record_sent_image.assert_not_awaited()
             plugin._record_image_usage.assert_awaited_once()
             usage_args = plugin._record_image_usage.await_args
-            self.assertEqual(usage_args.args[1], "rank:week")
+            self.assertEqual(usage_args.args[1], "pixiv:recommended")
             self.assertEqual(str(usage_args.args[2]["id"]), "445566")
             self.assertEqual(usage_args.kwargs["feature"], "checkin")
             self.assertEqual(usage_args.kwargs["user_id"], "10001")
@@ -761,7 +876,7 @@ class MainErrorHandlingTest(unittest.IsolatedAsyncioTestCase):
                 return CardBackground(
                     image_path=str(source),
                     mode="pixiv_daily",
-                    source="rank:week",
+                    source="pixiv:recommended",
                     illust_id="445566",
                     title="Blue Sky",
                     author="Someone",

@@ -33,7 +33,7 @@ class ImageIndexStoreTest(unittest.IsolatedAsyncioTestCase):
                     *[
                         store.claim_usage(
                             scope="group:1",
-                            source_key="rank:week",
+                            source_key="pixiv:recommended",
                             illust_id="100",
                             feature="normal_pending",
                             user_id=f"user:{idx}",
@@ -45,23 +45,23 @@ class ImageIndexStoreTest(unittest.IsolatedAsyncioTestCase):
                 self.assertEqual(results.count(True), 1)
                 self.assertEqual(results.count(False), 19)
                 self.assertEqual(
-                    await store.get_used_illust_ids("group:1", "rank:week"), {"100"}
+                    await store.get_used_illust_ids("group:1", "pixiv:recommended"), {"100"}
                 )
 
                 await store.release_usage(
                     scope="group:1",
-                    source_key="rank:week",
+                    source_key="pixiv:recommended",
                     illust_id="100",
                     feature="normal_pending",
                 )
 
                 self.assertEqual(
-                    await store.get_used_illust_ids("group:1", "rank:week"), set()
+                    await store.get_used_illust_ids("group:1", "pixiv:recommended"), set()
                 )
                 self.assertTrue(
                     await store.claim_usage(
                         scope="group:1",
-                        source_key="rank:week",
+                        source_key="pixiv:recommended",
                         illust_id="100",
                         feature="normal_pending",
                         user_id="user:next",
@@ -76,20 +76,20 @@ class ImageIndexStoreTest(unittest.IsolatedAsyncioTestCase):
             try:
                 await store.record_usage(
                     scope="group:1",
-                    source_key="rank:week",
+                        source_key="pixiv:recommended",
                     illust_id="101",
                     feature="normal",
                     user_id="user:1",
                 )
                 await store.release_usage(
                     scope="group:1",
-                    source_key="rank:week",
+                        source_key="pixiv:recommended",
                     illust_id="101",
                     feature="normal_pending",
                 )
 
                 self.assertEqual(
-                    await store.get_used_illust_ids("group:1", "rank:week"), {"101"}
+                    await store.get_used_illust_ids("group:1", "pixiv:recommended"), {"101"}
                 )
             finally:
                 store.close()
@@ -100,7 +100,7 @@ class ImageIndexStoreTest(unittest.IsolatedAsyncioTestCase):
             try:
                 await store.record_usage(
                     scope="group:1",
-                    source_key="rank:week",
+                        source_key="pixiv:recommended",
                     illust_id="200",
                     feature="normal",
                     user_id="user:1",
@@ -109,7 +109,7 @@ class ImageIndexStoreTest(unittest.IsolatedAsyncioTestCase):
                 await store.cleanup_old_days()
 
                 self.assertEqual(
-                    await store.get_used_illust_ids("group:1", "rank:week"), set()
+                    await store.get_used_illust_ids("group:1", "pixiv:recommended"), set()
                 )
             finally:
                 store.close()
@@ -122,7 +122,7 @@ class ImageIndexStoreTest(unittest.IsolatedAsyncioTestCase):
                     illust_id="300",
                     title="blocked",
                     author="artist",
-                    source="rank:week",
+                    source="pixiv:recommended",
                     record_id="record-1",
                 )
                 store.date_key = "2026-05-27"
@@ -142,7 +142,7 @@ class ImageIndexStoreTest(unittest.IsolatedAsyncioTestCase):
                     illust_id="301",
                     title="older",
                     author="artist-a",
-                    source="rank:week",
+                    source="pixiv:recommended",
                     record_id="record-301",
                 )
                 store.date_key = "2026-05-27"

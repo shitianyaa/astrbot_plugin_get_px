@@ -175,7 +175,9 @@ class CheckinApplicationMixin:
                     and background.illust_id
                 )
 
-            cache_key = self._checkin_card_cache_key(
+            # 构建视图模型会把背景图整体编码为 Data URL，放入线程池执行
+            cache_key = await asyncio.to_thread(
+                self._checkin_card_cache_key,
                 event,
                 profile=profile_snapshot,
                 record=record,
@@ -183,7 +185,7 @@ class CheckinApplicationMixin:
                 bot_name=bot_name,
                 user_title=user_title,
             )
-            cached_path = cache.get(record.date_key, cache_key)
+            cached_path = await asyncio.to_thread(cache.get, record.date_key, cache_key)
             if cached_path is None and result.duplicate:
                 background = await self._restore_checkin_background(event, record)
 

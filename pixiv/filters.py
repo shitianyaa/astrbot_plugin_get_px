@@ -60,9 +60,22 @@ class FiltersMixin:
         matched_tag = self._matched_safety_term(illust, await self._safety_terms())
         if matched_tag:
             return f"作品 {illust_id or '-'} 命中内容安全词 {matched_tag}"
-        if await self._is_blacklisted_illust(illust_id):
-            return f"作品 {illust_id} 已在黑名单中"
+        for candidate_id in self._illust_blacklist_ids(illust, illust_id):
+            if await self._is_blacklisted_illust(candidate_id):
+                return f"作品 {illust_id} 已在黑名单中"
         return ""
+
+    @staticmethod
+    def _illust_blacklist_ids(illust: dict, illust_id: str = "") -> set[str]:
+        return {
+            value
+            for value in (
+                str(illust_id or ""),
+                str(illust.get("id") or ""),
+                str(illust.get("pid") or ""),
+            )
+            if value
+        }
 
     @staticmethod
     def _filter_safe_rating(illusts: list[dict]) -> list[dict]:
@@ -88,7 +101,7 @@ class FiltersMixin:
         return [
             illust
             for illust in illusts
-            if str(illust.get("id") or "") not in blacklisted
+            if not self._illust_blacklist_ids(illust).intersection(blacklisted)
             and int(illust.get("x_restrict", 0) or 0) == 0
             and not self._matched_safety_term(illust, safety_terms)
         ]
@@ -108,15 +121,13 @@ class FiltersMixin:
         illusts: list[dict],
         pick_count: int,
         *,
-        tag: str,
-        ranking_mode: str,
+        source_key: str,
         dedupe_enabled: bool = True,
         raw_count: int = 0,
     ) -> list[dict]:
         if not dedupe_enabled or self.image_index is None:
             return random.sample(illusts, pick_count)
 
-        source_key = self._source_key(tag, ranking_mode)
         scope = self._event_scope(event)
         try:
             used_ids = await self.image_index.get_used_illust_ids(scope, source_key)
