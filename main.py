@@ -12,6 +12,7 @@
 签到指令：
     /签到                      每日签到
     /签到中心                  查看签到功能分组
+    /签到帮助                  发送签到中心帮助图
 """
 
 # 注意：不要在本模块使用 `from __future__ import annotations`。
@@ -58,24 +59,6 @@ CHECKIN_REGEX_PATTERN = r"^(?!/)签到$"
 CHECKIN_CENTER_HELP_IMAGE = (
     Path(__file__).resolve().parent / "assets" / "checkin_center_help_v3.png"
 )
-
-
-def _normalized_command_text(event: AstrMessageEvent) -> str:
-    return re.sub(r"\s+", " ", event.get_message_str().strip())
-
-
-class _ExactCheckinCenterFilter(filter.CustomFilter):
-    """Only match the root check-in center command."""
-
-    def filter(self, event: AstrMessageEvent, _cfg) -> bool:
-        return _normalized_command_text(event) == "签到中心"
-
-
-class _CheckinCenterSubcommandFilter(filter.CustomFilter):
-    """Keep AstrBot's command group active only for actual subcommands."""
-
-    def filter(self, event: AstrMessageEvent, _cfg) -> bool:
-        return _normalized_command_text(event).startswith("签到中心 ")
 
 
 CHINESE_NUMBER_MAP = {
@@ -328,9 +311,8 @@ class GetPxPlugin(
         async for result in self._handle_checkin(event):
             yield result
 
-    @filter.custom_filter(_ExactCheckinCenterFilter)
-    @filter.command("签到中心")
-    async def cmd_checkin_center(self, event: AstrMessageEvent):
+    @filter.command("签到帮助")
+    async def cmd_checkin_help(self, event: AstrMessageEvent):
         """发送签到中心功能帮助图。"""
         event.stop_event()
         if not CHECKIN_CENTER_HELP_IMAGE.is_file():
@@ -343,7 +325,6 @@ class GetPxPlugin(
             [Image.fromFileSystem(str(CHECKIN_CENTER_HELP_IMAGE))]
         )
 
-    @filter.custom_filter(_CheckinCenterSubcommandFilter)
     @filter.command_group("签到中心")
     def checkin_center(self):
         """签到功能中心。"""

@@ -6,7 +6,6 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 
 from astrbot.core.star.filter.command import CommandFilter
 from astrbot.core.star.filter.command_group import CommandGroupFilter
-from astrbot.core.star.filter.custom_filter import CustomFilter
 from astrbot.core.star.filter.permission import PermissionType, PermissionTypeFilter
 from astrbot.core.star.filter.regex import RegexFilter
 from astrbot.core.star.star_handler import EventType, star_handlers_registry
@@ -14,13 +13,9 @@ from astrbot.core.star.star_handler import EventType, star_handlers_registry
 from astrbot_plugin_get_px import main
 
 
-class _CheckinCenterEvent:
-    def __init__(self, message: str = "签到中心") -> None:
-        self.message = message
+class _CheckinHelpEvent:
+    def __init__(self) -> None:
         self.stopped = False
-
-    def get_message_str(self) -> str:
-        return self.message
 
     def stop_event(self) -> None:
         self.stopped = True
@@ -59,7 +54,7 @@ def test_checkin_commands_are_grouped_under_command_center() -> None:
     paths = _registered_command_paths()
 
     assert all(not path.startswith("/") for path in paths)
-    assert {"p", "签到", "签到中心"} <= paths
+    assert {"p", "签到", "签到中心", "签到帮助"} <= paths
     assert {
         "签到中心 我的 状态",
         "签到中心 我的 生日",
@@ -80,7 +75,6 @@ def test_checkin_commands_are_grouped_under_command_center() -> None:
     } <= paths
 
     assert not {
-        "签到帮助",
         "签到状态",
         "签到排行",
         "签到商店",
@@ -116,34 +110,24 @@ def test_checkin_command_center_exposes_four_sections() -> None:
     assert "├── 管理" in tree
 
 
-def test_checkin_center_root_and_subcommands_are_routed_separately() -> None:
-    handlers = {
-        handler.handler_name: handler for handler in _plugin_command_handlers()
-    }
-    root_command_filters = [
+def test_checkin_center_has_only_one_visible_root_registration() -> None:
+    root_filters = [
         event_filter
-        for event_filter in handlers["cmd_checkin_center"].event_filters
-        if isinstance(event_filter, CustomFilter)
+        for handler in _plugin_command_handlers()
+        for event_filter in handler.event_filters
+        if isinstance(event_filter, (CommandFilter, CommandGroupFilter))
+        and "签到中心" in event_filter.get_complete_command_names()
     ]
-    group_filter = next(
-        event_filter
-        for event_filter in handlers["checkin_center"].event_filters
-        if isinstance(event_filter, CommandGroupFilter)
-    )
 
-    root_event = _CheckinCenterEvent("签到中心")
-    child_event = _CheckinCenterEvent("签到中心 我的 状态")
-    assert any(item.filter(root_event, {}) for item in root_command_filters)
-    assert not any(item.filter(child_event, {}) for item in root_command_filters)
-    assert not group_filter.custom_filter_ok(root_event, {})
-    assert group_filter.custom_filter_ok(child_event, {})
+    assert len(root_filters) == 1
+    assert isinstance(root_filters[0], CommandGroupFilter)
 
 
-def test_checkin_center_root_sends_the_help_image() -> None:
-    event = _CheckinCenterEvent()
+def test_checkin_help_sends_the_help_image() -> None:
+    event = _CheckinHelpEvent()
     plugin = object.__new__(main.GetPxPlugin)
 
-    output = asyncio.run(_collect(plugin.cmd_checkin_center(event)))
+    output = asyncio.run(_collect(plugin.cmd_checkin_help(event)))
 
     assert event.stopped
     assert len(output) == 1
@@ -181,12 +165,13 @@ def test_plain_checkin_trigger_is_preserved() -> None:
 
     assert regex_filter.regex.fullmatch("签到")
     assert not regex_filter.regex.fullmatch("签到中心")
+    assert not regex_filter.regex.fullmatch("签到帮助")
 
 
-def test_legacy_help_is_removed_and_checkin_center_help_is_installed() -> None:
+def test_checkin_help_image_is_installed_without_legacy_assets() -> None:
     root = Path(__file__).resolve().parents[1]
     assert not hasattr(main, "CHECKIN_HELP_IMAGE")
-    assert not hasattr(main.GetPxPlugin, "cmd_checkin_help")
+    assert hasattr(main.GetPxPlugin, "cmd_checkin_help")
     assert not (root / "assets/checkin_help.png").exists()
     assert not (root / "assets/checkin_help.html").exists()
     assert main.CHECKIN_CENTER_HELP_IMAGE.is_file()
