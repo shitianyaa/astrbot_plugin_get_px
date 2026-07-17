@@ -24,7 +24,7 @@ import re
 import time
 import weakref
 
-from astrbot.api.all import AstrBotConfig, logger
+from astrbot.api.all import AstrBotConfig, Image, logger
 from astrbot.api.event import AstrMessageEvent, filter
 from astrbot.api.star import Context, Star
 from astrbot.core.star.filter.command import GreedyStr
@@ -55,6 +55,28 @@ WEB_INTERNAL_ERROR_MESSAGE = "服务内部错误，请稍后重试"
 
 AUTO_TRIGGER_PATTERN = r"^/?(来\s*(.*?)(份|个|张|点))(.*?)(福利|色|瑟|涩|塞)?图$"
 CHECKIN_REGEX_PATTERN = r"^(?!/)签到$"
+CHECKIN_CENTER_HELP_IMAGE = (
+    Path(__file__).resolve().parent / "assets" / "checkin_center_help_v3.png"
+)
+
+
+def _normalized_command_text(event: AstrMessageEvent) -> str:
+    return re.sub(r"\s+", " ", event.get_message_str().strip())
+
+
+class _ExactCheckinCenterFilter(filter.CustomFilter):
+    """Only match the root check-in center command."""
+
+    def filter(self, event: AstrMessageEvent, _cfg) -> bool:
+        return _normalized_command_text(event) == "签到中心"
+
+
+class _CheckinCenterSubcommandFilter(filter.CustomFilter):
+    """Keep AstrBot's command group active only for actual subcommands."""
+
+    def filter(self, event: AstrMessageEvent, _cfg) -> bool:
+        return _normalized_command_text(event).startswith("签到中心 ")
+
 
 CHINESE_NUMBER_MAP = {
     "一": "1",
@@ -306,6 +328,22 @@ class GetPxPlugin(
         async for result in self._handle_checkin(event):
             yield result
 
+    @filter.custom_filter(_ExactCheckinCenterFilter)
+    @filter.command("签到中心")
+    async def cmd_checkin_center(self, event: AstrMessageEvent):
+        """发送签到中心功能帮助图。"""
+        event.stop_event()
+        if not CHECKIN_CENTER_HELP_IMAGE.is_file():
+            logger.error(
+                f"{LOG_PREFIX} 签到中心帮助图片不存在: {CHECKIN_CENTER_HELP_IMAGE}"
+            )
+            yield event.plain_result("签到中心帮助图片缺失，请联系管理员重新安装插件")
+            return
+        yield event.chain_result(
+            [Image.fromFileSystem(str(CHECKIN_CENTER_HELP_IMAGE))]
+        )
+
+    @filter.custom_filter(_CheckinCenterSubcommandFilter)
     @filter.command_group("签到中心")
     def checkin_center(self):
         """签到功能中心。"""

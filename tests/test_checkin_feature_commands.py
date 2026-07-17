@@ -71,6 +71,7 @@ async def test_birthday_command_manual_clear_and_direct_fetch() -> None:
         )
         assert "07-11" in await plugin._handle_checkin_birthday(event, "设置", "07-11")
         assert "手动" in await plugin._handle_checkin_birthday(event, "", "")
+        assert "07-11" in await plugin._handle_checkin_birthday(event, "查看", "")
         assert "已清除" in await plugin._handle_checkin_birthday(event, "清除", "")
         assert "07-11" in await plugin._handle_checkin_birthday(event, "", "")
 
@@ -138,6 +139,9 @@ async def test_event_admin_and_title_commands() -> None:
         assert "已添加事件" in added
         assert "相遇纪念日" in await plugin._handle_checkin_event_admin(
             event, "列表", "", "", ""
+        )
+        assert "相遇纪念日" in await plugin._handle_checkin_event_admin(
+            event, "查看", "", "", ""
         )
         profile = await plugin.checkin_store.get_profile("10001")
         await plugin.checkin_store.unlock_achievements(

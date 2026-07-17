@@ -446,9 +446,9 @@ class CheckinCommandMixin:
             if action == "清除":
                 await self.checkin_store.clear_birthday(user_id)
                 return "生日已清除，再次使用“签到中心 我的 生日”会重新读取 QQ 资料"
-            if action:
+            if action not in {"", "查看"}:
                 return (
-                    "用法: 签到中心 我的 生日\n"
+                    "用法: 签到中心 我的 生日 [查看]\n"
                     "或: 签到中心 我的 生日 设置 MM-DD\n"
                     "或: 签到中心 我的 生日 清除"
                 )
@@ -543,7 +543,7 @@ class CheckinCommandMixin:
     ) -> str:
         if self.checkin_store is None:
             return "签到数据尚未初始化，请稍后再试"
-        if action == "列表" or not action:
+        if action in {"", "查看", "列表"}:
             events = await self.checkin_store.list_global_events()
             if not events:
                 return "当前没有全局签到事件"
