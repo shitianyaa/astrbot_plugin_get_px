@@ -95,12 +95,18 @@ class FeatureStoreMixin:
         *,
         user_id: str,
         theme_id: str,
+        cost: int | None = None,
     ) -> ThemePurchaseResult:
+        if cost is not None and (
+            isinstance(cost, bool) or not isinstance(cost, int) or not 0 <= cost <= 5000
+        ):
+            raise ValueError("theme cost must be an integer between 0 and 5000")
         async with self._lock:
             return await asyncio.to_thread(
                 self._purchase_theme_sync,
                 str(user_id or ""),
                 str(theme_id or ""),
+                cost,
             )
 
     async def select_theme(self, *, user_id: str, theme_id: str) -> str:
@@ -343,7 +349,12 @@ class FeatureStoreMixin:
             ).fetchall()
         return tuple(str(row["theme_id"]) for row in rows)
 
-    def _purchase_theme_sync(self, user_id: str, theme_id: str) -> ThemePurchaseResult:
+    def _purchase_theme_sync(
+        self,
+        user_id: str,
+        theme_id: str,
+        configured_cost: int | None = None,
+    ) -> ThemePurchaseResult:
         if not user_id:
             raise ValueError("user_id is required")
         if not theme_id or theme_id == "default":
@@ -382,7 +393,11 @@ class FeatureStoreMixin:
                 ).fetchone()
                 if theme_row is None:
                     raise ValueError("未知或已停用的主题")
-                cost = int(theme_row["price"] or 0)
+                cost = (
+                    int(theme_row["price"] or 0)
+                    if configured_cost is None
+                    else configured_cost
+                )
                 template_version = f"{theme_id}:{int(theme_row['version'] or 1)}"
                 profile_row = conn.execute(
                     "SELECT * FROM checkin_users WHERE user_id = ?",

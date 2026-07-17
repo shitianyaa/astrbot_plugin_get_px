@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 from contextlib import closing
+import json
 import sqlite3
 import sys
 import tempfile
@@ -46,6 +47,31 @@ def make_plugin(data_dir: str) -> GetPxPlugin:
     return plugin
 
 
+def set_user_coins(plugin: GetPxPlugin, coins: int) -> None:
+    with closing(sqlite3.connect(plugin.checkin_store._db_path)) as conn:
+        conn.execute(
+            "UPDATE checkin_users SET coins = ? WHERE user_id = ?",
+            (coins, "10001"),
+        )
+        conn.commit()
+
+
+def test_theme_cost_schema_follows_background_refresh_cost() -> None:
+    schema_path = Path(__file__).resolve().parents[1] / "_conf_schema.json"
+    schema = json.loads(schema_path.read_text(encoding="utf-8"))
+    keys = list(schema)
+
+    background_index = keys.index("checkin_background_refresh_cost")
+    assert keys[background_index + 1] == "checkin_theme_cost"
+    assert schema["checkin_theme_cost"] == {
+        "description": "签到主题价格",
+        "type": "int",
+        "default": 1500,
+        "slider": {"min": 0, "max": 5000, "step": 100},
+        "hint": "用户购买任意非默认签到主题所需金币。设为 0 表示免费；默认“米白”主题始终免费。",
+    }
+
+
 def test_shop_catalog_has_stable_ids_and_categories() -> None:
     items = build_checkin_shop_items(refresh_cost=5)
     by_id = {item.item_id: item for item in items}
@@ -60,6 +86,11 @@ def test_shop_catalog_has_stable_ids_and_categories() -> None:
         == "签到中心 商店 主题 购买 01 - 浅蓝，1500 金币"
     )
     assert by_id["theme:default"].price_label == "免费"
+
+    custom_items = build_checkin_shop_items(refresh_cost=5, theme_cost=900)
+    custom_by_id = {item.item_id: item for item in custom_items}
+    assert custom_by_id["theme:blue"].price == 900
+    assert custom_by_id["theme:default"].price_label == "免费"
 
 
 @pytest.mark.asyncio
@@ -158,25 +189,30 @@ async def test_theme_shop_purchase_and_switch_commands() -> None:
         plugin.config = {
             "checkin_enabled": True,
             "checkin_background_refresh_cost": 5,
+            "checkin_theme_cost": 900,
         }
         event = FakeEvent()
         await plugin.checkin_store.checkin(
             user_id="10001", username="测试用户", bot_name="neko"
         )
-        with closing(sqlite3.connect(plugin.checkin_store._db_path)) as conn:
-            conn.execute(
-                "UPDATE checkin_users SET coins = 2000 WHERE user_id = ?",
-                ("10001",),
-            )
-            conn.commit()
+        set_user_coins(plugin, 2000)
 
         shop = plugin._build_checkin_shop()
         assert "签到中心 商店 刷新背景 - 5 金币" in shop
-        assert "签到中心 商店 主题 购买 01 - 浅蓝，1500 金币" in shop
+        assert "签到中心 商店 主题 购买 01 - 浅蓝，900 金币" in shop
 
         purchased = await plugin._handle_buy_checkin_theme(event, "01")
         assert "购买成功" in purchased
         assert "浅蓝" in purchased
+        profile = await plugin.checkin_store.get_profile("10001")
+        assert profile.coins == 1100
+        with closing(sqlite3.connect(plugin.checkin_store._db_path)) as conn:
+            price_paid = conn.execute(
+                "SELECT price_paid FROM checkin_user_themes "
+                "WHERE user_id = ? AND theme_id = ?",
+                ("10001", "blue"),
+            ).fetchone()[0]
+        assert price_paid == 900
         themes = await plugin._handle_checkin_themes(event)
         assert "[当前] 01 · 浅蓝" in themes
 
@@ -184,6 +220,61 @@ async def test_theme_shop_purchase_and_switch_commands() -> None:
         assert "米白" in switched
         preference = await plugin.checkin_store.get_user_preference("10001")
         assert preference.current_theme_id == "default"
+
+
+@pytest.mark.asyncio
+async def test_free_configured_theme_is_unlocked_without_deducting_coins() -> None:
+    with tempfile.TemporaryDirectory() as tmp:
+        plugin = make_plugin(tmp)
+        plugin.config = {"checkin_theme_cost": 0}
+        event = FakeEvent()
+
+        purchased = await plugin._handle_buy_checkin_theme(event, "01")
+
+        assert "购买成功，消耗 0 金币" in purchased
+        profile = await plugin.checkin_store.get_profile("10001")
+        assert profile.coins == 0
+        assert await plugin.checkin_store.list_owned_theme_ids("10001") == (
+            "default",
+            "blue",
+        )
+        with closing(sqlite3.connect(plugin.checkin_store._db_path)) as conn:
+            price_paid = conn.execute(
+                "SELECT price_paid FROM checkin_user_themes "
+                "WHERE user_id = ? AND theme_id = ?",
+                ("10001", "blue"),
+            ).fetchone()[0]
+        assert price_paid == 0
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "config",
+    [
+        {},
+        {"checkin_theme_cost": -1},
+        {"checkin_theme_cost": 5001},
+        {"checkin_theme_cost": "invalid"},
+        {"checkin_theme_cost": True},
+        {"checkin_theme_cost": False},
+        {"checkin_theme_cost": 1.5},
+        {"checkin_theme_cost": 900.0},
+    ],
+)
+async def test_invalid_theme_cost_config_falls_back_to_default(config: dict) -> None:
+    with tempfile.TemporaryDirectory() as tmp:
+        plugin = make_plugin(tmp)
+        plugin.config = config
+        event = FakeEvent()
+        await plugin.checkin_store.get_profile("10001")
+        set_user_coins(plugin, 2000)
+
+        assert "浅蓝，1500 金币" in plugin._build_checkin_shop()
+        purchased = await plugin._handle_buy_checkin_theme(event, "01")
+
+        assert "购买成功，消耗 1500 金币" in purchased
+        profile = await plugin.checkin_store.get_profile("10001")
+        assert profile.coins == 500
 
 
 @pytest.mark.asyncio

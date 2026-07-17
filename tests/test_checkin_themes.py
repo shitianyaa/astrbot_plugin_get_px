@@ -131,6 +131,16 @@ async def test_theme_purchase_deducts_coins_and_updates_today_record() -> None:
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("cost", [-1, 5001, True, 1.5])
+async def test_theme_purchase_rejects_invalid_explicit_cost(cost: object) -> None:
+    with tempfile.TemporaryDirectory() as tmp:
+        store = FrozenCheckinStore(tmp, date_key="2026-07-13")
+
+        with pytest.raises(ValueError, match="theme cost"):
+            await store.purchase_theme(user_id="10001", theme_id="blue", cost=cost)
+
+
+@pytest.mark.asyncio
 async def test_theme_selection_requires_ownership() -> None:
     with tempfile.TemporaryDirectory() as tmp:
         store = FrozenCheckinStore(tmp, date_key="2026-07-13")

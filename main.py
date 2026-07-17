@@ -51,7 +51,7 @@ from .plugin_api import PluginWebApi
 
 LOG_PREFIX = "[GetPx]"
 PLUGIN_NAME = "astrbot_plugin_get_px"
-PLUGIN_VERSION = "v3.2.0"
+PLUGIN_VERSION = "v3.3.0"
 WEB_INTERNAL_ERROR_MESSAGE = "服务内部错误，请稍后重试"
 
 AUTO_TRIGGER_PATTERN = r"^/?(来\s*(.*?)(份|个|张|点))(.*?)(福利|色|瑟|涩|塞)?图$"
@@ -568,8 +568,11 @@ class GetPxPlugin(
         return str(val).strip() if val is not None else default
 
     def _cfg_int(self, key: str, default: int, lo: int, hi: int) -> int:
+        raw = self.config.get(key, default)
+        if isinstance(raw, (bool, float)):
+            return default
         try:
-            val = int(self.config.get(key, default))
+            val = int(raw)
         except (TypeError, ValueError):
             return default
         return val if lo <= val <= hi else default

@@ -11,7 +11,12 @@ from .card import CardBackground
 from .models import BOOST_PRODUCTS
 from .rules import boost_status_text
 from .store import CheckinStore
-from .themes import CHECKIN_THEMES, get_checkin_theme, resolve_checkin_theme
+from .themes import (
+    CHECKIN_THEMES,
+    DEFAULT_CHECKIN_THEME_ID,
+    get_checkin_theme,
+    resolve_checkin_theme,
+)
 
 try:
     from ..pixiv.downloader import cleanup
@@ -42,7 +47,10 @@ class CheckinShopItem:
         return f"{self.command} - {detail}{self.price_label}"
 
 
-def build_checkin_shop_items(refresh_cost: int) -> tuple[CheckinShopItem, ...]:
+def build_checkin_shop_items(
+    refresh_cost: int,
+    theme_cost: int = 1500,
+) -> tuple[CheckinShopItem, ...]:
     """Build the current catalog; add future products in this one registry."""
     items = [
         CheckinShopItem(
@@ -69,7 +77,11 @@ def build_checkin_shop_items(refresh_cost: int) -> tuple[CheckinShopItem, ...]:
             category="theme",
             command=f"签到中心 商店 主题 购买 {theme.code}",
             name=theme.name,
-            price=theme.price,
+            price=(
+                0
+                if theme.theme_id == DEFAULT_CHECKIN_THEME_ID
+                else max(0, int(theme_cost))
+            ),
         )
         for theme in CHECKIN_THEMES.values()
         if theme.enabled
@@ -115,12 +127,14 @@ class CheckinShopMixin:
 
     def _build_checkin_shop(self) -> str:
         refresh_cost = self._cfg_int("checkin_background_refresh_cost", 100, 0, 500)
+        theme_cost = self._cfg_int("checkin_theme_cost", 1500, 0, 5000)
         lines = [
             "签到商店",
             "金币可购买好感度加持、更新当天背景和解锁签到主题。",
         ]
         lines.extend(
-            item.render_line() for item in build_checkin_shop_items(refresh_cost)
+            item.render_line()
+            for item in build_checkin_shop_items(refresh_cost, theme_cost)
         )
         lines.append(
             "使用“签到中心 商店 主题 查看 <编号>”预览，"
@@ -183,13 +197,15 @@ class CheckinShopMixin:
         theme = resolve_checkin_theme(value)
         if theme is None:
             return "未知主题。使用“签到中心 商店 主题 列表”查看主题编号。"
-        if theme.free:
+        if theme.theme_id == DEFAULT_CHECKIN_THEME_ID:
             return await self._handle_select_checkin_theme(event, theme.theme_id)
         user_id = str(event.get_sender_id() or "")
+        theme_cost = self._cfg_int("checkin_theme_cost", 1500, 0, 5000)
         try:
             purchase = await self.checkin_store.purchase_theme(
                 user_id=user_id,
                 theme_id=theme.theme_id,
+                cost=theme_cost,
             )
         except Exception as exc:
             logger.warning(f"{LOG_PREFIX} 购买签到主题失败: {exc}")
