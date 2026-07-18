@@ -16,7 +16,10 @@
 """
 
 # 注意：不要在本模块使用 `from __future__ import annotations`。
-# AstrBot 的指令解析器按运行时注解识别 GreedyStr（`annotation is GreedyStr`），
+# AstrBot 识别 GreedyStr 的规则：
+# - 无默认值时：`annotation is GreedyStr`
+# - 有默认值时：`default is GreedyStr`（不是看注解）
+# 因此这里使用 GreedyStr 类作为默认哨兵，既保留贪婪参数，又支持直接无参调用。
 # 字符串化注解会让贪婪参数失效。
 
 import asyncio
@@ -276,7 +279,7 @@ class GetPxPlugin(
     # ──────────────────────────────────────────────────────────────
 
     @filter.command("p")
-    async def cmd_p(self, event: AstrMessageEvent, query: GreedyStr = ""):
+    async def cmd_p(self, event: AstrMessageEvent, query: GreedyStr = GreedyStr):
         """搜索并发送图片。参数: [标签] [数量]"""
         if not self._ensure_client_or_error(event):
             yield event.plain_result(
@@ -284,7 +287,9 @@ class GetPxPlugin(
             )
             return
         event.stop_event()
-        tag, count = self._split_tag_and_count(str(query))
+        # 框架无参时传入空字符串；直接调用时则会保留默认哨兵。
+        raw_query = "" if query is GreedyStr else str(query or "")
+        tag, count = self._split_tag_and_count(raw_query)
         async for result in self._handle_search(event, tag=tag, count_str=count):
             yield result
 
