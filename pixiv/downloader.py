@@ -38,7 +38,7 @@ class ImageDownloader:
             await self._session.close()
             self._session = None
 
-    async def download(self, url: str, proxy: str, timeout: float) -> str:
+    async def download(self, url: str, timeout: float) -> str:
         session = self._ensure_session()
         client_timeout = aiohttp.ClientTimeout(total=timeout)
         suffix = ".jpg"
@@ -53,7 +53,6 @@ class ImageDownloader:
             async with session.get(
                 url,
                 headers=PIXIV_HEADERS,
-                proxy=proxy or None,
                 timeout=client_timeout,
             ) as resp:
                 if resp.status != 200:
@@ -82,7 +81,6 @@ class ImageDownloader:
         self,
         illust: dict,
         quality: str,
-        proxy: str,
         timeout: float,
         downgrade_limit_bytes: int,
         log_context: str,
@@ -96,7 +94,7 @@ class ImageDownloader:
 
         actual_quality = _quality_from_url(url)
         logger.info(f"{LOG_PREFIX} {log_context} 下载 quality={actual_quality}")
-        path = await self.download(url, proxy=proxy, timeout=timeout)
+        path = await self.download(url, timeout=timeout)
         file_size = os.path.getsize(path)
 
         if (
@@ -120,7 +118,7 @@ class ImageDownloader:
 
             logger.info(f"{LOG_PREFIX} {log_context} 下载 quality={candidate_quality}")
             try:
-                candidate_path = await self.download(url, proxy=proxy, timeout=timeout)
+                candidate_path = await self.download(url, timeout=timeout)
                 candidate_size = os.path.getsize(candidate_path)
             except Exception as e:
                 logger.warning(

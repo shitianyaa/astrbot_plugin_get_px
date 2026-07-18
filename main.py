@@ -1,6 +1,6 @@
 """AstrBot 插件 — 安全插画发图与签到
 
-通过标签搜索插画并发送图片，支持 Lolicon 主源、Pixiv 回退、内容安全过滤、多页作品、代理配置、自然语言自动触发和签到。
+通过标签搜索插画并发送图片，支持 Lolicon 主源、Pixiv 回退、内容安全过滤、多页作品、自然语言自动触发和签到。
 
 搜索指令：
     /p [标签] [数量]           搜索并发送图片
@@ -51,7 +51,7 @@ from .plugin_api import PluginWebApi
 
 LOG_PREFIX = "[GetPx]"
 PLUGIN_NAME = "astrbot_plugin_get_px"
-PLUGIN_VERSION = "v3.3.0"
+PLUGIN_VERSION = "v3.3.1"
 WEB_INTERNAL_ERROR_MESSAGE = "服务内部错误，请稍后重试"
 
 AUTO_TRIGGER_PATTERN = r"^/?(来\s*(.*?)(份|个|张|点))(.*?)(福利|色|瑟|涩|塞)?图$"
@@ -185,10 +185,8 @@ class GetPxPlugin(
             logger.info(f"{LOG_PREFIX} 未配置 Pixiv refresh_token，仅使用 Lolicon 主源")
             return
 
-        proxy = self._cfg_str("pixiv_proxy_url")
         self.client = PixivClient(
             refresh_token=token,
-            proxy=proxy,
             request_timeout=self._cfg_float("request_timeout", 30.0, 5.0, 120.0),
         )
         logger.info(f"{LOG_PREFIX} Lolicon 主源和 Pixiv 回退客户端已初始化")

@@ -130,7 +130,6 @@ class CheckinArtworkMixin:
             path, actual_quality, file_size = await self.downloader.download_for_send(
                 illust,
                 CHECKIN_BACKGROUND_QUALITY,
-                proxy=self._cfg_str("pixiv_proxy_url"),
                 timeout=timeout_sec,
                 downgrade_limit_bytes=0,
                 log_context=f"[签到背景恢复] 作品 {record.background_illust_id}",
@@ -474,7 +473,6 @@ class CheckinArtworkMixin:
                 path, actual_q, file_size = await self.downloader.download_for_send(
                     illust,
                     CHECKIN_BACKGROUND_QUALITY,
-                    proxy=self._cfg_str("pixiv_proxy_url"),
                     timeout=timeout_sec,
                     downgrade_limit_bytes=0,
                     log_context=f"[签到背景 {idx}] 作品 {illust_id} 「{title}」",

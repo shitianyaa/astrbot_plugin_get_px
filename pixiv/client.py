@@ -24,7 +24,6 @@ def _is_missing_illust_error(exc: Exception) -> bool:
 @dataclass
 class PixivClient:
     refresh_token: str
-    proxy: str = ""
     request_timeout: float = 30.0
     close_timeout: float = 5.0
 
@@ -61,7 +60,7 @@ class PixivClient:
                 "未安装 pixivpy-async，请运行: pip install pixivpy-async"
             )
 
-        api = AppPixivAPI(proxy=self.proxy) if self.proxy else AppPixivAPI()
+        api = AppPixivAPI()
         try:
             await self._wait_for(
                 api.login(refresh_token=self.refresh_token),

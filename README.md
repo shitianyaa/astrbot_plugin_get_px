@@ -7,7 +7,7 @@
 一个面向 AstrBot 的安全发图与签到插件：Lolicon 优先取图，失败时可用 Pixiv refresh_token 回退，并在 WebUI 管理群排行、成员数值、内容安全和签到数据。
 
 ![AstrBot](https://img.shields.io/badge/AstrBot-plugin-5865f2?style=flat-square)
-![Version](https://img.shields.io/badge/version-3.3.0-22c55e?style=flat-square)
+![Version](https://img.shields.io/badge/version-3.3.1-22c55e?style=flat-square)
 ![Python](https://img.shields.io/badge/Python-3.10%2B-3776ab?style=flat-square)
 ![Platform](https://img.shields.io/badge/platform-OneBot%20%2F%20aiocqhttp-f97316?style=flat-square)
 ![License](https://img.shields.io/badge/license-MIT-3b82f6?style=flat-square)
@@ -58,8 +58,7 @@
    - 下载本仓库 zip 后选择「导入压缩包」
    - 或粘贴仓库地址：`https://github.com/shitianyaa/astrbot_plugin_get_px`
 2. 默认使用 Lolicon API，无需 Token；需要 Pixiv 作为备用时再填写 `pixiv_refresh_token`（[如何获取](#获取-pixiv-token)）。
-3. Pixiv 回退需要代理时填写 `pixiv_proxy_url`，例如 `http://127.0.0.1:7890`。
-4. 直接试试：
+3. 直接试试：
 
 ```text
 /p 初音ミク 3
@@ -67,6 +66,8 @@
 /签到中心
 /签到帮助
 ```
+
+当前默认分支不提供代理配置，Pixiv 登录、API 请求和图片下载均使用本机直连；需要代理时请使用 [`proxy` 分支](https://github.com/shitianyaa/astrbot_plugin_get_px/tree/proxy)，配置说明以该分支 README 为准。
 
 > [!WARNING]
 > **跨版本升级与签到数据**
@@ -145,7 +146,6 @@ AstrBot WebUI 插件页的「pluginCenter」可：
 | 配置 | 建议 |
 | --- | --- |
 | `pixiv_refresh_token` | 可选，作为 Lolicon 失败后的 Pixiv 回退 |
-| `pixiv_proxy_url` | Pixiv 回退不稳定时填代理 |
 | `image_quality` | 省流量用 `large`，优先原图用 `original` |
 | `send_as_forward` | QQ 场景建议开启 |
 | `checkin_card_quality` | 推荐 `95`；文字糊可提到 `97–100` |
@@ -160,7 +160,6 @@ AstrBot WebUI 插件页的「pluginCenter」可：
 | `pixiv_refresh_token` | Pixiv refresh_token，可选回退 | 空 |
 | `lolicon_api_url` | Lolicon 首选图片源地址；留空时停用 Lolicon | `https://api.lolicon.app/setu/v2` |
 | `lolicon_exclude_ai` | 请求 Lolicon 时排除 AI 作品；R18 始终关闭 | `true` |
-| `pixiv_proxy_url` | 代理地址，支持 `http://`、`socks5://` | 空 |
 | `filter_manga` | 过滤 Pixiv 回退结果中的漫画作品 | `true` |
 | `max_count` | 单次最大发送数量，范围 1-20 | `5` |
 | `dedupe_ttl_hours` | 普通发图当天去重；范围 `0–24`，设为 `0` 关闭；当前按自然日去重，不按小时滚动过期 | `24` |
