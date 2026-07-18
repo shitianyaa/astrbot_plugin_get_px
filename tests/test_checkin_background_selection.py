@@ -46,7 +46,7 @@ class FakeDownloader:
         self.downgrade_limits = []
 
     async def download_for_send(
-        self, illust, quality, proxy, timeout, downgrade_limit_bytes, log_context
+        self, illust, quality, timeout, downgrade_limit_bytes, log_context
     ):
         self.illust_ids.append(str(illust["id"]))
         self.qualities.append(quality)
@@ -232,7 +232,6 @@ class CheckinBackgroundSelectionTest(unittest.IsolatedAsyncioTestCase):
                 "pixiv_refresh_token": "token",
                 "filter_manga": True,
                 "image_quality": "large",
-                "pixiv_proxy_url": "",
                 "request_timeout": 30.0,
                 "auto_downgrade_original_mb": 3.0,
             }
@@ -310,7 +309,6 @@ class CheckinBackgroundSelectionTest(unittest.IsolatedAsyncioTestCase):
                 "pixiv_refresh_token": "token",
                 "filter_manga": True,
                 "checkin_background_tag": "empty\uff0cavailable",
-                "pixiv_proxy_url": "",
                 "request_timeout": 30.0,
             }
             plugin.image_index = ImageIndexStore(tmp)
@@ -347,7 +345,6 @@ class CheckinBackgroundSelectionTest(unittest.IsolatedAsyncioTestCase):
                 "checkin_background_aspect_ratio": "16:9",
                 "checkin_background_aspect_tolerance": 0.25,
                 "image_quality": "large",
-                "pixiv_proxy_url": "",
                 "request_timeout": 30.0,
                 "auto_downgrade_original_mb": 3.0,
             }
@@ -390,7 +387,6 @@ class CheckinBackgroundSelectionTest(unittest.IsolatedAsyncioTestCase):
                 "checkin_background_aspect_ratio": "16:9",
                 "checkin_background_aspect_tolerance": 0.25,
                 "image_quality": "large",
-                "pixiv_proxy_url": "",
                 "request_timeout": 30.0,
                 "auto_downgrade_original_mb": 3.0,
             }
@@ -433,7 +429,6 @@ class CheckinBackgroundSelectionTest(unittest.IsolatedAsyncioTestCase):
             plugin.config = {
                 "pixiv_refresh_token": "token",
                 "filter_manga": True,
-                "pixiv_proxy_url": "",
                 "request_timeout": 30.0,
             }
             plugin.image_index = ImageIndexStore(tmp)
@@ -464,7 +459,6 @@ class CheckinBackgroundSelectionTest(unittest.IsolatedAsyncioTestCase):
                 "checkin_background_aspect_ratio": "16:9",
                 "checkin_background_aspect_tolerance": 0.25,
                 "image_quality": "large",
-                "pixiv_proxy_url": "",
                 "request_timeout": 30.0,
                 "auto_downgrade_original_mb": 3.0,
             }
@@ -495,7 +489,6 @@ class CheckinBackgroundSelectionTest(unittest.IsolatedAsyncioTestCase):
             plugin = object.__new__(GetPxPlugin)
             plugin.config = {
                 "filter_manga": True,
-                "pixiv_proxy_url": "",
                 "request_timeout": 30.0,
             }
             plugin.image_index = ImageIndexStore(tmp)
@@ -562,7 +555,6 @@ class CheckinBackgroundSelectionTest(unittest.IsolatedAsyncioTestCase):
             plugin = object.__new__(GetPxPlugin)
             plugin.config = {
                 "pixiv_refresh_token": "token",
-                "pixiv_proxy_url": "",
                 "request_timeout": 30.0,
             }
             plugin.image_index = ImageIndexStore(tmp)
@@ -601,7 +593,6 @@ class CheckinBackgroundSelectionTest(unittest.IsolatedAsyncioTestCase):
                 "checkin_background_aspect_ratio": "16:9",
                 "checkin_background_aspect_tolerance": 0.25,
                 "image_quality": "large",
-                "pixiv_proxy_url": "",
                 "request_timeout": 30.0,
                 "auto_downgrade_original_mb": 3.0,
             }

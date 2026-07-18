@@ -17,12 +17,6 @@
     "default": true,
     "hint": "开启后向 Lolicon API 传递 excludeAI=true。R18 始终固定为关闭。"
   },
-  "pixiv_proxy_url": {
-    "description": "代理地址",
-    "type": "string",
-    "default": "",
-    "hint": "连接 Pixiv 用的代理，留空走直连。支持 http://、socks5://，如 http://127.0.0.1:7890。"
-  },
   "filter_manga": {
     "description": "过滤漫画",
     "type": "bool",

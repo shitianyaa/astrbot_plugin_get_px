@@ -71,7 +71,7 @@ class ImageDownloaderSizeLimitTest(unittest.IsolatedAsyncioTestCase):
             resp = _FakeResponse(content_length=11, chunks=[b"x"])
             downloader = _downloader_with(resp)
             with self.assertRaises(RuntimeError):
-                await downloader.download("http://x/a.jpg", proxy="", timeout=5)
+                await downloader.download("http://x/a.jpg", timeout=5)
 
     async def test_rejects_when_streamed_body_exceeds_limit(self):
         # content_length 未声明：分块累计超限应立即中止
@@ -81,19 +81,19 @@ class ImageDownloaderSizeLimitTest(unittest.IsolatedAsyncioTestCase):
             )
             downloader = _downloader_with(resp)
             with self.assertRaises(RuntimeError):
-                await downloader.download("http://x/a.jpg", proxy="", timeout=5)
+                await downloader.download("http://x/a.jpg", timeout=5)
 
     async def test_non_200_status_raises(self):
         resp = _FakeResponse(status=404, chunks=[b"x"])
         downloader = _downloader_with(resp)
         with self.assertRaises(RuntimeError):
-            await downloader.download("http://x/a.jpg", proxy="", timeout=5)
+            await downloader.download("http://x/a.jpg", timeout=5)
 
     async def test_small_image_written_to_temp_file_with_suffix(self):
         payload = b"\xff\xd8\xff\xe0small-image-bytes"
         resp = _FakeResponse(content_length=len(payload), chunks=[payload])
         downloader = _downloader_with(resp)
-        path = await downloader.download("http://x/a.png", proxy="", timeout=5)
+        path = await downloader.download("http://x/a.png", timeout=5)
         try:
             self.assertTrue(os.path.isfile(path))
             self.assertTrue(path.endswith(".png"))
@@ -120,7 +120,7 @@ class ImageDownloaderSizeLimitTest(unittest.IsolatedAsyncioTestCase):
                 downloader = _downloader_with(resp)
                 with mock.patch.object(dl.tempfile, "mkstemp", fake_mkstemp):
                     with self.assertRaises(RuntimeError):
-                        await downloader.download("http://x/a.jpg", proxy="", timeout=5)
+                        await downloader.download("http://x/a.jpg", timeout=5)
 
             self.assertTrue(created_paths)
             self.assertFalse(any(path.exists() for path in created_paths))
@@ -145,7 +145,7 @@ class ImageDownloaderDowngradeTest(unittest.IsolatedAsyncioTestCase):
             large_path = tmp_path / "large.jpg"
             downloader = ImageDownloader()
 
-            async def fake_download(url, proxy, timeout):
+            async def fake_download(url, timeout):
                 if url.endswith("original.jpg"):
                     original_path.write_bytes(b"x" * 20)
                     return str(original_path)
@@ -159,7 +159,6 @@ class ImageDownloaderDowngradeTest(unittest.IsolatedAsyncioTestCase):
             path, quality, size = await downloader.download_for_send(
                 _illust_urls(),
                 quality="original",
-                proxy="",
                 timeout=5,
                 downgrade_limit_bytes=10,
                 log_context="test",
@@ -176,7 +175,7 @@ class ImageDownloaderDowngradeTest(unittest.IsolatedAsyncioTestCase):
             original_path = Path(tmp) / "original.jpg"
             downloader = ImageDownloader()
 
-            async def fake_download(url, proxy, timeout):
+            async def fake_download(url, timeout):
                 if url.endswith("original.jpg"):
                     original_path.write_bytes(b"x" * 20)
                     return str(original_path)
@@ -188,7 +187,6 @@ class ImageDownloaderDowngradeTest(unittest.IsolatedAsyncioTestCase):
                 await downloader.download_for_send(
                     _illust_urls(),
                     quality="original",
-                    proxy="",
                     timeout=5,
                     downgrade_limit_bytes=10,
                     log_context="test",

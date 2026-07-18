@@ -1,6 +1,6 @@
 """AstrBot 插件 — 安全插画发图与签到
 
-通过标签搜索插画并发送图片，支持 Lolicon 主源、Pixiv 回退、内容安全过滤、多页作品、代理配置、自然语言自动触发和签到。
+通过标签搜索插画并发送图片，支持 Lolicon 主源、Pixiv 回退、内容安全过滤、多页作品、自然语言自动触发和签到。
 
 搜索指令：
     /p [标签] [数量]           搜索并发送图片
@@ -185,10 +185,8 @@ class GetPxPlugin(
             logger.info(f"{LOG_PREFIX} 未配置 Pixiv refresh_token，仅使用 Lolicon 主源")
             return
 
-        proxy = self._cfg_str("pixiv_proxy_url")
         self.client = PixivClient(
             refresh_token=token,
-            proxy=proxy,
             request_timeout=self._cfg_float("request_timeout", 30.0, 5.0, 120.0),
         )
         logger.info(f"{LOG_PREFIX} Lolicon 主源和 Pixiv 回退客户端已初始化")

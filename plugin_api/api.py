@@ -413,7 +413,6 @@ class PluginWebApi:
                 timeout = cfg_float("request_timeout", 30.0, 5.0, 120.0)
             temp_path = await downloader.download(
                 url,
-                proxy=self.plugin._cfg_str("pixiv_proxy_url", ""),
                 timeout=timeout,
             )
             thumb_id = await self.plugin.image_index.save_blacklist_thumbnail(

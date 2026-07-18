@@ -233,7 +233,6 @@ class SearchMixin:
                     path, actual_q, file_size = await self.downloader.download_for_send(
                         illust,
                         quality,
-                        proxy=self._cfg_str("pixiv_proxy_url"),
                         timeout=timeout_sec,
                         downgrade_limit_bytes=downgrade_limit_bytes,
                         log_context=f"[{idx}/{pick_count}] 作品 {illust_id} 「{title}」",
