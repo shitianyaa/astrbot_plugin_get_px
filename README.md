@@ -58,7 +58,7 @@
    - 下载本仓库 zip 后选择「导入压缩包」
    - 或粘贴仓库地址：`https://github.com/shitianyaa/astrbot_plugin_get_px`
 2. 默认使用 Lolicon API，无需 Token；需要 Pixiv 作为备用时再填写 `pixiv_refresh_token`（[如何获取](#获取-pixiv-token)）。
-3. Pixiv 回退需要代理时填写 `pixiv_proxy_url`，例如 `http://127.0.0.1:7890`。
+3. Pixiv 回退需要代理时填写 `pixiv_proxy_url`，例如 `http://127.0.0.1:7890` 或 `socks5h://127.0.0.1:1080`；它仅用于登录、搜索和作品详情。图片由本机直连下载：未填写 `pixiv_image_proxy_host` 时自动使用 `i.pixiv.re`，也可填写自定义反代。
 4. 直接试试：
 
 ```text
@@ -67,6 +67,10 @@
 /签到中心
 /签到帮助
 ```
+
+开发环境可运行 `python scripts/test_pixiv_proxy.py` 验证代理分流；按提示输入代理地址和 refresh token 后，脚本会直接调用 Pixiv API 搜索普通分级作品，再通过 `i.pixiv.re` 本机直连下载并校验一张图片，不会调用 Lolicon。
+
+网络请求与反代规则见 [Pixiv 网络路由](docs/project/pixiv-network-routing.md)。
 
 > [!WARNING]
 > **跨版本升级与签到数据**
@@ -160,7 +164,8 @@ AstrBot WebUI 插件页的「pluginCenter」可：
 | `pixiv_refresh_token` | Pixiv refresh_token，可选回退 | 空 |
 | `lolicon_api_url` | Lolicon 首选图片源地址；留空时停用 Lolicon | `https://api.lolicon.app/setu/v2` |
 | `lolicon_exclude_ai` | 请求 Lolicon 时排除 AI 作品；R18 始终关闭 | `true` |
-| `pixiv_proxy_url` | 代理地址，支持 `http://`、`socks5://` | 空 |
+| `pixiv_proxy_url` | Pixiv API 出口代理，支持 `http://`、`socks5://`、`socks5h://` | 空 |
+| `pixiv_image_proxy_host` | Pixiv 图片反代；留空且已配置 API 代理时自动使用 `i.pixiv.re` | 空 |
 | `filter_manga` | 过滤 Pixiv 回退结果中的漫画作品 | `true` |
 | `max_count` | 单次最大发送数量，范围 1-20 | `5` |
 | `dedupe_ttl_hours` | 普通发图当天去重；范围 `0–24`，设为 `0` 关闭；当前按自然日去重，不按小时滚动过期 | `24` |

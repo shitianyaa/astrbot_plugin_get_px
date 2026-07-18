@@ -46,7 +46,14 @@ class FakeDownloader:
         self.downgrade_limits = []
 
     async def download_for_send(
-        self, illust, quality, proxy, timeout, downgrade_limit_bytes, log_context
+        self,
+        illust,
+        quality,
+        proxy,
+        timeout,
+        downgrade_limit_bytes,
+        log_context,
+        reverse_proxy_host="",
     ):
         self.illust_ids.append(str(illust["id"]))
         self.qualities.append(quality)

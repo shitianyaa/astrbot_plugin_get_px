@@ -13,6 +13,7 @@ from quart import jsonify, request, send_file
 try:
     from ..checkin import load_checkin_snapshot_json
     from ..pixiv.downloader import cleanup, pick_image_url_exact
+    from ..pixiv.proxy import resolve_pixiv_image_proxy_host
     from ..pixiv.safety import (
         BUILTIN_SAFETY_TERMS,
         illustration_texts,
@@ -23,6 +24,7 @@ try:
 except ImportError:  # Direct imports used by the test suite.
     from checkin import load_checkin_snapshot_json
     from pixiv.downloader import cleanup, pick_image_url_exact
+    from pixiv.proxy import resolve_pixiv_image_proxy_host
     from pixiv.safety import (
         BUILTIN_SAFETY_TERMS,
         illustration_texts,
@@ -415,6 +417,10 @@ class PluginWebApi:
                 url,
                 proxy=self.plugin._cfg_str("pixiv_proxy_url", ""),
                 timeout=timeout,
+                reverse_proxy_host=resolve_pixiv_image_proxy_host(
+                    self.plugin._cfg_str("pixiv_proxy_url", ""),
+                    self.plugin._cfg_str("pixiv_image_proxy_host", ""),
+                ),
             )
             thumb_id = await self.plugin.image_index.save_blacklist_thumbnail(
                 illust_id=illust_id,

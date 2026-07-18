@@ -30,6 +30,7 @@ pixiv/
 │  ├─ client.py          Pixiv API 客户端
 │  ├─ lolicon.py         Lolicon API 客户端与数据规范化
 │  ├─ downloader.py      图片下载与质量降级
+│  ├─ proxy.py           API 代理规范化与图片反代路由
 │  ├─ index.py           去重索引、安全词与作品黑名单
 plugin_api/
 └─ api.py                Plugin Pages 后端 API

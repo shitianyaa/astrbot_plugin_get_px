@@ -18,10 +18,16 @@
     "hint": "开启后向 Lolicon API 传递 excludeAI=true。R18 始终固定为关闭。"
   },
   "pixiv_proxy_url": {
-    "description": "代理地址",
+    "description": "Pixiv API 代理地址",
     "type": "string",
     "default": "",
-    "hint": "连接 Pixiv 用的代理，留空走直连。支持 http://、socks5://，如 http://127.0.0.1:7890。"
+    "hint": "Pixiv 登录、搜索和作品详情使用的出口代理，留空走直连。支持 http://、socks5://、socks5h://，如 socks5h://127.0.0.1:1080。"
+  },
+  "pixiv_image_proxy_host": {
+    "description": "Pixiv 图片反代",
+    "type": "string",
+    "default": "",
+    "hint": "可选。填写时将 Pixiv 图片 URL 改写到该反代并由本机直连下载；留空但已配置 pixiv_proxy_url 时自动使用 i.pixiv.re；两者都为空时保持原图直连。"
   },
   "filter_manga": {
     "description": "过滤漫画",

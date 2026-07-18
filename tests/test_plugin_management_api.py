@@ -40,10 +40,17 @@ class FakeDownloader:
     def __init__(self, root: Path):
         self.root = root
 
-    async def download(self, url: str, proxy: str, timeout: float) -> str:
+    async def download(
+        self,
+        url: str,
+        proxy: str,
+        timeout: float,
+        reverse_proxy_host: str = "",
+    ) -> str:
         assert url == "https://example.test/thumb.jpg"
         assert proxy == ""
         assert timeout == 30.0
+        assert reverse_proxy_host == ""
         path = self.root / "downloaded-thumb.jpg"
         path.write_bytes(b"fake-jpeg-thumbnail")
         return str(path)

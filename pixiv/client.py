@@ -6,6 +6,8 @@ from dataclasses import dataclass, field
 
 from astrbot.api import logger
 
+from .proxy import normalize_proxy_url
+
 LOG_PREFIX = "[GetPx]"
 
 # Pixiv access_token 有效期约 3600 秒，提前 10 分钟刷新避免临界过期
@@ -37,6 +39,7 @@ class PixivClient:
     _closed: bool = field(default=False, repr=False)
 
     def __post_init__(self) -> None:
+        self.proxy = normalize_proxy_url(self.proxy)
         self._idle = asyncio.Condition(self._lock)
 
     async def ensure_logged_in(self):
@@ -63,8 +66,8 @@ class PixivClient:
 
         api = AppPixivAPI(proxy=self.proxy) if self.proxy else AppPixivAPI()
         try:
-            await self._wait_for(
-                api.login(refresh_token=self.refresh_token),
+            await self._wait_for_with_retry(
+                lambda: api.login(refresh_token=self.refresh_token),
                 operation="登录",
             )
         except BaseException:

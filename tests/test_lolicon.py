@@ -1,4 +1,8 @@
+import sys
 import unittest
+from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 
 from astrbot_plugin_get_px.pixiv.lolicon import LoliconClient
 from astrbot_plugin_get_px.pixiv.search import SearchMixin
@@ -61,20 +65,25 @@ class _SourceEvent:
 class _SourceLolicon:
     available = True
 
-    def __init__(self, *, error=False):
+    def __init__(self, *, error=False, empty=False):
         self.error = error
+        self.empty = empty
         self.calls = []
 
     async def search(self, tag, **kwargs):
         self.calls.append(("search", tag, kwargs))
         if self.error:
             raise RuntimeError("down")
+        if self.empty:
+            return []
         return [{"id": "1"}]
 
     async def random(self, **kwargs):
         self.calls.append(("random", kwargs))
         if self.error:
             raise RuntimeError("down")
+        if self.empty:
+            return []
         return [{"id": "2"}]
 
 
@@ -153,6 +162,30 @@ class LoliconClientTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(source, "pixiv:recommended")
         self.assertEqual(pixiv.search_calls, [])
         self.assertEqual(pixiv.recommended_calls, [0])
+
+    async def test_tagged_lolicon_empty_uses_pixiv_search(self):
+        pixiv = _SourcePixiv()
+        plugin = _SourceHarness(_SourceLolicon(empty=True), pixiv)
+
+        illusts, _, source = await plugin._fetch_source_candidates(
+            _SourceEvent(), "landscape"
+        )
+
+        self.assertEqual(illusts, [{"id": "3"}])
+        self.assertEqual(source, "pixiv:search:landscape")
+        self.assertEqual(pixiv.search_calls, [("landscape", 0)])
+        self.assertEqual(pixiv.recommended_calls, [])
+
+    async def test_lolicon_failure_without_pixiv_client_returns_empty(self):
+        plugin = _SourceHarness(_SourceLolicon(error=True), None)
+
+        illusts, raw_count, source = await plugin._fetch_source_candidates(
+            _SourceEvent(), "landscape"
+        )
+
+        self.assertEqual(illusts, [])
+        self.assertEqual(raw_count, 0)
+        self.assertEqual(source, "pixiv:search:landscape")
 
 
 if __name__ == "__main__":

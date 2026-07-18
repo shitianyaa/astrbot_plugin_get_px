@@ -10,6 +10,26 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 from astrbot_plugin_get_px.pixiv.client import PixivClient  # noqa: E402
 
 
+class PixivDependencyTest(unittest.TestCase):
+    def test_socks_proxy_connector_is_declared(self):
+        requirements_path = Path(__file__).resolve().parents[1] / "requirements.txt"
+        requirements = {
+            line.partition("#")[0].strip().casefold()
+            for line in requirements_path.read_text(encoding="utf-8").splitlines()
+        }
+
+        self.assertIn("aiohttp-socks", requirements)
+
+    def test_socks5h_proxy_is_normalized_for_pixivpy(self):
+        client = PixivClient("token", proxy="socks5h://127.0.0.1:1080")
+
+        self.assertEqual(client.proxy, "socks5://127.0.0.1:1080")
+
+    def test_unsupported_proxy_scheme_is_rejected(self):
+        with self.assertRaisesRegex(ValueError, "http"):
+            PixivClient("token", proxy="ftp://127.0.0.1:21")
+
+
 class _FakeNotFoundError(Exception):
     status = 404
 

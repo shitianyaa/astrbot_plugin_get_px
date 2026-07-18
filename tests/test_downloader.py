@@ -8,6 +8,7 @@ from unittest import mock
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 
 import astrbot_plugin_get_px.pixiv.downloader as dl  # noqa: E402
+import astrbot_plugin_get_px.pixiv.proxy as proxy_utils  # noqa: E402
 from astrbot_plugin_get_px.pixiv.downloader import ImageDownloader  # noqa: E402
 
 
@@ -21,10 +22,13 @@ class _FakeContent:
 
 
 class _FakeResponse:
-    def __init__(self, status=200, content_length=None, chunks=()):
+    def __init__(
+        self, status=200, content_length=None, chunks=(), content_type=""
+    ):
         self.status = status
         self.content_length = content_length
         self.content = _FakeContent(chunks)
+        self.content_type = content_type
 
 
 class _FakeGetCtx:
@@ -48,12 +52,160 @@ class _FakeSession:
         self.calls.append((url, kwargs))
         return _FakeGetCtx(self._resp)
 
+    async def close(self):
+        self.closed = True
+
 
 def _downloader_with(resp) -> ImageDownloader:
     downloader = ImageDownloader()
+    session = _FakeSession(resp)
     # 替换 session 工厂，避免真实建立 aiohttp 连接
-    downloader._ensure_session = lambda: _FakeSession(resp)  # type: ignore[assignment]
+    downloader._ensure_session = lambda _proxy: (session, None)  # type: ignore[assignment]
     return downloader
+
+
+class ImageDownloaderProxyTest(unittest.IsolatedAsyncioTestCase):
+    def test_image_reverse_proxy_resolution(self):
+        self.assertEqual(proxy_utils.resolve_pixiv_image_proxy_host("", ""), "")
+        self.assertEqual(
+            proxy_utils.resolve_pixiv_image_proxy_host(
+                "socks5://127.0.0.1:1080", ""
+            ),
+            "i.pixiv.re",
+        )
+        self.assertEqual(
+            proxy_utils.resolve_pixiv_image_proxy_host(
+                "socks5://127.0.0.1:1080", "images.example.com"
+            ),
+            "images.example.com",
+        )
+        self.assertEqual(
+            proxy_utils.resolve_pixiv_image_proxy_host("", "images.example.com"),
+            "images.example.com",
+        )
+
+    async def test_http_proxy_is_passed_to_request(self):
+        payload = b"image"
+        session = _FakeSession(
+            _FakeResponse(content_length=len(payload), chunks=[payload])
+        )
+        downloader = ImageDownloader()
+
+        with mock.patch.object(dl.aiohttp, "ClientSession", return_value=session):
+            path = await downloader.download(
+                "https://i.pximg.net/image.jpg",
+                proxy="http://127.0.0.1:7890",
+                timeout=5,
+            )
+
+        try:
+            self.assertEqual(
+                session.calls[0][1]["proxy"], "http://127.0.0.1:7890"
+            )
+        finally:
+            os.remove(path)
+            await downloader.close()
+
+    async def test_socks5h_proxy_uses_remote_dns_connector(self):
+        payload = b"image"
+        session = _FakeSession(
+            _FakeResponse(content_length=len(payload), chunks=[payload])
+        )
+        connector = object()
+        downloader = ImageDownloader()
+
+        with (
+            mock.patch.object(
+                dl.ProxyConnector, "from_url", return_value=connector
+            ) as connector_factory,
+            mock.patch.object(dl.aiohttp, "ClientSession", return_value=session),
+        ):
+            path = await downloader.download(
+                "https://i.pximg.net/image.jpg",
+                proxy="socks5h://127.0.0.1:1080",
+                timeout=5,
+            )
+
+        try:
+            connector_factory.assert_called_once_with(
+                "socks5://127.0.0.1:1080", rdns=True
+            )
+            self.assertNotIn("proxy", session.calls[0][1])
+        finally:
+            os.remove(path)
+            await downloader.close()
+
+    async def test_equivalent_socks5_aliases_reuse_session(self):
+        session = _FakeSession(_FakeResponse())
+        downloader = ImageDownloader()
+
+        with (
+            mock.patch.object(dl.ProxyConnector, "from_url", return_value=object()),
+            mock.patch.object(
+                dl.aiohttp, "ClientSession", return_value=session
+            ) as session_factory,
+        ):
+            first, _ = downloader._ensure_session("socks5h://127.0.0.1:1080")
+            second, _ = downloader._ensure_session("socks5://127.0.0.1:1080")
+
+        self.assertIs(first, second)
+        session_factory.assert_called_once()
+        await downloader.close()
+        self.assertTrue(session.closed)
+
+    async def test_image_reverse_proxy_rewrites_url_and_bypasses_socks(self):
+        payload = b"image"
+        session = _FakeSession(
+            _FakeResponse(content_length=len(payload), chunks=[payload])
+        )
+        downloader = ImageDownloader()
+        source_url = "https://i.pximg.net/img-master/example.jpg"
+
+        with (
+            mock.patch.object(dl.aiohttp, "ClientSession", return_value=session),
+            mock.patch.object(dl.ProxyConnector, "from_url") as connector_factory,
+        ):
+            path = await downloader.download(
+                source_url,
+                proxy="socks5h://127.0.0.1:1080",
+                timeout=5,
+                reverse_proxy_host="i.pixiv.re",
+            )
+
+        try:
+            self.assertEqual(
+                session.calls[0][0],
+                "https://i.pixiv.re/img-master/example.jpg",
+            )
+            self.assertNotIn("proxy", session.calls[0][1])
+            connector_factory.assert_not_called()
+        finally:
+            os.remove(path)
+            await downloader.close()
+
+    async def test_image_reverse_proxy_does_not_rewrite_unrelated_host(self):
+        payload = b"image"
+        session = _FakeSession(
+            _FakeResponse(content_length=len(payload), chunks=[payload])
+        )
+        downloader = ImageDownloader()
+
+        with mock.patch.object(dl.aiohttp, "ClientSession", return_value=session):
+            path = await downloader.download(
+                "https://cdn.example.com/image.jpg",
+                proxy="http://127.0.0.1:7890",
+                timeout=5,
+                reverse_proxy_host="i.pixiv.re",
+            )
+
+        try:
+            self.assertEqual(session.calls[0][0], "https://cdn.example.com/image.jpg")
+            self.assertEqual(
+                session.calls[0][1]["proxy"], "http://127.0.0.1:7890"
+            )
+        finally:
+            os.remove(path)
+            await downloader.close()
 
 
 class ImageDownloaderSizeLimitTest(unittest.IsolatedAsyncioTestCase):
@@ -103,6 +255,21 @@ class ImageDownloaderSizeLimitTest(unittest.IsolatedAsyncioTestCase):
             if os.path.exists(path):
                 os.remove(path)
 
+    async def test_response_content_type_overrides_url_suffix(self):
+        payload = b"webp-image-bytes"
+        resp = _FakeResponse(
+            content_length=len(payload),
+            chunks=[payload],
+            content_type="image/webp",
+        )
+        downloader = _downloader_with(resp)
+
+        path = await downloader.download("http://x/a.jpg", proxy="", timeout=5)
+        try:
+            self.assertTrue(path.endswith(".webp"))
+        finally:
+            os.remove(path)
+
     async def test_cleans_partial_temp_file_when_stream_exceeds_limit(self):
         created_paths = []
 
@@ -145,7 +312,7 @@ class ImageDownloaderDowngradeTest(unittest.IsolatedAsyncioTestCase):
             large_path = tmp_path / "large.jpg"
             downloader = ImageDownloader()
 
-            async def fake_download(url, proxy, timeout):
+            async def fake_download(url, proxy, timeout, reverse_proxy_host=""):
                 if url.endswith("original.jpg"):
                     original_path.write_bytes(b"x" * 20)
                     return str(original_path)
@@ -176,7 +343,7 @@ class ImageDownloaderDowngradeTest(unittest.IsolatedAsyncioTestCase):
             original_path = Path(tmp) / "original.jpg"
             downloader = ImageDownloader()
 
-            async def fake_download(url, proxy, timeout):
+            async def fake_download(url, proxy, timeout, reverse_proxy_host=""):
                 if url.endswith("original.jpg"):
                     original_path.write_bytes(b"x" * 20)
                     return str(original_path)

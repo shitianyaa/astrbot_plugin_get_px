@@ -4,11 +4,25 @@ import os
 import tempfile
 
 import aiohttp
+from aiohttp_socks import ProxyConnector
 
 from astrbot.api import logger
 
+from .proxy import (
+    is_pixiv_image_url,
+    is_socks_proxy,
+    normalize_proxy_url,
+    rewrite_pixiv_image_url,
+)
+
 LOG_PREFIX = "[GetPx]"
 MAX_DOWNLOAD_BYTES = 50 * 1024 * 1024
+CONTENT_TYPE_SUFFIXES = {
+    "image/gif": ".gif",
+    "image/jpeg": ".jpg",
+    "image/png": ".png",
+    "image/webp": ".webp",
+}
 
 PIXIV_HEADERS = {
     "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
@@ -26,20 +40,40 @@ def _too_large_error(size_bytes: float) -> RuntimeError:
 
 class ImageDownloader:
     def __init__(self):
-        self._session: aiohttp.ClientSession | None = None
+        self._sessions: dict[str, aiohttp.ClientSession] = {}
 
-    def _ensure_session(self) -> aiohttp.ClientSession:
-        if self._session is None or self._session.closed:
-            self._session = aiohttp.ClientSession()
-        return self._session
+    def _ensure_session(
+        self, proxy: str
+    ) -> tuple[aiohttp.ClientSession, str | None]:
+        normalized_proxy = normalize_proxy_url(proxy)
+        session_key = normalized_proxy if is_socks_proxy(normalized_proxy) else "http"
+        session = self._sessions.get(session_key)
+        if session is None or session.closed:
+            if is_socks_proxy(normalized_proxy):
+                connector = ProxyConnector.from_url(normalized_proxy, rdns=True)
+                session = aiohttp.ClientSession(connector=connector)
+            else:
+                session = aiohttp.ClientSession()
+            self._sessions[session_key] = session
+        request_proxy = None if is_socks_proxy(normalized_proxy) else normalized_proxy or None
+        return session, request_proxy
 
     async def close(self):
-        if self._session is not None and not self._session.closed:
-            await self._session.close()
-            self._session = None
+        sessions, self._sessions = list(self._sessions.values()), {}
+        for session in sessions:
+            if not session.closed:
+                await session.close()
 
-    async def download(self, url: str, proxy: str, timeout: float) -> str:
-        session = self._ensure_session()
+    async def download(
+        self,
+        url: str,
+        proxy: str,
+        timeout: float,
+        reverse_proxy_host: str = "",
+    ) -> str:
+        use_reverse_proxy = bool(reverse_proxy_host) and is_pixiv_image_url(url)
+        url = rewrite_pixiv_image_url(url, reverse_proxy_host)
+        session, request_proxy = self._ensure_session("" if use_reverse_proxy else proxy)
         client_timeout = aiohttp.ClientTimeout(total=timeout)
         suffix = ".jpg"
         lower_path = url.split("?")[0].lower()
@@ -50,14 +84,19 @@ class ImageDownloader:
 
         path = ""
         try:
-            async with session.get(
-                url,
-                headers=PIXIV_HEADERS,
-                proxy=proxy or None,
-                timeout=client_timeout,
-            ) as resp:
+            request_kwargs = {
+                "headers": PIXIV_HEADERS,
+                "timeout": client_timeout,
+            }
+            if request_proxy:
+                request_kwargs["proxy"] = request_proxy
+            async with session.get(url, **request_kwargs) as resp:
                 if resp.status != 200:
                     raise RuntimeError(f"HTTP {resp.status}")
+                response_content_type = str(
+                    getattr(resp, "content_type", "") or ""
+                ).casefold()
+                suffix = CONTENT_TYPE_SUFFIXES.get(response_content_type, suffix)
                 # 快速路径：服务器已声明体积且超限，直接拒绝
                 content_length = resp.content_length
                 if content_length and content_length > MAX_DOWNLOAD_BYTES:
@@ -86,6 +125,7 @@ class ImageDownloader:
         timeout: float,
         downgrade_limit_bytes: int,
         log_context: str,
+        reverse_proxy_host: str = "",
     ) -> tuple[str, str, int]:
         tried_urls: set[str] = set()
 
@@ -96,7 +136,12 @@ class ImageDownloader:
 
         actual_quality = _quality_from_url(url)
         logger.info(f"{LOG_PREFIX} {log_context} 下载 quality={actual_quality}")
-        path = await self.download(url, proxy=proxy, timeout=timeout)
+        path = await self.download(
+            url,
+            proxy=proxy,
+            timeout=timeout,
+            reverse_proxy_host=reverse_proxy_host,
+        )
         file_size = os.path.getsize(path)
 
         if (
@@ -120,7 +165,12 @@ class ImageDownloader:
 
             logger.info(f"{LOG_PREFIX} {log_context} 下载 quality={candidate_quality}")
             try:
-                candidate_path = await self.download(url, proxy=proxy, timeout=timeout)
+                candidate_path = await self.download(
+                    url,
+                    proxy=proxy,
+                    timeout=timeout,
+                    reverse_proxy_host=reverse_proxy_host,
+                )
                 candidate_size = os.path.getsize(candidate_path)
             except Exception as e:
                 logger.warning(

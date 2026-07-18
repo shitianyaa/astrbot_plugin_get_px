@@ -7,6 +7,7 @@ from astrbot.api.event import AstrMessageEvent
 from astrbot.api.message_components import Node, Nodes
 
 from .downloader import cleanup
+from .proxy import resolve_pixiv_image_proxy_host
 
 
 LOG_PREFIX = "[GetPx]"
@@ -237,6 +238,10 @@ class SearchMixin:
                         timeout=timeout_sec,
                         downgrade_limit_bytes=downgrade_limit_bytes,
                         log_context=f"[{idx}/{pick_count}] 作品 {illust_id} 「{title}」",
+                        reverse_proxy_host=resolve_pixiv_image_proxy_host(
+                            self._cfg_str("pixiv_proxy_url"),
+                            self._cfg_str("pixiv_image_proxy_host"),
+                        ),
                     )
                     logger.info(
                         f"{LOG_PREFIX} [{idx}/{pick_count}] 下载完成 {illust_id} -> {path} ({file_size / 1024:.1f} KB, quality={actual_q})"

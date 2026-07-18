@@ -27,8 +27,10 @@ from .card import (
 
 try:
     from ..pixiv.index import ordered_by_unused
+    from ..pixiv.proxy import resolve_pixiv_image_proxy_host
 except ImportError:  # Direct imports used by the test suite.
     from pixiv.index import ordered_by_unused
+    from pixiv.proxy import resolve_pixiv_image_proxy_host
 
 
 LOG_PREFIX = "[GetPx]"
@@ -134,6 +136,10 @@ class CheckinArtworkMixin:
                 timeout=timeout_sec,
                 downgrade_limit_bytes=0,
                 log_context=f"[签到背景恢复] 作品 {record.background_illust_id}",
+                reverse_proxy_host=resolve_pixiv_image_proxy_host(
+                    self._cfg_str("pixiv_proxy_url"),
+                    self._cfg_str("pixiv_image_proxy_host"),
+                ),
             )
             return CardBackground(
                 image_path=path,
@@ -478,6 +484,10 @@ class CheckinArtworkMixin:
                     timeout=timeout_sec,
                     downgrade_limit_bytes=0,
                     log_context=f"[签到背景 {idx}] 作品 {illust_id} 「{title}」",
+                    reverse_proxy_host=resolve_pixiv_image_proxy_host(
+                        self._cfg_str("pixiv_proxy_url"),
+                        self._cfg_str("pixiv_image_proxy_host"),
+                    ),
                 )
                 author = str((illust.get("user") or {}).get("name") or "")
                 background = CardBackground(
