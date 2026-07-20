@@ -35,6 +35,13 @@ QUALITY_ORDERS = {
     "square_medium": ("square_medium", "medium", "large", "original"),
 }
 
+QUALITY_LOG_LABELS = {
+    "original": "原图",
+    "large": "大图",
+    "medium": "中图",
+    "square_medium": "方形缩略图",
+}
+
 PIXIV_HEADERS = {
     "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
     "(KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36",
@@ -77,6 +84,14 @@ def _download_error_reason(exc: BaseException) -> str:
 def _safe_log_context(value: object) -> str:
     compact = " ".join(str(value or "").split())
     return _LOG_URL_PATTERN.sub("[url]", compact)[:160]
+
+
+def _download_route_log_label(route: str, source: object) -> str:
+    if route == "proxy":
+        return "反代地址"
+    if str(source or "").casefold() == "lolicon":
+        return "图片源返回地址"
+    return "直连地址"
 
 
 def parse_proxy_origins(raw_origins: object) -> tuple[str, ...]:
@@ -265,6 +280,22 @@ class ImageDownloader:
         if not candidates:
             raise RuntimeError("无可下载 URL")
 
+        def _plan_download_attempts(
+            urls: list[str], tried: set[str], remaining_budget: int
+        ) -> list[tuple[str, str]]:
+            """规划下载尝试路由：返回 (route_type, url) 列表。"""
+            returned_url = urls[-1]
+            proxy_urls = [url for url in urls[:-1] if url != returned_url]
+            returned_pending = returned_url not in tried
+            reserved_for_returned = 1 if returned_pending and remaining_budget > 0 else 0
+            selected_proxy_urls = proxy_urls[
+                : max(0, remaining_budget - reserved_for_returned)
+            ]
+            routes = [("proxy", url) for url in selected_proxy_urls]
+            if returned_pending and remaining_budget > 0:
+                routes.append(("returned", returned_url))
+            return routes
+
         for actual_quality, original_url in candidates:
             quality_error: Exception | None = None
             urls = list(
@@ -274,17 +305,9 @@ class ImageDownloader:
                     proxy_origins=self.lolicon_image_proxy_origins,
                 )
             )
-            returned_url = urls[-1]
-            proxy_urls = [url for url in urls[:-1] if url != returned_url]
             remaining_budget = MAX_DOWNLOAD_ATTEMPTS - attempts
-            returned_pending = returned_url not in tried_urls
-            reserved_for_returned = 1 if returned_pending and remaining_budget > 0 else 0
-            selected_proxy_urls = proxy_urls[
-                : max(0, remaining_budget - reserved_for_returned)
-            ]
-            download_routes = [("proxy", url) for url in selected_proxy_urls]
-            if returned_pending and remaining_budget > 0:
-                download_routes.append(("returned", returned_url))
+            download_routes = _plan_download_attempts(urls, tried_urls, remaining_budget)
+            has_proxy_routes = any(route == "proxy" for route, _ in download_routes)
             for route, url in download_routes:
                 if attempts >= MAX_DOWNLOAD_ATTEMPTS:
                     break
@@ -292,7 +315,7 @@ class ImageDownloader:
                     continue
                 tried_urls.add(url)
                 attempts += 1
-                if route == "returned" and selected_proxy_urls:
+                if route == "returned" and has_proxy_routes:
                     logger.debug(
                         f"{LOG_PREFIX} {log_context} 反代候选不可用，"
                         f"尝试 Lolicon 返回地址: quality={actual_quality} "
@@ -324,11 +347,18 @@ class ImageDownloader:
                     actual_quality != "original"
                     and not enforce_downgrade_limit
                 ) or within_downgrade_limit:
+                    quality_label = QUALITY_LOG_LABELS.get(
+                        actual_quality, actual_quality
+                    )
+                    route_label = _download_route_log_label(
+                        route, illust.get("_source")
+                    )
                     logger.info(
-                        f"{LOG_PREFIX} {log_context} 图片下载完成: "
-                        f"quality={actual_quality} route={route} attempts={attempts} "
-                        f"size_bytes={file_size} "
-                        f"elapsed_ms={int((time.monotonic() - started_at) * 1000)}"
+                        f"{LOG_PREFIX} {log_context} 图片下载完成："
+                        f"画质={quality_label} 下载路径={route_label} "
+                        f"尝试次数={attempts} "
+                        f"大小={file_size / 1024:.2f}KB "
+                        f"耗时={int((time.monotonic() - started_at) * 1000)}ms"
                     )
                     return path, actual_quality, file_size
 

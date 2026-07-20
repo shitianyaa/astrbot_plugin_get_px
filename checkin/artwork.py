@@ -34,6 +34,18 @@ from .quality import (
     normalize_checkin_render_tier,
 )
 
+
+_CHECKIN_BACKGROUND_MODE_LABELS = {
+    "pixiv_daily": "在线图片",
+    "custom": "自定义背景",
+    "fallback": "占位图",
+}
+
+
+def _checkin_background_mode_label(background: CardBackground | None) -> str:
+    mode = getattr(background, "mode", "") or "none"
+    return _CHECKIN_BACKGROUND_MODE_LABELS.get(str(mode), str(mode))
+
 try:
     from ..pixiv.index import ordered_by_unused
     from ..pixiv.downloader import cleanup
@@ -346,13 +358,13 @@ class CheckinArtworkMixin:
             )
             if cached is not None:
                 logger.debug(
-                    f"{LOG_PREFIX} 签到卡缓存命中: tier={spec.name} "
-                    f"date={record.date_key}"
+                    f"{LOG_PREFIX} 签到卡缓存命中: 画质={spec.name} "
+                    f"日期={record.date_key} 输出尺寸={spec.expected_size[0]}x{spec.expected_size[1]}"
                 )
                 return Path(cached), spec.name
             logger.debug(
-                f"{LOG_PREFIX} 签到卡缓存未命中: tier={spec.name} "
-                f"date={record.date_key}"
+                f"{LOG_PREFIX} 签到卡缓存未命中: 画质={spec.name} "
+                f"日期={record.date_key} 输出尺寸={spec.expected_size[0]}x{spec.expected_size[1]}"
             )
         return None, normalize_checkin_render_tier(preferred_tier)
 
@@ -390,9 +402,9 @@ class CheckinArtworkMixin:
 
             try:
                 logger.debug(
-                    f"{LOG_PREFIX} 签到卡开始渲染: tier={spec.name} "
-                    f"expected_size={spec.expected_size[0]}x{spec.expected_size[1]} "
-                    f"background_mode={getattr(background, 'mode', 'none') or 'none'}"
+                    f"{LOG_PREFIX} 签到卡开始渲染: 画质={spec.name} "
+                    f"输出尺寸={spec.expected_size[0]}x{spec.expected_size[1]} "
+                    f"背景模式={_checkin_background_mode_label(background)}"
                 )
                 if cache is None:
                     card_path = Path(await render_card())
@@ -422,18 +434,20 @@ class CheckinArtworkMixin:
                         )
                     )
                 render_succeeded = True
-                logger.debug(
-                    f"{LOG_PREFIX} 签到卡渲染完成: tier={spec.name} "
-                    f"elapsed_ms={int((time.monotonic() - started_at) * 1000)}"
+                logger.info(
+                    f"{LOG_PREFIX} 签到卡渲染完成：画质={spec.name} "
+                    f"输出尺寸={spec.expected_size[0]}x{spec.expected_size[1]} "
+                    f"耗时={int((time.monotonic() - started_at) * 1000)}ms"
                 )
                 return card_path, spec.name
             except Exception as exc:
                 last_error = exc
                 has_lower_tier = tier_index + 1 < len(fallback_specs)
                 logger.warning(
-                    f"{LOG_PREFIX} 签到卡渲染失败: tier={spec.name} "
-                    f"fallback={'yes' if has_lower_tier else 'no'} "
-                    f"error_type={type(exc).__name__}"
+                    f"{LOG_PREFIX} 签到卡渲染失败: 画质={spec.name} "
+                    f"输出尺寸={spec.expected_size[0]}x{spec.expected_size[1]} "
+                    f"是否降档={'是' if has_lower_tier else '否'} "
+                    f"错误类型={type(exc).__name__}"
                 )
             finally:
                 if cache is not None or not render_succeeded:

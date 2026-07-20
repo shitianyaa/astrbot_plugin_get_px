@@ -25,6 +25,15 @@ LOG_PREFIX = "[GetPx]"
 DEFAULT_AUTO_DOWNGRADE_ORIGINAL_LIMIT_MB = 3.0
 
 
+def _checkin_background_mode_label(mode: object) -> str:
+    value = str(mode or "none")
+    return {
+        "pixiv_daily": "在线图片",
+        "custom": "自定义背景",
+        "fallback": "占位图",
+    }.get(value, value)
+
+
 @dataclass(frozen=True)
 class QQBirthdayLookup:
     value: tuple[int, int] | None
@@ -320,22 +329,22 @@ class CheckinApplicationMixin:
                         f"{LOG_PREFIX} 签到背景使用记录失败，保留已发送图片占用: "
                         f"error_type={type(exc).__name__}"
                     )
-                logger.debug(
-                    f"{LOG_PREFIX} 签到卡发送完成: tier={actual_tier} "
-                    f"cache_hit={'yes' if cache_hit else 'no'} "
-                    f"background_mode={getattr(background, 'mode', 'none') or 'none'}"
+                logger.info(
+                    f"{LOG_PREFIX} 签到卡发送完成：实际画质={actual_tier} "
+                    f"缓存命中={'是' if cache_hit else '否'} "
+                    f"背景模式={_checkin_background_mode_label(getattr(background, 'mode', 'none'))}"
                 )
                 return
         except Exception as e:
             card_path = None
             logger.warning(
                 f"{LOG_PREFIX} 签到卡回退纯文字: stage={stage} "
-                f"preferred_tier={preferred_tier} "
-                f"error_type={type(e).__name__}"
+                f"首选画质={preferred_tier} "
+                f"错误类型={type(e).__name__}"
             )
         finally:
             try:
-                if claim_held:
+                if claim_held and self._checkin_background_claims_enabled():
                     can_release_claim = True
                     if background_persisted:
                         try:

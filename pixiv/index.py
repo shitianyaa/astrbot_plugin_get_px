@@ -64,15 +64,15 @@ class ImageIndexStore:
                 self._retention_days = previous_days
                 logger.warning(
                     f"{LOG_PREFIX} 图片去重配置应用失败: "
-                    f"previous_days={previous_days}, requested_days={days}, "
-                    f"error_type={type(exc).__name__}"
+                    f"原天数={previous_days}，新天数={days}，"
+                    f"错误类型={type(exc).__name__}"
                 )
                 raise
         status = "disabled" if days == 0 else "enabled"
         logger.info(
             f"{LOG_PREFIX} 图片去重配置已应用: "
-            f"previous_days={previous_days}, retention_days={days}, "
-            f"removed={removed}, status={status}"
+            f"原天数={previous_days}，当前天数={days}，"
+            f"清理数量={removed}，状态={'关闭' if status == 'disabled' else '启用'}"
         )
         return days
 
@@ -105,7 +105,7 @@ class ImageIndexStore:
             except Exception as exc:
                 logger.warning(
                     f"{LOG_PREFIX} 关闭图片索引连接失败: "
-                    f"error_type={type(exc).__name__}"
+                    f"错误类型={type(exc).__name__}"
                 )
             self._conn = None
 
@@ -120,15 +120,15 @@ class ImageIndexStore:
         except Exception as exc:
             logger.warning(
                 f"{LOG_PREFIX} 图片去重索引清理失败: "
-                f"trigger={trigger}, retention_days={self._retention_days}, "
-                f"error_type={type(exc).__name__}"
+                f"触发方式={trigger}，保留天数={self._retention_days}，"
+                f"错误类型={type(exc).__name__}"
             )
             raise
         status = "disabled" if self._retention_days == 0 else "enabled"
         logger.info(
             f"{LOG_PREFIX} 图片去重索引清理完成: "
-            f"trigger={trigger}, retention_days={self._retention_days}, "
-            f"removed={removed}, status={status}"
+            f"触发方式={trigger}，保留天数={self._retention_days}，"
+            f"清理数量={removed}，状态={'关闭' if status == 'disabled' else '启用'}"
         )
         return removed
 
@@ -168,9 +168,9 @@ class ImageIndexStore:
         except Exception as exc:
             logger.warning(
                 f"{LOG_PREFIX} 图片去重索引操作失败: "
-                f"operation=record, feature={feature}, "
-                f"retention_days={self._retention_days}, "
-                f"error_type={type(exc).__name__}"
+                f"操作=记录占用，功能={feature}，"
+                f"保留天数={self._retention_days}，"
+                f"错误类型={type(exc).__name__}"
             )
             raise
 
@@ -331,9 +331,8 @@ class ImageIndexStore:
         except Exception as exc:
             logger.warning(
                 f"{LOG_PREFIX} 图片去重索引操作失败: "
-                f"operation=claim, feature={feature}, "
-                f"retention_days={self._retention_days}, "
-                f"error_type={type(exc).__name__}"
+                f"操作=占用，功能={feature}，保留天数={self._retention_days}，"
+                f"错误类型={type(exc).__name__}"
             )
             raise
 
@@ -362,9 +361,8 @@ class ImageIndexStore:
         except Exception as exc:
             logger.warning(
                 f"{LOG_PREFIX} 图片去重索引操作失败: "
-                f"operation=release, feature={feature}, "
-                f"retention_days={self._retention_days}, "
-                f"error_type={type(exc).__name__}"
+                f"操作=释放，功能={feature}，保留天数={self._retention_days}，"
+                f"错误类型={type(exc).__name__}"
             )
             raise
 
@@ -466,8 +464,7 @@ class ImageIndexStore:
         if removed > 0:
             logger.info(
                 f"{LOG_PREFIX} 已清理过期图片去重索引: "
-                f"trigger=periodic, retention_days={self._retention_days}, "
-                f"removed={removed}"
+                f"触发方式=定时，保留天数={self._retention_days}，清理数量={removed}"
             )
 
     def _get_page_offset_sync(self, scope: str, source_key: str) -> int:

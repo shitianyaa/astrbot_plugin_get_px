@@ -11,8 +11,7 @@
 
 签到指令：
     /签到                      每日签到
-    /签到中心                  查看签到功能分组
-    /签到帮助                  发送签到中心帮助图
+    /签到帮助                  发送签到指令帮助图
 """
 
 # 注意：不要在本模块使用 `from __future__ import annotations`。
@@ -59,8 +58,8 @@ WEB_INTERNAL_ERROR_MESSAGE = "服务内部错误，请稍后重试"
 
 AUTO_TRIGGER_PATTERN = r"^/?(来\s*(.*?)(份|个|张|点))(.*?)(福利|色|瑟|涩|塞)?图$"
 CHECKIN_REGEX_PATTERN = r"^(?!/)签到$"
-CHECKIN_CENTER_HELP_IMAGE = (
-    Path(__file__).resolve().parent / "assets" / "checkin_center_help_v3.png"
+CHECKIN_HELP_IMAGE = (
+    Path(__file__).resolve().parent / "assets" / "checkin_help_v4.png"
 )
 
 
@@ -341,34 +340,30 @@ class GetPxPlugin(
 
     @filter.command("签到帮助")
     async def cmd_checkin_help(self, event: AstrMessageEvent):
-        """发送签到中心功能帮助图。"""
+        """发送签到功能帮助图。"""
         event.stop_event()
-        if not CHECKIN_CENTER_HELP_IMAGE.is_file():
+        if not CHECKIN_HELP_IMAGE.is_file():
             logger.error(
-                f"{LOG_PREFIX} 签到中心帮助图片不存在: {CHECKIN_CENTER_HELP_IMAGE}"
+                f"{LOG_PREFIX} 签到帮助图片不存在: {CHECKIN_HELP_IMAGE}"
             )
-            yield event.plain_result("签到中心帮助图片缺失，请联系管理员重新安装插件")
+            yield event.plain_result("签到帮助图片缺失，请联系管理员重新安装插件")
             return
         yield event.chain_result(
-            [Image.fromFileSystem(str(CHECKIN_CENTER_HELP_IMAGE))]
+            [Image.fromFileSystem(str(CHECKIN_HELP_IMAGE))]
         )
 
-    @filter.command_group("签到中心")
-    def checkin_center(self):
-        """签到功能中心。"""
-
-    @checkin_center.group("我的")
-    def checkin_personal(self):
+    @filter.command_group("签到我的")
+    def checkin_my(self):
         """个人签到资料。"""
 
-    @checkin_personal.command("状态")
+    @checkin_my.command("状态")
     async def cmd_checkin_status(self, event: AstrMessageEvent):
         """查看金币、好感度和连续签到状态。"""
         event.stop_event()
         async for result in self._handle_checkin_status(event):
             yield result
 
-    @checkin_personal.command("生日")
+    @checkin_my.command("生日")
     async def cmd_checkin_birthday(
         self, event: AstrMessageEvent, action: str = "", value: str = ""
     ):
@@ -378,13 +373,13 @@ class GetPxPlugin(
             await self._handle_checkin_birthday(event, action, value)
         )
 
-    @checkin_personal.command("成就")
+    @checkin_my.command("成就")
     async def cmd_checkin_achievements(self, event: AstrMessageEvent):
         """查看签到成就。"""
         event.stop_event()
         yield event.plain_result(await self._handle_checkin_achievements(event))
 
-    @checkin_personal.group("称号")
+    @checkin_my.group("称号")
     def checkin_titles(self):
         """查看和佩戴签到称号。"""
 
@@ -400,11 +395,33 @@ class GetPxPlugin(
         event.stop_event()
         yield event.plain_result(await self._handle_select_checkin_title(event, title))
 
-    @checkin_center.command("排行")
-    async def cmd_checkin_ranking(self, event: AstrMessageEvent, mode: str = ""):
+    @filter.command_group("签到排行")
+    def checkin_ranking(self):
         """查看当前群的签到排行。"""
+
+    @checkin_ranking.command("今日")
+    async def cmd_checkin_ranking_today(self, event: AstrMessageEvent):
+        """查看今日签到排行。"""
         event.stop_event()
-        yield event.plain_result(await self._handle_checkin_ranking(event, mode))
+        yield event.plain_result(await self._handle_checkin_ranking(event, "今日"))
+
+    @checkin_ranking.command("月榜")
+    async def cmd_checkin_ranking_month(self, event: AstrMessageEvent):
+        """查看本月签到排行。"""
+        event.stop_event()
+        yield event.plain_result(await self._handle_checkin_ranking(event, "月榜"))
+
+    @checkin_ranking.command("连签")
+    async def cmd_checkin_ranking_streak(self, event: AstrMessageEvent):
+        """查看连续签到排行。"""
+        event.stop_event()
+        yield event.plain_result(await self._handle_checkin_ranking(event, "连签"))
+
+    @checkin_ranking.command("累计")
+    async def cmd_checkin_ranking_total(self, event: AstrMessageEvent):
+        """查看累计签到排行。"""
+        event.stop_event()
+        yield event.plain_result(await self._handle_checkin_ranking(event, "累计"))
 
     @filter.regex(CHECKIN_REGEX_PATTERN)
     async def checkin_auto_trigger(self, event: AstrMessageEvent):
@@ -415,7 +432,7 @@ class GetPxPlugin(
         async for result in self._handle_checkin(event, silent_when_disabled=True):
             yield result
 
-    @checkin_center.group("商店")
+    @filter.command_group("签到商店")
     def checkin_shop(self):
         """签到金币商店。"""
 
@@ -470,7 +487,7 @@ class GetPxPlugin(
         async for result in self._handle_refresh_checkin_background(event):
             yield result
 
-    @checkin_center.group("管理")
+    @filter.command_group("签到管理")
     def checkin_admin(self):
         """管理员签到维护功能。"""
 
@@ -504,11 +521,11 @@ class GetPxPlugin(
         """管理员维护全局签到纪念日。"""
         event.stop_event()
         parts = event.get_message_str().strip().split(maxsplit=6)
-        if parts[:3] == ["签到中心", "管理", "事件"]:
-            action = parts[3] if len(parts) > 3 else action
-            event_type = parts[4] if len(parts) > 4 else event_type
-            date_value = parts[5] if len(parts) > 5 else date_value
-            name = parts[6] if len(parts) > 6 else name
+        if parts[:2] == ["签到管理", "事件"]:
+            action = parts[2] if len(parts) > 2 else action
+            event_type = parts[3] if len(parts) > 3 else event_type
+            date_value = parts[4] if len(parts) > 4 else date_value
+            name = parts[5] if len(parts) > 5 else name
         yield event.plain_result(
             await self._handle_checkin_event_admin(
                 event, action, event_type, date_value, name

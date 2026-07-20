@@ -141,10 +141,10 @@ class ImageIndexStoreTest(unittest.IsolatedAsyncioTestCase):
 
                 self.assertEqual(removed, 0)
                 message = str(mocked_logger.info.call_args.args[0])
-                self.assertIn("trigger=startup", message)
-                self.assertIn("retention_days=1", message)
-                self.assertIn("removed=0", message)
-                self.assertIn("status=enabled", message)
+                self.assertIn("触发方式=startup", message)
+                self.assertIn("保留天数=1", message)
+                self.assertIn("清理数量=0", message)
+                self.assertIn("状态=启用", message)
             finally:
                 store.close()
 
@@ -192,9 +192,9 @@ class ImageIndexStoreTest(unittest.IsolatedAsyncioTestCase):
 
                 self.assertEqual(store.retention_days, 7)
                 message = str(mocked_logger.warning.call_args.args[0])
-                self.assertIn("previous_days=7", message)
-                self.assertIn("requested_days=1", message)
-                self.assertIn("error_type=RuntimeError", message)
+                self.assertIn("原天数=7", message)
+                self.assertIn("新天数=1", message)
+                self.assertIn("错误类型=RuntimeError", message)
                 self.assertNotIn("private.example", message)
                 self.assertNotIn("secret", message)
             finally:
@@ -247,9 +247,9 @@ class ImageIndexStoreTest(unittest.IsolatedAsyncioTestCase):
                         )
 
                 claim_message = str(mocked_logger.warning.call_args.args[0])
-                self.assertIn("operation=claim", claim_message)
-                self.assertIn("feature=normal_pending", claim_message)
-                self.assertIn("error_type=OperationalError", claim_message)
+                self.assertIn("操作=占用", claim_message)
+                self.assertIn("功能=normal_pending", claim_message)
+                self.assertIn("错误类型=OperationalError", claim_message)
                 self.assertNotIn("private.example", claim_message)
                 self.assertNotIn("user-secret", claim_message)
                 self.assertNotIn("private-tag", claim_message)
@@ -274,9 +274,9 @@ class ImageIndexStoreTest(unittest.IsolatedAsyncioTestCase):
                         )
 
                 release_message = str(mocked_logger.warning.call_args.args[0])
-                self.assertIn("operation=release", release_message)
-                self.assertIn("feature=normal_pending", release_message)
-                self.assertIn("error_type=OperationalError", release_message)
+                self.assertIn("操作=释放", release_message)
+                self.assertIn("功能=normal_pending", release_message)
+                self.assertIn("错误类型=OperationalError", release_message)
                 self.assertNotIn("private.example", release_message)
                 self.assertNotIn("user-secret", release_message)
                 self.assertNotIn("private-tag", release_message)
@@ -308,9 +308,9 @@ class ImageIndexStoreTest(unittest.IsolatedAsyncioTestCase):
                         )
 
                 message = str(mocked_logger.warning.call_args.args[0])
-                self.assertIn("operation=record", message)
-                self.assertIn("feature=normal", message)
-                self.assertIn("error_type=OperationalError", message)
+                self.assertIn("操作=记录占用", message)
+                self.assertIn("功能=normal", message)
+                self.assertIn("错误类型=OperationalError", message)
                 self.assertNotIn("private.example", message)
                 self.assertNotIn("user-secret", message)
                 self.assertNotIn("private-tag", message)
@@ -503,10 +503,10 @@ class ImageIndexStoreTest(unittest.IsolatedAsyncioTestCase):
                     set(),
                 )
                 message = str(mocked_logger.info.call_args.args[0])
-                self.assertIn("previous_days=7", message)
-                self.assertIn("retention_days=1", message)
-                self.assertIn("removed=1", message)
-                self.assertIn("status=enabled", message)
+                self.assertIn("原天数=7", message)
+                self.assertIn("当前天数=1", message)
+                self.assertIn("清理数量=1", message)
+                self.assertIn("状态=启用", message)
             finally:
                 store.close()
 
@@ -584,9 +584,9 @@ class ImageIndexStoreTest(unittest.IsolatedAsyncioTestCase):
                 ).fetchone()
                 self.assertEqual(row["count"], 0)
                 message = str(mocked_logger.info.call_args.args[0])
-                self.assertIn("retention_days=0", message)
-                self.assertIn("removed=1", message)
-                self.assertIn("status=disabled", message)
+                self.assertIn("当前天数=0", message)
+                self.assertIn("清理数量=1", message)
+                self.assertIn("状态=关闭", message)
             finally:
                 store.close()
 
