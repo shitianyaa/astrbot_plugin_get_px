@@ -124,6 +124,12 @@
 
 ## WebUI 插件管理中心
 
+<div align="center">
+<img src="Webui.png" alt="插件管理中心界面" width="100%">
+</div>
+
+<br>
+
 AstrBot WebUI 插件页的「pluginCenter」可：
 
 - 按群查看今日 / 月度 / 连签 / 累计排行与 7/30 天趋势
