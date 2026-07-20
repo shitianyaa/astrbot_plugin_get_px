@@ -355,8 +355,8 @@ class ImageDownloader:
                         f"{LOG_PREFIX} {log_context} 图片下载完成: "
                         f"quality={quality_label} route={route_label} "
                         f"attempts={attempts} "
-                        f"size_kb={file_size / 1024:.2f} "
-                        f"duration_ms={int((time.monotonic() - started_at) * 1000)}"
+                        f"size={file_size / 1024:.2f}KB "
+                        f"duration={int((time.monotonic() - started_at) * 1000)}ms"
                     )
                     return path, actual_quality, file_size
 

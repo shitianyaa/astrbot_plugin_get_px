@@ -452,8 +452,8 @@ class ImageDownloaderProxyFallbackTest(unittest.IsolatedAsyncioTestCase):
         self.assertIn("quality=原图", info_messages)
         self.assertIn("route=图片源返回地址", info_messages)
         self.assertIn("attempts=2", info_messages)
-        self.assertIn("size_kb=0.00", info_messages)
-        self.assertRegex(info_messages, r"duration_ms=\d+")
+        self.assertIn("size=0.00KB", info_messages)
+        self.assertRegex(info_messages, r"duration=\d+ms")
         self.assertNotIn("token=secret", messages)
         self.assertNotIn("token=secret", info_messages)
 
