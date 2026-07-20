@@ -204,7 +204,7 @@ class ImageProxyOriginTest(unittest.TestCase):
         )
         self.assertIn("invalid_count=3", messages)
         self.assertIn("sample_lines=3,4,5", messages)
-        self.assertIn("仅使用前 5 个有效地址", messages)
+        self.assertIn("max_origins=5", messages)
 
     def test_config_summary_only_logs_valid_origin_count(self):
         raw = "https://proxy.example.com\nhttps://user:secret@example.com"
@@ -446,19 +446,14 @@ class ImageDownloaderProxyFallbackTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual((path, quality, size), (str(result_path), "original", 2))
         messages = " ".join(str(call) for call in debug.call_args_list)
         self.assertIn("reason=runtime_error", messages)
-        self.assertIn("尝试 Lolicon 返回地址", messages)
+        self.assertIn("尝试源地址", messages)
         info_messages = " ".join(str(call) for call in info.call_args_list)
         self.assertIn("图片下载完成", info_messages)
-        self.assertIn("画质=原图", info_messages)
-        self.assertIn("下载路径=图片源返回地址", info_messages)
-        self.assertIn("尝试次数=2", info_messages)
-        self.assertIn("大小=0.00KB", info_messages)
-        self.assertRegex(info_messages, r"耗时=\d+ms")
-        self.assertNotIn("quality=", info_messages)
-        self.assertNotIn("route=", info_messages)
-        self.assertNotIn("attempts=", info_messages)
-        self.assertNotIn("size_bytes=", info_messages)
-        self.assertNotIn("elapsed_ms=", info_messages)
+        self.assertIn("quality=原图", info_messages)
+        self.assertIn("route=图片源返回地址", info_messages)
+        self.assertIn("attempts=2", info_messages)
+        self.assertIn("size_kb=0.00", info_messages)
+        self.assertRegex(info_messages, r"duration_ms=\d+")
         self.assertNotIn("token=secret", messages)
         self.assertNotIn("token=secret", info_messages)
 
@@ -508,7 +503,7 @@ class ImageDownloaderProxyFallbackTest(unittest.IsolatedAsyncioTestCase):
 
         downloader.download = fake_download  # type: ignore[method-assign]
         with mock.patch.object(dl.logger, "warning") as warning:
-            with self.assertRaisesRegex(RuntimeError, "已尝试 8 个地址"):
+            with self.assertRaisesRegex(RuntimeError, "attempts=8"):
                 await downloader.download_for_send(
                     self._proxy_illust(),
                     quality="original",
@@ -577,9 +572,9 @@ class ImageDownloaderProxyFallbackTest(unittest.IsolatedAsyncioTestCase):
         messages = " ".join(str(call) for call in info.call_args_list)
         self.assertIn("作品 [url]", messages)
         self.assertIn("图片下载完成", messages)
-        self.assertIn("画质=原图", messages)
-        self.assertIn("下载路径=直连地址", messages)
-        self.assertIn("尝试次数=1", messages)
+        self.assertIn("quality=原图", messages)
+        self.assertIn("route=直连地址", messages)
+        self.assertIn("attempts=1", messages)
         self.assertNotIn("token=secret", messages)
         self.assertNotIn("作品\\n", messages)
 
@@ -590,7 +585,7 @@ class ImageDownloaderProxyFallbackTest(unittest.IsolatedAsyncioTestCase):
             raise asyncio.TimeoutError("endpoint included ?token=secret")
 
         downloader.download = fake_download  # type: ignore[method-assign]
-        with self.assertRaisesRegex(asyncio.TimeoutError, "已尝试"):
+        with self.assertRaisesRegex(asyncio.TimeoutError, "attempts=8"):
             await downloader.download_for_send(
                 self._proxy_illust(),
                 quality="original",

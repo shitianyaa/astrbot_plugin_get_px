@@ -119,7 +119,7 @@ class CheckinGreetingGenerator:
             self._warning_log_times[reason] = now
             logger.warning(message)
         else:
-            logger.debug(f"{message} 已抑制=是")
+            logger.debug(f"{message} suppressed=true")
 
     def _ensure_session(self) -> aiohttp.ClientSession:
         if self._closed:
@@ -148,8 +148,8 @@ class CheckinGreetingGenerator:
         started_at = time.monotonic()
         if not enabled:
             logger.debug(
-                f"{LOG_PREFIX} AI 签到问候完成：结果=本地文案 原因=未启用 "
-                "模型来源=无 耗时=0ms"
+                f"{LOG_PREFIX} AI 签到问候完成: result=本地文案 reason=未启用 "
+                "provider=无 duration_ms=0"
             )
             return fallback
 
@@ -167,17 +167,17 @@ class CheckinGreetingGenerator:
                 elapsed_ms = int((time.monotonic() - started_at) * 1000)
                 self._warning(
                     "provider_lookup_error",
-                    f"{LOG_PREFIX} AI 签到问候完成：结果=本地文案 "
-                    f"原因=模型查询失败 模型来源=当前会话 耗时={elapsed_ms}ms "
-                    f"错误类型={type(exc).__name__}"
+                    f"{LOG_PREFIX} AI 签到问候完成: result=本地文案 "
+                    f"reason=模型查询失败 provider=当前会话 duration_ms={elapsed_ms} "
+                    f"error_type={type(exc).__name__}"
                 )
                 return fallback
         if not resolved_provider:
             elapsed_ms = int((time.monotonic() - started_at) * 1000)
             self._warning(
                 "no_provider",
-                f"{LOG_PREFIX} AI 签到问候完成：结果=本地文案 原因=未找到模型 "
-                f"模型来源=当前会话 耗时={elapsed_ms}ms"
+                f"{LOG_PREFIX} AI 签到问候完成: result=本地文案 reason=no_model "
+                f"provider=当前会话 duration_ms={elapsed_ms}"
             )
             return fallback
 
@@ -196,17 +196,17 @@ class CheckinGreetingGenerator:
             elapsed_ms = int((time.monotonic() - started_at) * 1000)
             self._warning(
                 "timeout",
-                f"{LOG_PREFIX} AI 签到问候完成：结果=本地文案 原因=超时 "
-                f"模型来源={_greeting_provider_label(provider_source)} 耗时={elapsed_ms}ms"
+                f"{LOG_PREFIX} AI 签到问候完成: result=本地文案 reason=超时 "
+                f"provider={_greeting_provider_label(provider_source)} duration_ms={elapsed_ms}"
             )
             return fallback
         except Exception as exc:
             elapsed_ms = int((time.monotonic() - started_at) * 1000)
             self._warning(
                 "provider_error",
-                f"{LOG_PREFIX} AI 签到问候完成：结果=本地文案 原因=模型调用失败 "
-                f"模型来源={_greeting_provider_label(provider_source)} 耗时={elapsed_ms}ms "
-                f"错误类型={type(exc).__name__}"
+                f"{LOG_PREFIX} AI 签到问候完成: result=本地文案 reason=模型调用失败 "
+                f"provider={_greeting_provider_label(provider_source)} duration_ms={elapsed_ms} "
+                f"error_type={type(exc).__name__}"
             )
             return fallback
 
@@ -217,17 +217,17 @@ class CheckinGreetingGenerator:
                 elapsed_ms = int((time.monotonic() - started_at) * 1000)
                 self._warning(
                     reason,
-                    f"{LOG_PREFIX} AI 签到问候完成：结果=本地文案 "
-                    f"原因={_greeting_reason_label(reason)} "
-                    f"模型来源={_greeting_provider_label(provider_source)} 耗时={elapsed_ms}ms"
+                    f"{LOG_PREFIX} AI 签到问候完成: result=本地文案 "
+                    f"reason={_greeting_reason_label(reason)} "
+                    f"provider={_greeting_provider_label(provider_source)} duration_ms={elapsed_ms}"
                 )
                 return fallback
             if getattr(response, "tools_call_name", None):
                 elapsed_ms = int((time.monotonic() - started_at) * 1000)
                 self._warning(
                     "tool_response",
-                    f"{LOG_PREFIX} AI 签到问候完成：结果=本地文案 原因=工具调用响应 "
-                    f"模型来源={_greeting_provider_label(provider_source)} 耗时={elapsed_ms}ms"
+                    f"{LOG_PREFIX} AI 签到问候完成: result=本地文案 reason=工具调用响应 "
+                    f"provider={_greeting_provider_label(provider_source)} duration_ms={elapsed_ms}"
                 )
                 return fallback
             text, reason = self._normalize_response_with_reason(
@@ -237,33 +237,33 @@ class CheckinGreetingGenerator:
             elapsed_ms = int((time.monotonic() - started_at) * 1000)
             self._warning(
                 "invalid_response",
-                f"{LOG_PREFIX} AI 签到问候完成：结果=本地文案 原因=响应格式无效 "
-                f"模型来源={_greeting_provider_label(provider_source)} 耗时={elapsed_ms}ms "
-                f"错误类型={type(exc).__name__}"
+                f"{LOG_PREFIX} AI 签到问候完成: result=本地文案 reason=响应格式无效 "
+                f"provider={_greeting_provider_label(provider_source)} duration_ms={elapsed_ms} "
+                f"error_type={type(exc).__name__}"
             )
             return fallback
 
         if not text:
             elapsed_ms = int((time.monotonic() - started_at) * 1000)
             logger.debug(
-                f"{LOG_PREFIX} AI 签到问候完成：结果=本地文案 "
-                f"原因={_greeting_reason_label(reason)} "
-                f"模型来源={_greeting_provider_label(provider_source)} 耗时={elapsed_ms}ms"
+                f"{LOG_PREFIX} AI 签到问候完成: result=本地文案 "
+                f"reason={_greeting_reason_label(reason)} "
+                f"provider={_greeting_provider_label(provider_source)} duration_ms={elapsed_ms}"
             )
             return fallback
         if len(text) > MAX_GREETING_LENGTH:
             elapsed_ms = int((time.monotonic() - started_at) * 1000)
             logger.debug(
-                f"{LOG_PREFIX} AI 签到问候完成：结果=本地文案 原因=内容过长 "
-                f"模型来源={_greeting_provider_label(provider_source)} 耗时={elapsed_ms}ms "
-                f"输出长度={len(text)}"
+                f"{LOG_PREFIX} AI 签到问候完成: result=本地文案 reason=内容过长 "
+                f"provider={_greeting_provider_label(provider_source)} duration_ms={elapsed_ms} "
+                f"output_length={len(text)}"
             )
             return fallback
         elapsed_ms = int((time.monotonic() - started_at) * 1000)
         logger.debug(
-            f"{LOG_PREFIX} AI 签到问候完成：结果=AI 原因=成功 "
-            f"模型来源={_greeting_provider_label(provider_source)} 耗时={elapsed_ms}ms "
-            f"输出长度={len(text)}"
+            f"{LOG_PREFIX} AI 签到问候完成: result=AI reason=成功 "
+            f"provider={_greeting_provider_label(provider_source)} duration_ms={elapsed_ms} "
+            f"output_length={len(text)}"
         )
         return text, "ai"
 
@@ -295,31 +295,31 @@ class CheckinGreetingGenerator:
             elapsed_ms = int((time.monotonic() - started_at) * 1000)
             self._warning(
                 "hitokoto_request_error",
-                f"{LOG_PREFIX} 一言签到问候完成：结果=本地文案 原因=请求失败 "
-                f"耗时={elapsed_ms}ms 错误类型={type(exc).__name__}",
+                f"{LOG_PREFIX} 一言签到问候完成: result=本地文案 reason=请求失败 "
+                f"duration_ms={elapsed_ms} error_type={type(exc).__name__}",
             )
             return fallback
 
         if not isinstance(payload, dict):
             elapsed_ms = int((time.monotonic() - started_at) * 1000)
             logger.debug(
-                f"{LOG_PREFIX} 一言签到问候完成：结果=本地文案 原因=返回格式无效 "
-                f"耗时={elapsed_ms}ms"
+                f"{LOG_PREFIX} 一言签到问候完成: result=本地文案 reason=返回格式无效 "
+                f"duration_ms={elapsed_ms}"
             )
             return fallback
         text, reason = self._normalize_response_with_reason(payload.get("hitokoto", ""))
         if not text:
             elapsed_ms = int((time.monotonic() - started_at) * 1000)
             logger.debug(
-                f"{LOG_PREFIX} 一言签到问候完成：结果=本地文案 "
-                f"原因={_greeting_reason_label(reason)} 耗时={elapsed_ms}ms"
+                f"{LOG_PREFIX} 一言签到问候完成: result=本地文案 "
+                f"reason={_greeting_reason_label(reason)} duration_ms={elapsed_ms}"
             )
             return fallback
         if len(text) > HITOKOTO_MAX_LENGTH:
             elapsed_ms = int((time.monotonic() - started_at) * 1000)
             logger.debug(
-                f"{LOG_PREFIX} 一言签到问候完成：结果=本地文案 原因=内容过长 "
-                f"耗时={elapsed_ms}ms 输出长度={len(text)}"
+                f"{LOG_PREFIX} 一言签到问候完成: result=本地文案 reason=内容过长 "
+                f"duration_ms={elapsed_ms} output_length={len(text)}"
             )
             return fallback
         attribution = self._hitokoto_attribution(
@@ -327,8 +327,8 @@ class CheckinGreetingGenerator:
         )
         elapsed_ms = int((time.monotonic() - started_at) * 1000)
         logger.debug(
-            f"{LOG_PREFIX} 一言签到问候完成：结果=一言 原因=成功 "
-            f"耗时={elapsed_ms}ms 输出长度={len(text)}"
+            f"{LOG_PREFIX} 一言签到问候完成: result=一言 reason=成功 "
+            f"duration_ms={elapsed_ms} output_length={len(text)}"
         )
         return text, "hitokoto", attribution
 

@@ -98,7 +98,9 @@ class CheckinCommandMixin:
                 reverse=True,
             )
         except OSError as exc:
-            logger.warning(f"{LOG_PREFIX} 签到备份扫描失败: {type(exc).__name__}")
+            logger.warning(
+                f"{LOG_PREFIX} 签到备份扫描失败: error_type={type(exc).__name__}"
+            )
             return
         retained = set(candidates[:MAX_CHECKIN_BACKUP_FILES])
         if keep is not None:
@@ -113,10 +115,12 @@ class CheckinCommandMixin:
             except OSError as exc:
                 logger.warning(
                     f"{LOG_PREFIX} 签到旧备份清理失败: "
-                    f"文件={item.name} 错误类型={type(exc).__name__}"
+                    f"file={item.name} error_type={type(exc).__name__}"
                 )
         if removed:
-            logger.info(f"{LOG_PREFIX} 签到旧备份已清理: 清理数量={removed}")
+            logger.info(
+                f"{LOG_PREFIX} 签到旧备份已清理: removed_count={removed}"
+            )
 
     async def _read_uploaded_file_bytes(self, upload) -> bytes:
         filename = str(getattr(upload, "filename", "") or "").strip() or "upload.json"

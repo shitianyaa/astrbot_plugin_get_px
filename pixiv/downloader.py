@@ -146,8 +146,8 @@ def parse_proxy_origins(raw_origins: object) -> tuple[str, ...]:
         if len(origins) >= MAX_PROXY_ORIGINS:
             if not limit_warning_logged:
                 logger.warning(
-                    f"{LOG_PREFIX} Lolicon 图片反代地址超过上限，"
-                    f"仅使用前 {MAX_PROXY_ORIGINS} 个有效地址"
+                    f"{LOG_PREFIX} Lolicon 图片反代地址超过上限: "
+                    f"max_origins={MAX_PROXY_ORIGINS}"
                 )
                 limit_warning_logged = True
             break
@@ -317,9 +317,8 @@ class ImageDownloader:
                 attempts += 1
                 if route == "returned" and has_proxy_routes:
                     logger.debug(
-                        f"{LOG_PREFIX} {log_context} 反代候选不可用，"
-                        f"尝试 Lolicon 返回地址: quality={actual_quality} "
-                        f"attempt={attempts}/{MAX_DOWNLOAD_ATTEMPTS}"
+                        f"{LOG_PREFIX} {log_context} 反代候选不可用，尝试源地址: "
+                        f"quality={actual_quality} attempt={attempts}/{MAX_DOWNLOAD_ATTEMPTS}"
                     )
                 path = ""
                 try:
@@ -353,20 +352,20 @@ class ImageDownloader:
                         route, illust.get("_source")
                     )
                     logger.info(
-                        f"{LOG_PREFIX} {log_context} 图片下载完成："
-                        f"画质={quality_label} 下载路径={route_label} "
-                        f"尝试次数={attempts} "
-                        f"大小={file_size / 1024:.2f}KB "
-                        f"耗时={int((time.monotonic() - started_at) * 1000)}ms"
+                        f"{LOG_PREFIX} {log_context} 图片下载完成: "
+                        f"quality={quality_label} route={route_label} "
+                        f"attempts={attempts} "
+                        f"size_kb={file_size / 1024:.2f} "
+                        f"duration_ms={int((time.monotonic() - started_at) * 1000)}"
                     )
                     return path, actual_quality, file_size
 
                 if actual_quality == "original":
                     enforce_downgrade_limit = True
                     logger.info(
-                        f"{LOG_PREFIX} {log_context} 原图超过 "
-                        f"{downgrade_limit_bytes / 1024 / 1024:.2f} MiB "
-                        f"({file_size / 1024 / 1024:.2f} MiB)，自动降低质量"
+                        f"{LOG_PREFIX} {log_context} 原图超过阈值，自动降低画质: "
+                        f"threshold_mib={downgrade_limit_bytes / 1024 / 1024:.2f} "
+                        f"actual_mib={file_size / 1024 / 1024:.2f}"
                     )
                 else:
                     logger.debug(
@@ -390,7 +389,7 @@ class ImageDownloader:
             if quality_error is not None:
                 logger.debug(
                     f"{LOG_PREFIX} {log_context} quality={actual_quality} 不可用，"
-                    "尝试下一质量"
+                    "尝试下一画质"
                 )
 
         if last_error is not None:
@@ -399,8 +398,7 @@ class ImageDownloader:
                 f"attempts={attempts} last_reason={last_reason}"
             )
             message = (
-                f"图片下载失败，已尝试 {attempts} 个地址 "
-                f"(reason={last_reason})"
+                f"图片下载失败: attempts={attempts} reason={last_reason}"
             )
             if failure_reasons and all(
                 reason == "timeout" for reason in failure_reasons

@@ -520,7 +520,7 @@ async def test_non_assistant_response_is_rejected_and_logged(monkeypatch) -> Non
 
     assert result == ("本地问候。", "local")
     message = str(mock_logger.warning.call_args.args[0])
-    assert "原因=响应角色错误" in message
+    assert "reason=响应角色错误" in message
     assert "provider failed" not in message
 
 
@@ -549,8 +549,8 @@ async def test_response_extraction_error_is_safely_logged(monkeypatch) -> None:
 
     assert result == ("本地问候。", "local")
     message = str(mock_logger.warning.call_args.args[0])
-    assert "原因=响应格式无效" in message
-    assert "错误类型=RuntimeError" in message
+    assert "reason=响应格式无效" in message
+    assert "error_type=RuntimeError" in message
     assert "token=secret" not in message
 
 
@@ -582,15 +582,15 @@ async def test_missing_provider_and_rejected_output_have_reason_logs(monkeypatch
     assert rejected == ("本地问候。", "local")
     warning_messages = [str(call.args[0]) for call in mock_logger.warning.call_args_list]
     debug_messages = [str(call.args[0]) for call in mock_logger.debug.call_args_list]
-    assert any("原因=未找到模型" in message for message in warning_messages)
-    assert any("原因=unsafe_markdown" in message for message in debug_messages)
+    assert any("reason=no_model" in message for message in warning_messages)
+    assert any("reason=unsafe_markdown" in message for message in debug_messages)
 
 
 @pytest.mark.asyncio
 async def test_repeated_provider_warning_is_rate_limited(monkeypatch) -> None:
-    generator = CheckinGreetingGenerator(FakeContext())
     mock_logger = MagicMock()
     monkeypatch.setattr(checkin_greeting, "logger", mock_logger)
+    generator = CheckinGreetingGenerator(FakeContext())
 
     for _ in range(2):
         await generator.generate(
@@ -604,7 +604,7 @@ async def test_repeated_provider_warning_is_rate_limited(monkeypatch) -> None:
 
     assert mock_logger.warning.call_count == 1
     assert any(
-        "原因=未找到模型" in str(call.args[0]) and "已抑制=是" in str(call.args[0])
+        "reason=no_model" in str(call.args[0]) and "suppressed=true" in str(call.args[0])
         for call in mock_logger.debug.call_args_list
     )
 
@@ -634,6 +634,6 @@ async def test_hitokoto_failure_log_does_not_include_exception_text(monkeypatch)
 
     assert result == ("本地问候。", "local", "")
     message = str(mock_logger.warning.call_args.args[0])
-    assert "原因=请求失败" in message
-    assert "错误类型=RuntimeError" in message
+    assert "reason=请求失败" in message
+    assert "error_type=RuntimeError" in message
     assert "token=secret" not in message
