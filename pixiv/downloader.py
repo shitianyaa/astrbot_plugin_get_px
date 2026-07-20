@@ -205,7 +205,7 @@ class ImageDownloader:
             await self._session.close()
             self._session = None
 
-    async def download(self, url: str, timeout: float) -> str:
+    async def download(self, url: str, timeout: float) -> tuple[str, int]:
         session = self._ensure_session()
         client_timeout = aiohttp.ClientTimeout(total=timeout)
         suffix = ".jpg"
@@ -247,7 +247,7 @@ class ImageDownloader:
                     image.verify()
             except (OSError, UnidentifiedImageError) as exc:
                 raise RuntimeError("响应内容不是有效图片") from exc
-            return path
+            return path, size
         except BaseException:
             if fd >= 0:
                 try:
@@ -323,8 +323,7 @@ class ImageDownloader:
                     )
                 path = ""
                 try:
-                    path = await self.download(url, timeout=timeout)
-                    file_size = os.path.getsize(path)
+                    path, file_size = await self.download(url, timeout=timeout)
                 except Exception as exc:
                     cleanup(path)
                     quality_error = exc

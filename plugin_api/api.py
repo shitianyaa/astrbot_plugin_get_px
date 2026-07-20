@@ -412,7 +412,7 @@ class PluginWebApi:
             cfg_float = getattr(self.plugin, "_cfg_float", None)
             if callable(cfg_float):
                 timeout = cfg_float("request_timeout", 30.0, 5.0, 120.0)
-            temp_path = await downloader.download(
+            temp_path, _ = await downloader.download(
                 url,
                 timeout=timeout,
             )

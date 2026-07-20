@@ -105,10 +105,11 @@ class ImageDownloaderSizeLimitTest(unittest.IsolatedAsyncioTestCase):
         payload = _image_bytes("PNG")
         resp = _FakeResponse(content_length=len(payload), chunks=[payload])
         downloader = _downloader_with(resp)
-        path = await downloader.download("http://x/a.png", timeout=5)
+        path, size = await downloader.download("http://x/a.png", timeout=5)
         try:
             self.assertTrue(os.path.isfile(path))
             self.assertTrue(path.endswith(".png"))
+            self.assertEqual(size, len(payload))
             with open(path, "rb") as handle:
                 self.assertEqual(handle.read(), payload)
         finally:
@@ -281,11 +282,13 @@ class ImageDownloaderDowngradeTest(unittest.IsolatedAsyncioTestCase):
 
             async def fake_download(url, timeout):
                 if url.endswith("original.jpg"):
-                    original_path.write_bytes(b"x" * 20)
-                    return str(original_path)
+                    data = b"x" * 20
+                    original_path.write_bytes(data)
+                    return str(original_path), len(data)
                 if url.endswith("large.jpg"):
-                    large_path.write_bytes(b"x" * 3)
-                    return str(large_path)
+                    data = b"x" * 3
+                    large_path.write_bytes(data)
+                    return str(large_path), len(data)
                 raise RuntimeError(url)
 
             downloader.download = fake_download  # type: ignore[method-assign]
@@ -318,8 +321,9 @@ class ImageDownloaderDowngradeTest(unittest.IsolatedAsyncioTestCase):
             async def fake_download(url, timeout):
                 quality = Path(url).stem
                 path = paths[quality]
-                path.write_bytes(b"x" * sizes[quality])
-                return str(path)
+                data = b"x" * sizes[quality]
+                path.write_bytes(data)
+                return str(path), len(data)
 
             downloader.download = fake_download  # type: ignore[method-assign]
 
@@ -343,8 +347,9 @@ class ImageDownloaderDowngradeTest(unittest.IsolatedAsyncioTestCase):
 
             async def fake_download(url, timeout):
                 if url.endswith("original.jpg"):
-                    original_path.write_bytes(b"x" * 20)
-                    return str(original_path)
+                    data = b"x" * 20
+                    original_path.write_bytes(data)
+                    return str(original_path), len(data)
                 raise RuntimeError("candidate failed")
 
             downloader.download = fake_download  # type: ignore[method-assign]
@@ -387,8 +392,9 @@ class ImageDownloaderProxyFallbackTest(unittest.IsolatedAsyncioTestCase):
             async def fake_download(url, timeout):
                 calls.append(url)
                 if url.startswith("https://proxy-two.example.com"):
-                    result_path.write_bytes(b"ok")
-                    return str(result_path)
+                    data = b"ok"
+                    result_path.write_bytes(data)
+                    return str(result_path), len(data)
                 raise RuntimeError("failed")
 
             downloader.download = fake_download  # type: ignore[method-assign]
@@ -420,8 +426,9 @@ class ImageDownloaderProxyFallbackTest(unittest.IsolatedAsyncioTestCase):
                     raise RuntimeError(
                         "upstream rejected https://proxy.example.com/a.jpg?token=secret"
                     )
-                result_path.write_bytes(b"ok")
-                return str(result_path)
+                data = b"ok"
+                result_path.write_bytes(data)
+                return str(result_path), len(data)
 
             downloader.download = fake_download  # type: ignore[method-assign]
             with (
@@ -464,8 +471,9 @@ class ImageDownloaderProxyFallbackTest(unittest.IsolatedAsyncioTestCase):
             async def fake_download(url, timeout):
                 calls.append(url)
                 if url == "https://proxy.example.com/img-master/large.jpg":
-                    result_path.write_bytes(b"large")
-                    return str(result_path)
+                    data = b"large"
+                    result_path.write_bytes(data)
+                    return str(result_path), len(data)
                 raise RuntimeError("failed")
 
             downloader.download = fake_download  # type: ignore[method-assign]
@@ -554,7 +562,7 @@ class ImageDownloaderProxyFallbackTest(unittest.IsolatedAsyncioTestCase):
             downloader = ImageDownloader()
 
             async def fake_download(url, timeout):
-                return str(path)
+                return str(path), 2
 
             downloader.download = fake_download  # type: ignore[method-assign]
             with mock.patch.object(dl.logger, "info") as info:
@@ -602,8 +610,9 @@ class ImageDownloaderProxyFallbackTest(unittest.IsolatedAsyncioTestCase):
             calls.append(url)
             if url == "https://i.pixiv.re/img-master/large.jpg":
                 path = Path(tmp) / "large.jpg"
-                path.write_bytes(b"ok")
-                return str(path)
+                data = b"ok"
+                path.write_bytes(data)
+                return str(path), len(data)
             raise RuntimeError("failed")
 
         with tempfile.TemporaryDirectory() as tmp:
@@ -629,8 +638,9 @@ class ImageDownloaderProxyFallbackTest(unittest.IsolatedAsyncioTestCase):
 
             async def fake_download(url, timeout):
                 calls.append(url)
-                result_path.write_bytes(b"ok")
-                return str(result_path)
+                data = b"ok"
+                result_path.write_bytes(data)
+                return str(result_path), len(data)
 
             downloader.download = fake_download  # type: ignore[method-assign]
             await downloader.download_for_send(
@@ -647,28 +657,6 @@ class ImageDownloaderProxyFallbackTest(unittest.IsolatedAsyncioTestCase):
 
 
 class ImageDownloaderCleanupRegressionTest(unittest.IsolatedAsyncioTestCase):
-    async def test_getsize_failure_cleans_downloaded_temp_file(self):
-        with tempfile.TemporaryDirectory() as tmp:
-            path = Path(tmp) / "downloaded.jpg"
-            downloader = ImageDownloader()
-
-            async def fake_download(url, timeout):
-                path.write_bytes(b"ok")
-                return str(path)
-
-            downloader.download = fake_download  # type: ignore[method-assign]
-            with mock.patch.object(dl.os.path, "getsize", side_effect=OSError("secret")):
-                with self.assertRaises(RuntimeError):
-                    await downloader.download_for_send(
-                        _illust_urls(),
-                        quality="original",
-                        timeout=5,
-                        downgrade_limit_bytes=0,
-                        log_context="test",
-                    )
-
-            self.assertFalse(path.exists())
-
     async def test_fdopen_failure_closes_descriptor_before_cleanup(self):
         created_paths = []
 
