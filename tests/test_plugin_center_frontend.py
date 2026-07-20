@@ -20,6 +20,7 @@ def test_plugin_center_page_exposes_management_workspaces() -> None:
     assert "签到数据管理" in html
     assert "imageHistory" not in html
     assert "cacheStats" not in html
+    assert "schema v7" in html
     assert "schema v6" in html
 
 

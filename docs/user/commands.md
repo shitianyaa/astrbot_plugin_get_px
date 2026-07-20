@@ -11,6 +11,8 @@
 
 发图默认请求 Lolicon；请求失败或无结果时，有标签回退 Pixiv 搜索，无标签回退 Pixiv 推荐作品。Pixiv 回退仅在配置 `pixiv_refresh_token` 后可用。
 
+普通发图与正式签到背景共享图片去重索引。`dedupe_days` 可设置最近 `0–7` 个北京时间自然日；同群成员共享去重，不同群、私聊用户、标签和图片源相互隔离。Lolicon 图片地址不可用时，可在 `lolicon_image_proxy_origins` 中按行配置多个图片反代 origin；该配置不代理 Lolicon API 或 Pixiv 登录。
+
 ## 签到
 
 | 指令 | 说明 | 示例 |

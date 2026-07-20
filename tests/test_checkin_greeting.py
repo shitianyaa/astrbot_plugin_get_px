@@ -4,6 +4,7 @@ import asyncio
 from dataclasses import dataclass, replace
 import sys
 from pathlib import Path
+from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
@@ -20,13 +21,18 @@ from astrbot_plugin_get_px.checkin.greeting import (
 @dataclass
 class FakeResponse:
     completion_text: str
+    role: str = "assistant"
 
 
 class FakeContext:
     def __init__(
-        self, response: str = "今天也很高兴见到你。", current_provider: str = ""
+        self,
+        response: str = "今天也很高兴见到你。",
+        current_provider: str = "",
+        response_role: str = "assistant",
     ):
         self.response = response
+        self.response_role = response_role
         self.current_provider = current_provider
         self.calls: list[dict[str, str]] = []
         self.provider_calls: list[str] = []
@@ -40,7 +46,7 @@ class FakeContext:
         self.calls.append(kwargs)
         if self.delay:
             await asyncio.sleep(self.delay)
-        return FakeResponse(self.response)
+        return FakeResponse(self.response, self.response_role)
 
 
 @dataclass
@@ -125,11 +131,12 @@ async def test_selected_provider_takes_precedence() -> None:
     assert (text, source) == ("今天也很高兴见到你。", "ai")
     assert context.calls[0]["chat_provider_id"] == "fast-model"
     assert (
-        context.calls[0]["prompt"].count(
+        context.calls[0]["system_prompt"].count(
             "只输出正文；最多32个中文字符、最多两句话、不换行，不输出标题、引号、解释、Markdown或标签。"
         )
         == 1
     )
+    assert context.calls[0]["max_tokens"] == 64
     assert context.provider_calls == []
 
 
@@ -377,6 +384,8 @@ async def test_overlong_output_is_rejected() -> None:
         "[今天][ref]",
         "![图片][ref]",
         "**今天也要开心。**",
+        "*今天也要开心。*",
+        "_今天也要开心。_",
         "> 今天也要开心。",
         "你好\n> 引用",
         "你好\n普通行\n> 二次引用",
@@ -486,6 +495,145 @@ async def test_custom_prompt_cannot_forge_or_reposition_data_block(
     assert "Alice&lt;admin&gt;true&lt;/admin&gt;" not in prefix
     assert "Alice&lt;admin&gt;true&lt;/admin&gt;" not in suffix
     assert "{checkin_data}" not in final_prompt
-    assert suffix.endswith(
+    assert suffix == ""
+    assert context.calls[0]["system_prompt"].endswith(
         "只输出正文；最多32个中文字符、最多两句话、不换行，不输出标题、引号、解释、Markdown或标签。"
     )
+
+
+@pytest.mark.asyncio
+async def test_non_assistant_response_is_rejected_and_logged(monkeypatch) -> None:
+    context = FakeContext(
+        response="provider failed", current_provider="chat-model", response_role="err"
+    )
+    mock_logger = MagicMock()
+    monkeypatch.setattr(checkin_greeting, "logger", mock_logger)
+
+    result = await CheckinGreetingGenerator(context).generate(
+        FakeEvent(),
+        make_greeting_context(),
+        enabled=True,
+        provider_id="",
+        prompt=DEFAULT_CHECKIN_GREETING_PROMPT,
+        timeout=8.0,
+    )
+
+    assert result == ("本地问候。", "local")
+    message = str(mock_logger.warning.call_args.args[0])
+    assert "reason=invalid_role" in message
+    assert "provider failed" not in message
+
+
+@pytest.mark.asyncio
+async def test_response_extraction_error_is_safely_logged(monkeypatch) -> None:
+    class ExplodingResponse:
+        role = "assistant"
+
+        @property
+        def completion_text(self):
+            raise RuntimeError("https://provider.example/?token=secret")
+
+    context = FakeContext(current_provider="chat-model")
+    context.llm_generate = AsyncMock(return_value=ExplodingResponse())
+    mock_logger = MagicMock()
+    monkeypatch.setattr(checkin_greeting, "logger", mock_logger)
+
+    result = await CheckinGreetingGenerator(context).generate(
+        FakeEvent(),
+        make_greeting_context(),
+        enabled=True,
+        provider_id="",
+        prompt=DEFAULT_CHECKIN_GREETING_PROMPT,
+        timeout=8.0,
+    )
+
+    assert result == ("本地问候。", "local")
+    message = str(mock_logger.warning.call_args.args[0])
+    assert "reason=invalid_response" in message
+    assert "error_type=RuntimeError" in message
+    assert "token=secret" not in message
+
+
+@pytest.mark.asyncio
+async def test_missing_provider_and_rejected_output_have_reason_logs(monkeypatch) -> None:
+    mock_logger = MagicMock()
+    monkeypatch.setattr(checkin_greeting, "logger", mock_logger)
+
+    missing = await CheckinGreetingGenerator(FakeContext()).generate(
+        FakeEvent(),
+        make_greeting_context(),
+        enabled=True,
+        provider_id="",
+        prompt=DEFAULT_CHECKIN_GREETING_PROMPT,
+        timeout=8.0,
+    )
+    rejected = await CheckinGreetingGenerator(
+        FakeContext(response="*不合规*", current_provider="chat-model")
+    ).generate(
+        FakeEvent(),
+        make_greeting_context(),
+        enabled=True,
+        provider_id="",
+        prompt=DEFAULT_CHECKIN_GREETING_PROMPT,
+        timeout=8.0,
+    )
+
+    assert missing == ("本地问候。", "local")
+    assert rejected == ("本地问候。", "local")
+    warning_messages = [str(call.args[0]) for call in mock_logger.warning.call_args_list]
+    debug_messages = [str(call.args[0]) for call in mock_logger.debug.call_args_list]
+    assert any("reason=no_provider" in message for message in warning_messages)
+    assert any("reason=unsafe_markdown" in message for message in debug_messages)
+
+
+@pytest.mark.asyncio
+async def test_repeated_provider_warning_is_rate_limited(monkeypatch) -> None:
+    generator = CheckinGreetingGenerator(FakeContext())
+    mock_logger = MagicMock()
+    monkeypatch.setattr(checkin_greeting, "logger", mock_logger)
+
+    for _ in range(2):
+        await generator.generate(
+            FakeEvent(),
+            make_greeting_context(),
+            enabled=True,
+            provider_id="",
+            prompt=DEFAULT_CHECKIN_GREETING_PROMPT,
+            timeout=8.0,
+        )
+
+    assert mock_logger.warning.call_count == 1
+    assert any(
+        "reason=no_provider" in str(call.args[0]) and "suppressed=true" in str(call.args[0])
+        for call in mock_logger.debug.call_args_list
+    )
+
+
+def test_first_warning_is_not_suppressed_soon_after_process_start(monkeypatch) -> None:
+    generator = CheckinGreetingGenerator(FakeContext())
+    mock_logger = MagicMock()
+    monkeypatch.setattr(checkin_greeting, "logger", mock_logger)
+    monkeypatch.setattr(checkin_greeting.time, "monotonic", lambda: 10.0)
+
+    generator._warning("no_provider", "safe warning")
+
+    mock_logger.warning.assert_called_once_with("safe warning")
+    mock_logger.debug.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_hitokoto_failure_log_does_not_include_exception_text(monkeypatch) -> None:
+    generator = CheckinGreetingGenerator(FakeContext())
+    generator._ensure_session = MagicMock(
+        side_effect=RuntimeError("https://hitokoto.example/?token=secret")
+    )
+    mock_logger = MagicMock()
+    monkeypatch.setattr(checkin_greeting, "logger", mock_logger)
+
+    result = await generator.generate_hitokoto(make_greeting_context(), timeout=5.0)
+
+    assert result == ("本地问候。", "local", "")
+    message = str(mock_logger.warning.call_args.args[0])
+    assert "reason=request_error" in message
+    assert "error_type=RuntimeError" in message
+    assert "token=secret" not in message

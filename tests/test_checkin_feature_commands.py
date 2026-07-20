@@ -7,14 +7,16 @@ import sqlite3
 import sys
 import tempfile
 from types import SimpleNamespace
-from unittest.mock import AsyncMock
+from unittest.mock import AsyncMock, patch
 from pathlib import Path
 
 import pytest
+from PIL import Image as PILImage
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 
 from astrbot_plugin_get_px.checkin import CheckinStore
+from astrbot_plugin_get_px.checkin.card import CardBackground
 from astrbot_plugin_get_px.checkin.shop import build_checkin_shop_items
 from astrbot_plugin_get_px.main import GetPxPlugin
 
@@ -292,7 +294,9 @@ async def test_theme_preview_is_available_without_purchase_or_database_write() -
         preview_path = Path(result[1].path)
         assert preview_path.name == "preview.png"
         assert preview_path.parent.name == "blue"
-        assert before == after
+        assert {key: value for key, value in before.items() if key != "exported_at"} == {
+            key: value for key, value in after.items() if key != "exported_at"
+        }
 
         usage = await plugin._handle_checkin_theme_preview(event, "unknown")
         assert "用法：签到中心 商店 主题 查看 <编号>" in usage
@@ -313,6 +317,85 @@ async def test_background_refresh_requires_today_checkin() -> None:
             item async for item in plugin._handle_refresh_checkin_background(event)
         ]
         assert outputs == ["请先完成今天的签到，再更新背景"]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("cache_enabled", "send_fails", "expected_card_exists"),
+    [
+        (False, False, False),
+        (False, True, False),
+        (True, False, True),
+    ],
+)
+async def test_background_refresh_cleans_only_uncached_rendered_card(
+    cache_enabled: bool,
+    send_fails: bool,
+    expected_card_exists: bool,
+) -> None:
+    with tempfile.TemporaryDirectory() as tmp:
+        plugin = make_plugin(tmp)
+        plugin.config = {
+            "checkin_enabled": True,
+            "checkin_background_mode": "pixiv_daily",
+            "checkin_background_refresh_cost": 5,
+        }
+        event = FakeEvent()
+        if send_fails:
+            event.send.side_effect = RuntimeError("send failed")
+        await plugin.checkin_store.checkin(
+            user_id="10001", username="测试用户", bot_name="neko"
+        )
+        set_user_coins(plugin, 100)
+
+        background_path = Path(tmp) / "background.png"
+        PILImage.new("RGB", (750, 1000), (40, 80, 160)).save(background_path)
+        background = CardBackground(
+            image_path=str(background_path),
+            mode="pixiv_daily",
+            source="lolicon:tag",
+            illust_id="445566",
+            title="Blue Sky",
+            author="Someone",
+            quality="medium",
+        )
+        card_path = Path(tmp) / "card.jpg"
+        PILImage.new("RGB", (960, 540), (238, 224, 196)).save(
+            card_path, format="JPEG"
+        )
+        cache = object() if cache_enabled else None
+        plugin.checkin_cache = cache
+        plugin._prepare_checkin_background = AsyncMock(return_value=background)
+        plugin._refresh_checkin_hitokoto = AsyncMock(
+            side_effect=lambda _event, record: record
+        )
+        plugin._get_checkin_user_title = AsyncMock(return_value="")
+        plugin._render_checkin_card_with_fallback = AsyncMock(
+            return_value=(card_path, "省流量")
+        )
+        plugin._record_checkin_background = AsyncMock()
+        plugin._release_checkin_background_claim = AsyncMock()
+
+        outputs = [
+            item
+            async for item in plugin._handle_refresh_checkin_background(
+                event, _flow_locked=True
+            )
+        ]
+
+        assert card_path.exists() is expected_card_exists
+        assert (
+            plugin._render_checkin_card_with_fallback.await_args.kwargs["cache"]
+            is cache
+        )
+        if send_fails:
+            assert outputs == [
+                "更新背景失败；若金币已经扣除，重新发送“签到”可查看已保存的新背景"
+            ]
+            plugin._release_checkin_background_claim.assert_awaited_once()
+        else:
+            assert outputs == []
+            plugin._record_checkin_background.assert_awaited_once()
 
 
 @pytest.mark.asyncio
@@ -407,23 +490,37 @@ async def test_preview_uses_real_data_and_remote_greeting_without_writes(
         )
 
         preview_path = Path(tmp) / "preview.jpg"
-        preview_path.write_bytes(b"preview")
+        PILImage.new("RGB", (960, 540), (238, 224, 196)).save(
+            preview_path, format="JPEG"
+        )
         plugin._prepare_checkin_background = AsyncMock(return_value=None)
         plugin._render_checkin_card = AsyncMock(return_value=str(preview_path))
         before_snapshot = await plugin.checkin_store.export_snapshot()
 
-        outputs = [item async for item in plugin._handle_checkin_preview(event)]
+        with patch(
+            "astrbot_plugin_get_px.checkin.commands.logger"
+        ) as mock_logger:
+            outputs = [item async for item in plugin._handle_checkin_preview(event)]
 
         after_snapshot = await plugin.checkin_store.export_snapshot()
         assert outputs == []
-        assert before_snapshot == after_snapshot
+        assert {
+            key: value for key, value in before_snapshot.items() if key != "exported_at"
+        } == {
+            key: value for key, value in after_snapshot.items() if key != "exported_at"
+        }
         event.send.assert_awaited_once()
+        debug_message = " ".join(
+            str(call) for call in mock_logger.debug.call_args_list
+        )
+        assert f"preview=true result={greeting_mode}" in debug_message
         render_kwargs = plugin._render_checkin_card.await_args.kwargs
         plugin._prepare_checkin_background.assert_awaited_once_with(
             event,
             render_kwargs["record"],
             claim_usage=False,
             refresh_preview=True,
+            render_tier="省流量",
         )
         assert render_kwargs["profile"].coins == result.profile.coins
         assert render_kwargs["record"].total_days_after == result.profile.total_days
@@ -439,3 +536,47 @@ async def test_preview_uses_real_data_and_remote_greeting_without_writes(
             assert render_kwargs["record"].greeting == "AI 测试问候"
             plugin.checkin_greeting.generate.assert_awaited_once()
             plugin.checkin_greeting.generate_hitokoto.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_preview_greeting_failure_uses_local_content_and_logs_safely() -> None:
+    with tempfile.TemporaryDirectory() as tmp:
+        plugin = make_plugin(tmp)
+        plugin.config = {
+            "checkin_bot_name": "neko",
+            "checkin_greeting_mode": "ai",
+            "checkin_avatar_enabled": False,
+        }
+        plugin.holiday_calendar = None
+        plugin.checkin_greeting = SimpleNamespace(
+            generate_hitokoto=AsyncMock(),
+            generate=AsyncMock(
+                side_effect=RuntimeError("https://provider.example/?token=secret")
+            ),
+        )
+        event = FakeEvent()
+        preview_path = Path(tmp) / "preview-fallback.jpg"
+        PILImage.new("RGB", (960, 540), (238, 224, 196)).save(
+            preview_path, format="JPEG"
+        )
+        plugin._prepare_checkin_background = AsyncMock(return_value=None)
+        plugin._render_checkin_card = AsyncMock(return_value=str(preview_path))
+
+        with patch(
+            "astrbot_plugin_get_px.checkin.commands.logger"
+        ) as mock_logger:
+            outputs = [item async for item in plugin._handle_checkin_preview(event)]
+
+        assert outputs == []
+        event.send.assert_awaited_once()
+        record = plugin._render_checkin_card.await_args.kwargs["record"]
+        assert record.greeting
+        assert record.greeting_source == "local"
+        message = str(mock_logger.warning.call_args.args[0])
+        assert "preview=true" in message
+        assert "error_type=RuntimeError" in message
+        assert "token=secret" not in message
+        debug_message = " ".join(
+            str(call) for call in mock_logger.debug.call_args_list
+        )
+        assert "preview=true result=local" in debug_message

@@ -98,7 +98,9 @@ class GetPxPlugin(
         self.config = config
         self.client: PixivClient | None = None
         self.lolicon_client: LoliconClient | None = None
-        self.downloader = ImageDownloader()
+        self.downloader = ImageDownloader(
+            self._cfg_str("lolicon_image_proxy_origins", "")
+        )
         self._last_request: dict[str, float] = {}
         self.data_dir: Path | None = None
         self.image_index: ImageIndexStore | None = None
@@ -126,10 +128,15 @@ class GetPxPlugin(
         """插件加载时初始化 Pixiv 客户端。"""
         data_dir = StarTools.get_data_dir(PLUGIN_NAME)
         self.data_dir = Path(data_dir)
+        dedupe_days = self._migrate_dedupe_config()
         self._init_client()
         # SQLite DDL/迁移是同步操作，放入线程池避免阻塞事件循环
-        self.image_index = await asyncio.to_thread(ImageIndexStore, data_dir)
-        await self.image_index.cleanup_old_days()
+        self.image_index = await asyncio.to_thread(
+            ImageIndexStore,
+            data_dir,
+            retention_days=dedupe_days,
+        )
+        await self.image_index.cleanup_old_days(trigger="startup")
         checkin_database_existed = (self.data_dir / "checkin.sqlite3").exists()
         try:
             self.checkin_store = await asyncio.to_thread(CheckinStore, data_dir)
@@ -168,7 +175,10 @@ class GetPxPlugin(
         except asyncio.CancelledError:
             raise
         except Exception as exc:
-            logger.warning(f"{LOG_PREFIX} 节假日数据更新失败，继续使用本地规则: {exc}")
+            logger.warning(
+                f"{LOG_PREFIX} 节假日数据更新失败，继续使用本地规则: "
+                f"error_type={type(exc).__name__}"
+            )
 
     def _init_client(self):
         """初始化 Lolicon 主源和可选的 Pixiv 回退客户端。"""
@@ -243,24 +253,36 @@ class GetPxPlugin(
             try:
                 await self.client.close()
             except Exception as exc:
-                logger.warning(f"{LOG_PREFIX} 关闭 Pixiv 客户端失败: {exc}")
+                logger.warning(
+                    f"{LOG_PREFIX} 关闭 Pixiv 客户端失败: "
+                    f"error_type={type(exc).__name__}"
+                )
             finally:
                 self.client = None
         if getattr(self, "lolicon_client", None) is not None:
             try:
                 await self.lolicon_client.close()
             except Exception as exc:
-                logger.warning(f"{LOG_PREFIX} 关闭 Lolicon 客户端失败: {exc}")
+                logger.warning(
+                    f"{LOG_PREFIX} 关闭 Lolicon 客户端失败: "
+                    f"error_type={type(exc).__name__}"
+                )
             finally:
                 self.lolicon_client = None
         try:
             await self.downloader.close()
         except Exception as exc:
-            logger.warning(f"{LOG_PREFIX} 关闭图片下载器失败: {exc}")
+            logger.warning(
+                f"{LOG_PREFIX} 关闭图片下载器失败: "
+                f"error_type={type(exc).__name__}"
+            )
         try:
             await self.checkin_greeting.close()
         except Exception as exc:
-            logger.warning(f"{LOG_PREFIX} 关闭签到问候会话失败: {exc}")
+            logger.warning(
+                f"{LOG_PREFIX} 关闭签到问候会话失败: "
+                f"error_type={type(exc).__name__}"
+            )
         self._last_request.clear()
         locks = getattr(self, "_checkin_flow_locks", None)
         if locks is not None:
@@ -269,7 +291,10 @@ class GetPxPlugin(
             try:
                 self.image_index.close()
             except Exception as exc:
-                logger.warning(f"{LOG_PREFIX} 关闭图片索引失败: {exc}")
+                logger.warning(
+                    f"{LOG_PREFIX} 关闭图片索引失败: "
+                    f"error_type={type(exc).__name__}"
+                )
         self.image_index = None
         self.checkin_store = None
         logger.info(f"{LOG_PREFIX} 插件已停止")
@@ -521,7 +546,10 @@ class GetPxPlugin(
             if not count_str:
                 count_str = "1"
 
-        logger.info(f"{LOG_PREFIX} 自然语言触发: count={count_str} tag={tag_part!r}")
+        logger.info(
+            f"{LOG_PREFIX} 自然语言触发: count={count_str} "
+            f"tag_configured={'yes' if tag_part else 'no'}"
+        )
         async for result in self._handle_search(
             event, tag=tag_part, count_str=count_str
         ):
@@ -565,6 +593,32 @@ class GetPxPlugin(
     # ──────────────────────────────────────────────────────────────
     # 配置读取（带类型校验）
     # ──────────────────────────────────────────────────────────────
+
+    def _migrate_dedupe_config(self) -> int:
+        config = getattr(self, "config", None)
+        if config is None:
+            return 1
+        if not self._cfg_bool("dedupe_days_migrated", False):
+            legacy_value = self._cfg_float("dedupe_ttl_hours", 24.0, 0.0, 24.0)
+            config["dedupe_days"] = 0 if legacy_value <= 0 else 1
+            config["dedupe_days_migrated"] = True
+            persisted = False
+            save_config = getattr(config, "save_config", None)
+            if callable(save_config):
+                try:
+                    save_config()
+                    persisted = True
+                except Exception as exc:
+                    logger.warning(
+                        f"{LOG_PREFIX} 保存去重配置迁移结果失败: "
+                        f"error_type={type(exc).__name__}"
+                    )
+            logger.info(
+                f"{LOG_PREFIX} 已迁移旧去重配置: "
+                f"dedupe_ttl_hours={legacy_value:g} -> "
+                f"dedupe_days={config['dedupe_days']}, persisted={persisted}"
+            )
+        return self._cfg_int("dedupe_days", 1, 0, 7)
 
     def _cfg_str(self, key: str, default: str = "") -> str:
         val = self.config.get(key, default)

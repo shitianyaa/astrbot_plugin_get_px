@@ -27,6 +27,7 @@ from .rules import (
     parse_date as _parse_date,
 )
 from .snapshot import validate_greeting_source as _validate_greeting_source
+from .quality import validate_checkin_render_tier
 
 
 _MAX_PROFILE_INTEGER = 2_147_483_647
@@ -205,6 +206,7 @@ class RecordStoreMixin:
         illust_id: str = "",
         title: str = "",
         author: str = "",
+        quality: str = "",
     ) -> None:
         async with self._lock:
             await asyncio.to_thread(
@@ -216,6 +218,24 @@ class RecordStoreMixin:
                 str(illust_id or ""),
                 str(title or ""),
                 str(author or ""),
+                str(quality or ""),
+                self.now_iso(),
+            )
+
+    async def update_record_render_tier(
+        self,
+        *,
+        user_id: str,
+        date_key: str,
+        render_tier: str,
+    ) -> CheckinRecord:
+        validated_tier = validate_checkin_render_tier(render_tier)
+        async with self._lock:
+            return await asyncio.to_thread(
+                self._update_record_render_tier_sync,
+                str(user_id or ""),
+                str(date_key or ""),
+                validated_tier,
                 self.now_iso(),
             )
 
@@ -229,6 +249,7 @@ class RecordStoreMixin:
         illust_id: str,
         title: str,
         author: str,
+        quality: str = "",
     ) -> BackgroundRefreshResult:
         async with self._lock:
             return await asyncio.to_thread(
@@ -240,6 +261,7 @@ class RecordStoreMixin:
                 str(illust_id or ""),
                 str(title or ""),
                 str(author or ""),
+                str(quality or ""),
                 self.today_key(),
                 self.now_iso(),
             )
@@ -672,6 +694,7 @@ class RecordStoreMixin:
         illust_id: str,
         title: str,
         author: str,
+        quality: str,
         date_key: str,
         now: str,
     ) -> BackgroundRefreshResult:
@@ -719,7 +742,8 @@ class RecordStoreMixin:
                     UPDATE checkin_records
                     SET background_mode = ?, background_source = ?,
                         background_illust_id = ?, background_title = ?,
-                        background_author = ?, total_coins_after = ?, updated_at = ?
+                        background_author = ?, background_quality = ?,
+                        total_coins_after = ?, updated_at = ?
                     WHERE date_key = ? AND user_id = ?
                     """,
                     (
@@ -728,6 +752,7 @@ class RecordStoreMixin:
                         illust_id,
                         title,
                         author,
+                        quality,
                         remaining,
                         now,
                         date_key,
@@ -774,6 +799,7 @@ class RecordStoreMixin:
         illust_id: str,
         title: str,
         author: str,
+        quality: str,
         now: str,
     ) -> None:
         if not user_id or not date_key:
@@ -784,12 +810,49 @@ class RecordStoreMixin:
                 UPDATE checkin_records
                 SET background_mode = ?, background_source = ?,
                     background_illust_id = ?, background_title = ?,
-                    background_author = ?, updated_at = ?
+                    background_author = ?, background_quality = ?, updated_at = ?
                 WHERE user_id = ? AND date_key = ?
                 """,
-                (mode, source, illust_id, title, author, now, user_id, date_key),
+                (
+                    mode,
+                    source,
+                    illust_id,
+                    title,
+                    author,
+                    quality,
+                    now,
+                    user_id,
+                    date_key,
+                ),
             )
             conn.commit()
+
+    def _update_record_render_tier_sync(
+        self,
+        user_id: str,
+        date_key: str,
+        render_tier: str,
+        now: str,
+    ) -> CheckinRecord:
+        if not user_id or not date_key:
+            raise ValueError("user_id and date_key are required")
+        with closing(self._connect()) as conn:
+            conn.execute(
+                """
+                UPDATE checkin_records
+                SET render_tier = ?, updated_at = ?
+                WHERE user_id = ? AND date_key = ?
+                """,
+                (render_tier, now, user_id, date_key),
+            )
+            updated_row = conn.execute(
+                "SELECT * FROM checkin_records WHERE user_id = ? AND date_key = ?",
+                (user_id, date_key),
+            ).fetchone()
+            if updated_row is None:
+                raise ValueError("check-in record not found")
+            conn.commit()
+        return self._row_to_record(updated_row)
 
     def _update_record_content_sync(
         self,
@@ -821,9 +884,15 @@ class RecordStoreMixin:
                       AND (
                         (
                             ? = 'local'
-                            AND greeting_source = 'local'
-                            AND event_key = '' AND event_label = ''
-                            AND greeting = '' AND secondary_note = ''
+                            AND greeting = ''
+                            AND (
+                                (
+                                    greeting_source = 'local'
+                                    AND event_key = '' AND event_label = ''
+                                    AND secondary_note = ''
+                                )
+                                OR greeting_source IN ('ai', 'hitokoto')
+                            )
                         )
                         OR
                         (
@@ -971,6 +1040,7 @@ class RecordStoreMixin:
             background_illust_id=str(row["background_illust_id"] or ""),
             background_title=str(row["background_title"] or ""),
             background_author=str(row["background_author"] or ""),
+            background_quality=str(row["background_quality"] or ""),
             created_at=str(row["created_at"] or ""),
             updated_at=str(row["updated_at"] or ""),
             event_key=str(row["event_key"] or ""),
@@ -981,4 +1051,5 @@ class RecordStoreMixin:
             secondary_note=str(row["secondary_note"] or ""),
             template_version=str(row["template_version"] or "default:1"),
             theme_id=str(row["theme_id"] or "default"),
+            render_tier=str(row["render_tier"] or "省流量"),
         )

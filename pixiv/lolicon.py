@@ -116,4 +116,7 @@ class LoliconClient:
             try:
                 await session.close()
             except Exception as exc:
-                logger.warning(f"{LOG_PREFIX} Lolicon 客户端关闭失败: {exc}")
+                logger.warning(
+                    f"{LOG_PREFIX} Lolicon 客户端关闭失败: "
+                    f"error_type={type(exc).__name__}"
+                )

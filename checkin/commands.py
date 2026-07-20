@@ -198,8 +198,18 @@ class CheckinCommandMixin:
             self._checkin_profile_from_record(record),
             mutate_features=False,
         )
-        greeting, source, attribution = await self._generate_checkin_greeting(
-            event, content
+        try:
+            greeting, source, attribution = await self._generate_checkin_greeting(
+                event, content
+            )
+        except Exception as exc:
+            logger.warning(
+                f"{LOG_PREFIX} 签到预览问候生成失败，使用本地问候: "
+                f"preview=true error_type={type(exc).__name__}"
+            )
+            greeting, source, attribution = content.greeting, "local", ""
+        logger.debug(
+            f"{LOG_PREFIX} 签到预览问候完成: preview=true result={source}"
         )
         record = replace(
             record,
@@ -219,23 +229,30 @@ class CheckinCommandMixin:
 
         background: CardBackground | None = None
         card_path = ""
+        preview_tier = self._configured_checkin_render_tier()
         try:
             background = await self._prepare_checkin_background(
                 event,
                 record,
                 claim_usage=False,
                 refresh_preview=True,
+                render_tier=preview_tier,
             )
-            card_path = await self._render_checkin_card(
+            rendered_path, _actual_tier = await self._render_checkin_card_with_fallback(
                 event,
                 profile=preview_profile,
                 record=record,
                 background=background,
                 bot_name=bot_name,
                 user_title=user_title,
+                preferred_tier=preview_tier,
             )
+            card_path = str(rendered_path)
         except Exception as e:
-            logger.warning(f"{LOG_PREFIX} 签到测试卡片渲染失败，回退纯文字: {e}")
+            logger.warning(
+                f"{LOG_PREFIX} 签到测试卡片渲染失败，回退纯文字: "
+                f"preview=true error_type={type(e).__name__}"
+            )
 
         if card_path:
             try:
@@ -248,7 +265,10 @@ class CheckinCommandMixin:
                 await event.send(event.chain_result(content))
                 return
             except Exception as e:
-                logger.warning(f"{LOG_PREFIX} 签到测试卡片发送失败，回退纯文字: {e}")
+                logger.warning(
+                    f"{LOG_PREFIX} 签到测试卡片发送失败，回退纯文字: "
+                    f"preview=true error_type={type(e).__name__}"
+                )
             finally:
                 cleanup(card_path)
                 if (
@@ -325,7 +345,10 @@ class CheckinCommandMixin:
                 prefix="checkin-export"
             )
         except Exception as e:
-            logger.error(f"{LOG_PREFIX} 导出签到备份失败: {e}")
+            logger.error(
+                f"{LOG_PREFIX} 导出签到备份失败: "
+                f"error_type={type(e).__name__}"
+            )
             return event.plain_result("导出签到备份失败，请稍后再试")
         try:
             await event.send(
@@ -333,7 +356,10 @@ class CheckinCommandMixin:
             )
             return None
         except Exception as e:
-            logger.error(f"{LOG_PREFIX} 发送签到备份文件失败: {e}")
+            logger.error(
+                f"{LOG_PREFIX} 发送签到备份文件失败: "
+                f"error_type={type(e).__name__}"
+            )
             return event.plain_result("发送签到备份文件失败，请稍后再试")
 
     async def _handle_checkin_ranking(
@@ -406,7 +432,10 @@ class CheckinCommandMixin:
             profile = await self.checkin_store.get_profile(user_id)
             preference = await self.checkin_store.get_user_preference(user_id)
         except Exception as e:
-            logger.warning(f"{LOG_PREFIX} 读取签到状态失败: {e}")
+            logger.warning(
+                f"{LOG_PREFIX} 读取签到状态失败: "
+                f"error_type={type(e).__name__}"
+            )
             yield event.plain_result("读取签到状态失败，请稍后再试")
             return
         level = affection_level(profile.affection)

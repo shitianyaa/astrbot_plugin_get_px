@@ -1,5 +1,6 @@
 import asyncio
 from contextlib import closing
+import json
 import sqlite3
 import tempfile
 import threading
@@ -102,6 +103,23 @@ class CheckinStoreTest(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(duplicate.profile, first.profile)
             self.assertEqual(duplicate.penalty_amount, 0)
             self.assertEqual(duplicate.penalty_total_today, 0)
+
+    async def test_render_tier_persists_for_same_day_record(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            store = FrozenCheckinStore(tmp)
+            await store.checkin(user_id="10001", username="tester", bot_name="neko")
+
+            updated = await store.update_record_render_tier(
+                user_id="10001",
+                date_key="2026-05-26",
+                render_tier="清晰",
+            )
+            duplicate = await store.checkin(
+                user_id="10001", username="tester", bot_name="neko"
+            )
+
+            self.assertEqual(updated.render_tier, "清晰")
+            self.assertEqual(duplicate.record.render_tier, "清晰")
 
     async def test_repeated_duplicate_checkins_never_change_affection(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -373,7 +391,7 @@ class CheckinStoreTest(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(empty_ai, local)
             self.assertEqual(later_local, local)
 
-    async def test_empty_ai_record_cannot_transition_back_to_local(self):
+    async def test_empty_ai_record_can_be_repaired_with_local_content(self):
         with tempfile.TemporaryDirectory() as tmp:
             store = FrozenCheckinStore(tmp)
             await store.checkin(user_id="10001", username="tester", bot_name="neko")
@@ -399,8 +417,8 @@ class CheckinStoreTest(unittest.IsolatedAsyncioTestCase):
                 template_version="default:1",
             )
 
-            self.assertEqual(result.greeting_source, "ai")
-            self.assertEqual(result.greeting, "")
+            self.assertEqual(result.greeting_source, "local")
+            self.assertEqual(result.greeting, "Local greeting")
 
     async def test_streak_continues_by_beijing_date_and_resets_after_gap(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -473,6 +491,7 @@ class CheckinStoreTest(unittest.IsolatedAsyncioTestCase):
                 illust_id="445566",
                 title="Blue Sky",
                 author="Someone",
+                quality="medium",
             )
             await source.update_record_content(
                 user_id="10001",
@@ -496,7 +515,7 @@ class CheckinStoreTest(unittest.IsolatedAsyncioTestCase):
             )
 
             snapshot = await source.export_snapshot()
-            self.assertEqual(snapshot["schema_version"], 6)
+            self.assertEqual(snapshot["schema_version"], 7)
             serialized = dump_checkin_snapshot_json(snapshot)
             restored = load_checkin_snapshot_json(serialized.encode("utf-8"))
 
@@ -517,12 +536,55 @@ class CheckinStoreTest(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(record.background_illust_id, "445566")
             self.assertEqual(record.background_title, "Blue Sky")
             self.assertEqual(record.background_author, "Someone")
+            self.assertEqual(record.background_quality, "medium")
             self.assertEqual(record.event_key, "summer")
             self.assertEqual(record.event_label, "Summer Day")
             self.assertEqual(record.greeting, "Welcome back")
             self.assertEqual(record.greeting_source, "ai")
             self.assertEqual(record.secondary_note, "Stay hydrated")
             self.assertEqual(record.template_version, "default:1")
+            self.assertEqual(record.render_tier, "省流量")
+
+    async def test_v6_snapshot_import_defaults_render_tier_to_economy(self):
+        with (
+            tempfile.TemporaryDirectory() as src_tmp,
+            tempfile.TemporaryDirectory() as dst_tmp,
+        ):
+            source = FrozenCheckinStore(src_tmp)
+            await source.checkin(user_id="10001", username="tester", bot_name="neko")
+            legacy = await source.export_snapshot()
+            legacy["schema_version"] = 6
+            legacy["records"][0].pop("render_tier")
+            legacy["records"][0].pop("background_quality")
+
+            restored = load_checkin_snapshot_json(json.dumps(legacy, ensure_ascii=False))
+            self.assertEqual(restored["schema_version"], 7)
+            self.assertEqual(restored["records"][0]["render_tier"], "省流量")
+            self.assertEqual(restored["records"][0]["background_quality"], "")
+
+            target = FrozenCheckinStore(dst_tmp)
+            await target.import_snapshot(restored)
+            record = await target.get_today_record("10001")
+            self.assertEqual(record.render_tier, "省流量")
+            self.assertEqual(record.background_quality, "")
+
+    async def test_database_v1_migrates_render_tier_column(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            store = FrozenCheckinStore(tmp)
+            await store.checkin(user_id="10001", username="tester", bot_name="neko")
+            database_path = Path(tmp) / "checkin.sqlite3"
+            with closing(sqlite3.connect(database_path)) as conn:
+                conn.execute("ALTER TABLE checkin_records DROP COLUMN render_tier")
+                conn.execute("ALTER TABLE checkin_records DROP COLUMN background_quality")
+                conn.execute("PRAGMA user_version = 1")
+                conn.commit()
+
+            migrated = FrozenCheckinStore(tmp)
+            record = await migrated.get_today_record("10001")
+            self.assertEqual(record.render_tier, "省流量")
+            self.assertEqual(record.background_quality, "")
+            with closing(sqlite3.connect(database_path)) as conn:
+                self.assertEqual(conn.execute("PRAGMA user_version").fetchone()[0], 2)
 
     async def test_unsupported_snapshot_version_is_rejected(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -545,6 +607,17 @@ class CheckinStoreTest(unittest.IsolatedAsyncioTestCase):
                 load_checkin_snapshot_json(
                     dump_checkin_snapshot_json(snapshot).encode("utf-8")
                 )
+
+    async def test_snapshot_rejects_empty_remote_greeting(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            store = FrozenCheckinStore(tmp)
+            await store.checkin(user_id="10001", username="tester", bot_name="neko")
+            snapshot = await store.export_snapshot()
+            snapshot["records"][0]["greeting_source"] = "ai"
+            snapshot["records"][0]["greeting"] = ""
+
+            with self.assertRaisesRegex(ValueError, "greeting.*不能为空"):
+                load_checkin_snapshot_json(json.dumps(snapshot, ensure_ascii=False))
 
     async def test_import_overwrites_existing_data(self):
         with (

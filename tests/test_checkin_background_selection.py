@@ -120,11 +120,24 @@ class CheckinBackgroundSelectionTest(unittest.IsolatedAsyncioTestCase):
         self.assertIn("动画", categories["options"])
         self.assertIn("诗词", categories["options"])
 
-    def test_economy_and_dedupe_schema_limits_are_bounded(self):
+    def test_quality_proxy_and_dedupe_schema_contract(self):
         schema_path = Path(__file__).resolve().parents[1] / "_conf_schema.json"
         schema = json.loads(schema_path.read_text(encoding="utf-8"))
 
-        self.assertEqual(schema["dedupe_ttl_hours"]["slider"]["max"], 24)
+        self.assertEqual(schema["dedupe_days"]["default"], 1)
+        self.assertEqual(
+            schema["dedupe_days"]["slider"], {"min": 0, "max": 7, "step": 1}
+        )
+        self.assertTrue(schema["dedupe_ttl_hours"]["invisible"])
+        self.assertTrue(schema["dedupe_days_migrated"]["invisible"])
+        self.assertEqual(
+            schema["checkin_card_quality_tier"]["options"],
+            ["省流量", "清晰", "极致"],
+        )
+        self.assertEqual(schema["checkin_card_quality_tier"]["default"], "省流量")
+        self.assertNotIn("checkin_card_quality", schema)
+        self.assertEqual(schema["lolicon_image_proxy_origins"]["type"], "text")
+        self.assertEqual(schema["lolicon_image_proxy_origins"]["default"], "")
         self.assertEqual(
             schema["checkin_background_refresh_cost"]["slider"]["max"], 500
         )
@@ -203,8 +216,10 @@ class CheckinBackgroundSelectionTest(unittest.IsolatedAsyncioTestCase):
                 claim_usage=True,
                 preview_nonce=0,
                 preview_excluded_ids=None,
+                background_quality="medium",
             ):
                 self.assertTrue(claim_usage)
+                self.assertEqual(background_quality, "medium")
                 return CardBackground(
                     image_path="picked.jpg",
                     mode="pixiv_daily",
@@ -419,6 +434,53 @@ class CheckinBackgroundSelectionTest(unittest.IsolatedAsyncioTestCase):
             finally:
                 plugin.image_index.close()
 
+    async def test_checkin_background_claim_failure_rejects_candidate(self):
+        plugin = object.__new__(GetPxPlugin)
+        plugin.image_index = SimpleNamespace(
+            claim_usage=AsyncMock(side_effect=RuntimeError("sqlite secret path"))
+        )
+
+        with patch("astrbot_plugin_get_px.checkin.artwork.logger") as mock_logger:
+            claimed = await plugin._claim_checkin_background_usage(
+                FakeEvent(), "pixiv:recommended", "30"
+            )
+
+        self.assertFalse(claimed)
+        messages = " ".join(str(call) for call in mock_logger.debug.call_args_list)
+        self.assertIn("拒绝使用候选", messages)
+        self.assertIn("reason=index_error", messages)
+        self.assertIn("error_type=RuntimeError", messages)
+        self.assertNotIn("secret", messages)
+
+    async def test_background_safety_index_failure_uses_placeholder_path(self):
+        plugin = object.__new__(GetPxPlugin)
+        plugin.config = {
+            "checkin_background_tag": "",
+            "filter_manga": True,
+        }
+        plugin.image_index = None
+        plugin.downloader = FakeDownloader()
+        plugin._fetch_source_candidates = AsyncMock(
+            return_value=([_illust(31)], 1, "pixiv:recommended")
+        )
+        plugin._filter_blacklisted_illusts = AsyncMock(
+            side_effect=RuntimeError("database secret path")
+        )
+
+        with patch("astrbot_plugin_get_px.checkin.artwork.logger") as mock_logger:
+            background = await plugin._prepare_checkin_background(
+                FakeEvent(),
+                SimpleNamespace(date_key="2026-07-20", user_id="10001"),
+                claim_usage=False,
+            )
+
+        self.assertEqual(background.mode, "fallback")
+        self.assertEqual(plugin.downloader.illust_ids, [])
+        messages = " ".join(str(call) for call in mock_logger.warning.call_args_list)
+        self.assertIn("安全检查不可用", messages)
+        self.assertIn("使用占位图", messages)
+        self.assertNotIn("secret", messages)
+
     async def test_cancelled_background_download_releases_claim(self):
         class CancelledDownloader(FakeDownloader):
             async def download_for_send(self, *args, **kwargs):
@@ -566,6 +628,8 @@ class CheckinBackgroundSelectionTest(unittest.IsolatedAsyncioTestCase):
                 background_illust_id="123:1",
                 background_title="title",
                 background_author="artist",
+                background_quality="square_medium",
+                render_tier="省流量",
             )
             try:
                 background = await plugin._restore_checkin_background(
@@ -581,6 +645,8 @@ class CheckinBackgroundSelectionTest(unittest.IsolatedAsyncioTestCase):
                 )
                 self.assertEqual(background.illust_id, "123:1")
                 self.assertEqual(background.mode, "pixiv_daily")
+                self.assertEqual(plugin.downloader.qualities, ["square_medium"])
+                self.assertEqual(plugin.downloader.last_illust["_source"], "lolicon")
             finally:
                 plugin.image_index.close()
 

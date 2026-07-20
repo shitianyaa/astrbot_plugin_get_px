@@ -16,6 +16,7 @@ from .rules import affection_level, boost_remaining_days
 from .themes import DEFAULT_CHECKIN_THEME_ID, get_checkin_theme
 
 
+LOG_PREFIX = "[GetPx]"
 CHECKIN_CARD_WIDTH = 960
 CHECKIN_CARD_HEIGHT = 540
 
@@ -342,5 +343,8 @@ def _file_to_data_url(path: str) -> str:
         data = base64.b64encode(source_bytes).decode("ascii")
         return f"data:{mime_type};base64,{data}"
     except Exception as e:
-        logger.warning(f"签到背景图片处理失败: {file_path} - {e}")
+        logger.warning(
+            f"{LOG_PREFIX} 签到背景图片处理失败: "
+            f"error_type={type(e).__name__}"
+        )
         return ""

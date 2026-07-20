@@ -104,7 +104,10 @@ class PixivClient:
         except Exception as exc:
             if self._closed:
                 raise
-            logger.warning(f"{LOG_PREFIX} Pixiv {operation}失败，1 秒后重试: {exc}")
+            logger.warning(
+                f"{LOG_PREFIX} Pixiv {operation}失败，1 秒后重试: "
+                f"error_type={type(exc).__name__}"
+            )
             await asyncio.sleep(1.0)
             if self._closed:
                 raise RuntimeError("Pixiv 客户端已关闭") from exc
@@ -181,5 +184,8 @@ class PixivClient:
                 result = close()
                 if asyncio.iscoroutine(result):
                     await asyncio.wait_for(result, timeout=self.close_timeout)
-            except Exception:
-                pass
+            except Exception as exc:
+                logger.warning(
+                    f"{LOG_PREFIX} 关闭 Pixiv API 会话失败: "
+                    f"error_type={type(exc).__name__}"
+                )

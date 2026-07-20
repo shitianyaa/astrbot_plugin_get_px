@@ -13,6 +13,7 @@ from .holiday import OnlineHoliday
 MAX_GREETING_LENGTH = 32
 MAX_SECONDARY_NOTE_LENGTH = 44
 MILESTONES = (7, 30, 100, 365, 1000)
+_ANONYMOUS_GREETING_USERNAME = "匿名用户"
 
 _SOLAR_EVENTS: dict[tuple[int, int], tuple[str, str, str]] = {
     (1, 1): ("new_year", "元旦", "新年相遇"),
@@ -142,6 +143,13 @@ def _event_greeting_bank(event_key: str) -> dict[str, tuple[str, ...]]:
 
 def _clean_plain(value: object) -> str:
     return re.sub(r"[\x00-\x1f\x7f]+", " ", str(value or "")).strip()
+
+
+def _greeting_username(username: object, user_id: object) -> str:
+    cleaned_username = _clean_plain(username)
+    if not cleaned_username or cleaned_username == _clean_plain(user_id):
+        return _ANONYMOUS_GREETING_USERNAME
+    return cleaned_username
 
 
 @dataclass(frozen=True)
@@ -335,7 +343,7 @@ def resolve_checkin_content(
 
     context = GreetingContext(
         bot_name=_clean_plain(record.bot_name),
-        username=_clean_plain(record.username),
+        username=_greeting_username(record.username, record.user_id),
         user_id_hint="anon-"
         + hashlib.sha256(record.user_id.encode("utf-8")).hexdigest()[:8],
         date_label=record.date_key,
