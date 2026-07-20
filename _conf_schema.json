@@ -146,7 +146,7 @@
     "default": "省流量",
     "options": ["省流量", "清晰", "极致"],
     "obvious_hint": true,
-    "hint": "省流量=960x540、medium 背景；清晰=1248x702、large 背景；极致=1728x972、large 背景。管理员预览立即生效；当天已生成的正式签到卡保持原档位。"
+    "hint": "省流量=960x540、medium 背景；清晰=1248x702、large 背景；极致=1728x972、large 背景。管理员预览和主动刷新背景立即使用当前配置；普通重复签到保持当天记录档位。"
   },
   "checkin_greeting_mode": {
     "description": "签到问候来源",

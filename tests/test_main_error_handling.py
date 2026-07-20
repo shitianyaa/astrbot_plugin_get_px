@@ -355,6 +355,54 @@ class MainErrorHandlingTest(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(len(event.sent), 1)
             plugin.image_index.release_usage.assert_not_awaited()
 
+    async def test_per_image_send_success_is_logged_at_info(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            illusts = [{"id": 101, "title": "First"}]
+            plugin = self._plugin_for_search_usage_cancellation(
+                tmp, illusts, send_as_forward=False
+            )
+            plugin._record_image_usage = AsyncMock()
+            event = _FakeEvent()
+
+            with patch("astrbot_plugin_get_px.pixiv.search.logger") as mock_logger:
+                output = await _collect(plugin._handle_search(event, "", "1"))
+
+            self.assertEqual(output, [])
+            messages = " ".join(
+                str(call.args[0]) for call in mock_logger.info.call_args_list
+            )
+            self.assertIn("作品 101 已发送", messages)
+
+    async def test_forward_fallback_send_success_is_logged_at_info(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            illusts = [{"id": 101, "title": "First"}]
+            plugin = self._plugin_for_search_usage_cancellation(
+                tmp, illusts, send_as_forward=True
+            )
+            plugin._record_image_usage = AsyncMock()
+            event = _FakeEvent()
+            event.send = AsyncMock(
+                side_effect=[
+                    RuntimeError("forward failed"),
+                    RuntimeError("forward failed"),
+                    RuntimeError("forward failed"),
+                    None,
+                    None,
+                ]
+            )
+
+            with (
+                patch("astrbot_plugin_get_px.pixiv.search.logger") as mock_logger,
+                patch("astrbot_plugin_get_px.pixiv.search.asyncio.sleep", AsyncMock()),
+            ):
+                output = await _collect(plugin._handle_search(event, "", "1"))
+
+            self.assertEqual(output, [])
+            messages = " ".join(
+                str(call.args[0]) for call in mock_logger.info.call_args_list
+            )
+            self.assertIn("[降级] 作品 101 已发送", messages)
+
     def test_legacy_disabled_dedupe_migrates_to_zero_days_once(self):
         class Config(dict):
             def __init__(self):

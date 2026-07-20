@@ -440,9 +440,11 @@ class ImageDownloaderProxyFallbackTest(unittest.IsolatedAsyncioTestCase):
         messages = " ".join(str(call) for call in debug.call_args_list)
         self.assertIn("reason=runtime_error", messages)
         self.assertIn("尝试 Lolicon 返回地址", messages)
-        self.assertIn("route=returned", messages)
+        info_messages = " ".join(str(call) for call in info.call_args_list)
+        self.assertIn("图片下载完成", info_messages)
+        self.assertIn("route=returned", info_messages)
         self.assertNotIn("token=secret", messages)
-        info.assert_not_called()
+        self.assertNotIn("token=secret", info_messages)
 
     async def test_failed_quality_falls_back_after_proxies_and_returned_url(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -546,7 +548,7 @@ class ImageDownloaderProxyFallbackTest(unittest.IsolatedAsyncioTestCase):
                 return str(path)
 
             downloader.download = fake_download  # type: ignore[method-assign]
-            with mock.patch.object(dl.logger, "debug") as debug:
+            with mock.patch.object(dl.logger, "info") as info:
                 await downloader.download_for_send(
                     self._proxy_illust(source="pixiv"),
                     quality="original",
@@ -555,8 +557,9 @@ class ImageDownloaderProxyFallbackTest(unittest.IsolatedAsyncioTestCase):
                     log_context="作品\nhttps://example.com/a.jpg?token=secret",
                 )
 
-        messages = " ".join(str(call) for call in debug.call_args_list)
+        messages = " ".join(str(call) for call in info.call_args_list)
         self.assertIn("作品 [url]", messages)
+        self.assertIn("图片下载完成", messages)
         self.assertNotIn("token=secret", messages)
         self.assertNotIn("作品\\n", messages)
 

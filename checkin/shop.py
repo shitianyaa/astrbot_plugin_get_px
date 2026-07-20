@@ -293,12 +293,13 @@ class CheckinShopMixin:
         claim_held = False
         cache = getattr(self, "checkin_cache", None)
         card_path: Path | None = None
+        refresh_tier = self._configured_checkin_render_tier()
         try:
             background = await self._prepare_checkin_background(
                 event,
                 record,
                 refresh_preview=True,
-                render_tier=self._record_checkin_render_tier(record),
+                render_tier=refresh_tier,
             )
             claim_held = bool(
                 background is not None
@@ -331,16 +332,17 @@ class CheckinShopMixin:
             record = await self._refresh_checkin_hitokoto(event, record)
             bot_name = self._cfg_str("checkin_bot_name", "neko") or "neko"
             user_title = await self._get_checkin_user_title(user_id)
-            card_path, _actual_tier = await self._render_checkin_card_with_fallback(
+            card_path, actual_tier = await self._render_checkin_card_with_fallback(
                 event,
                 profile=profile,
                 record=record,
                 background=background,
                 bot_name=bot_name,
                 user_title=user_title,
-                preferred_tier=self._record_checkin_render_tier(record),
+                preferred_tier=refresh_tier,
                 cache=cache,
             )
+            record = await self._persist_checkin_render_tier(record, actual_tier)
             content = [Plain(purchase.message), Image.fromFileSystem(str(card_path))]
             if background.pixiv_caption:
                 content.append(Plain(background.pixiv_caption))

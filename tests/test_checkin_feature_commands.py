@@ -339,6 +339,7 @@ async def test_background_refresh_cleans_only_uncached_rendered_card(
             "checkin_enabled": True,
             "checkin_background_mode": "pixiv_daily",
             "checkin_background_refresh_cost": 5,
+            "checkin_card_quality_tier": "极致",
         }
         event = FakeEvent()
         if send_fails:
@@ -357,10 +358,10 @@ async def test_background_refresh_cleans_only_uncached_rendered_card(
             illust_id="445566",
             title="Blue Sky",
             author="Someone",
-            quality="medium",
+            quality="large",
         )
         card_path = Path(tmp) / "card.jpg"
-        PILImage.new("RGB", (960, 540), (238, 224, 196)).save(
+        PILImage.new("RGB", (1248, 702), (238, 224, 196)).save(
             card_path, format="JPEG"
         )
         cache = object() if cache_enabled else None
@@ -371,7 +372,7 @@ async def test_background_refresh_cleans_only_uncached_rendered_card(
         )
         plugin._get_checkin_user_title = AsyncMock(return_value="")
         plugin._render_checkin_card_with_fallback = AsyncMock(
-            return_value=(card_path, "省流量")
+            return_value=(card_path, "清晰")
         )
         plugin._record_checkin_background = AsyncMock()
         plugin._release_checkin_background_claim = AsyncMock()
@@ -388,6 +389,19 @@ async def test_background_refresh_cleans_only_uncached_rendered_card(
             plugin._render_checkin_card_with_fallback.await_args.kwargs["cache"]
             is cache
         )
+        assert (
+            plugin._prepare_checkin_background.await_args.kwargs["render_tier"]
+            == "极致"
+        )
+        assert (
+            plugin._render_checkin_card_with_fallback.await_args.kwargs[
+                "preferred_tier"
+            ]
+            == "极致"
+        )
+        updated_record = await plugin.checkin_store.get_today_record("10001")
+        assert updated_record is not None
+        assert updated_record.render_tier == "清晰"
         if send_fails:
             assert outputs == [
                 "更新背景失败；若金币已经扣除，重新发送“签到”可查看已保存的新背景"

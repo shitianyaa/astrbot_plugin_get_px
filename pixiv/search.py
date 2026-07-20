@@ -374,7 +374,7 @@ class SearchMixin:
                             try:
                                 await event.send(event.chain_result(content))
                                 sent_illust_ids.add(str(illust.get("id") or ""))
-                                logger.debug(
+                                logger.info(
                                     f"{LOG_PREFIX} [降级] 作品 {illust_id} 已发送"
                                 )
                                 await self._record_image_usage(
@@ -428,7 +428,7 @@ class SearchMixin:
                         try:
                             await event.send(event.chain_result(content))
                             sent_illust_ids.add(str(illust.get("id") or ""))
-                            logger.debug(
+                            logger.info(
                                 f"{LOG_PREFIX} 作品 {illust_id} 已发送"
                                 + (f" (第{attempt}次尝试)" if attempt > 1 else "")
                             )

@@ -324,7 +324,7 @@ class ImageDownloader:
                     actual_quality != "original"
                     and not enforce_downgrade_limit
                 ) or within_downgrade_limit:
-                    logger.debug(
+                    logger.info(
                         f"{LOG_PREFIX} {log_context} 图片下载完成: "
                         f"quality={actual_quality} route={route} attempts={attempts} "
                         f"size_bytes={file_size} "
