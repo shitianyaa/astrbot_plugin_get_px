@@ -10,8 +10,8 @@
 checkin/
 │  ├─ models.py          数据模型与成就定义
 │  ├─ rules.py           金币、好感度、连签和加持规则
-│  ├─ snapshot.py        schema v6 快照校验
-│  ├─ schema.py          SQLite 建表与版本校验
+│  ├─ snapshot.py        签到快照校验与版本兼容
+│  ├─ schema.py          SQLite 建表与版本迁移
 │  ├─ record_store.py    签到资料、奖励和卡片记录
 │  ├─ feature_store.py   生日、成就、称号和全局事件
 │  ├─ backup_store.py    快照导入导出
@@ -29,8 +29,8 @@ pixiv/
 │  ├─ safety.py          内置安全词与文本规范化
 │  ├─ client.py          Pixiv API 客户端
 │  ├─ lolicon.py         Lolicon API 客户端与数据规范化
-│  ├─ downloader.py      图片下载与质量降级
-│  ├─ index.py           去重索引、安全词与作品黑名单
+│  ├─ downloader.py      图片下载、Lolicon 反代轮换与质量降级
+│  ├─ index.py           多自然日去重索引、安全词与作品黑名单
 plugin_api/
 └─ api.py                Plugin Pages 后端 API
 ```
@@ -41,7 +41,7 @@ plugin_api/
 
 ## 签到指令入口
 
-签到业务使用 `/签到`、`/签到中心` 和 `/签到帮助` 三个顶层入口；纯文本“签到”继续由正则触发。`/签到中心` 是唯一的 AstrBot 嵌套指令组，按“我的、排行、商店、管理”组织功能，根路径由 AstrBot 显示指令树；`/签到帮助` 是独立普通指令，仅发送完整帮助图，避免与指令组同名而被指令管理判定冲突。旧平铺业务指令不再保留。指令装饰器集中在 `main.py`，处理函数继续委托给 `CheckinCommandMixin` 与 `CheckinShopMixin`，避免命令结构与业务实现相互耦合。
+签到业务使用 `/签到`、`/签到我的`、`/签到排行`、`/签到商店`、`/签到管理` 和 `/签到帮助` 顶层入口；纯文本“签到”继续由正则触发。四个签到功能区分别是独立的 AstrBot 指令组，根路径由 AstrBot 显示对应指令树；`/签到帮助` 是独立普通指令，仅发送完整帮助图。旧 `签到中心` 路由和平铺业务指令不再保留。指令装饰器集中在 `main.py`，处理函数继续委托给 `CheckinCommandMixin` 与 `CheckinShopMixin`，避免命令结构与业务实现相互耦合。
 
 ## 签到商店扩展
 

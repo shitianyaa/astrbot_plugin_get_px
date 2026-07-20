@@ -12,6 +12,7 @@ from .models import (
     CHECKIN_SNAPSHOT_SCHEMA_VERSION,
     CHECKIN_SNAPSHOT_SCOPE,
 )
+from .quality import DEFAULT_CHECKIN_RENDER_TIER, validate_checkin_render_tier
 from .themes import CHECKIN_THEMES
 
 
@@ -33,7 +34,7 @@ def validate_checkin_snapshot(snapshot: dict[str, Any]) -> dict[str, Any]:
     if not isinstance(snapshot, dict):
         raise ValueError("签到备份数据必须是对象")
     schema_version = snapshot.get("schema_version")
-    if schema_version != CHECKIN_SNAPSHOT_SCHEMA_VERSION:
+    if schema_version not in (6, CHECKIN_SNAPSHOT_SCHEMA_VERSION):
         raise ValueError(
             f"不支持的签到备份版本: {schema_version!r}，"
             f"当前版本为 {CHECKIN_SNAPSHOT_SCHEMA_VERSION}"
@@ -60,7 +61,8 @@ def validate_checkin_snapshot(snapshot: dict[str, Any]) -> dict[str, Any]:
 
     users = [_normalize_user_row(row, i) for i, row in enumerate(collections["users"])]
     records = [
-        _normalize_record_row(row, i) for i, row in enumerate(collections["records"])
+        _normalize_record_row(row, i, schema_version=schema_version)
+        for i, row in enumerate(collections["records"])
     ]
     events = [
         _normalize_global_event_row(row, i)
@@ -202,10 +204,22 @@ def _normalize_user_row(row: Any, index: int) -> dict[str, Any]:
     }
 
 
-def _normalize_record_row(row: Any, index: int) -> dict[str, Any]:
+def _normalize_record_row(
+    row: Any,
+    index: int,
+    *,
+    schema_version: int,
+) -> dict[str, Any]:
     location = f"records[{index}]"
     if not isinstance(row, dict):
         raise ValueError(f"{location} 必须是对象")
+    greeting = _optional_text(row, "greeting", "")
+    greeting_source = validate_greeting_source(
+        _optional_text(row, "greeting_source", "local"),
+        f"{location}.greeting_source",
+    )
+    if greeting_source in ("ai", "hitokoto") and not greeting:
+        raise ValueError(f"{location}.greeting 不能为空")
     return {
         "date_key": _require_text(row, "date_key", location),
         "user_id": _require_text(row, "user_id", location),
@@ -226,16 +240,20 @@ def _normalize_record_row(row: Any, index: int) -> dict[str, Any]:
         "note": _require_text(row, "note", location),
         "event_key": _optional_text(row, "event_key", ""),
         "event_label": _optional_text(row, "event_label", ""),
-        "greeting": _optional_text(row, "greeting", ""),
-        "greeting_source": validate_greeting_source(
-            _optional_text(row, "greeting_source", "local"),
-            f"{location}.greeting_source",
-        ),
+        "greeting": greeting,
+        "greeting_source": greeting_source,
         "greeting_attribution": _optional_text(row, "greeting_attribution", ""),
         "secondary_note": _optional_text(row, "secondary_note", ""),
         "template_version": _require_text(row, "template_version", location),
         "theme_id": _validated_theme_id(
             _require_text(row, "theme_id", location), f"{location}.theme_id"
+        ),
+        "render_tier": validate_checkin_render_tier(
+            (
+                _optional_text(row, "render_tier", DEFAULT_CHECKIN_RENDER_TIER)
+                if schema_version == 6
+                else _require_text(row, "render_tier", location)
+            )
         ),
         "background_mode": _require_text(
             row, "background_mode", location, allow_blank=True
@@ -252,6 +270,7 @@ def _normalize_record_row(row: Any, index: int) -> dict[str, Any]:
         "background_author": _require_text(
             row, "background_author", location, allow_blank=True
         ),
+        "background_quality": _optional_text(row, "background_quality", ""),
         "created_at": _require_text(row, "created_at", location),
         "updated_at": _require_text(row, "updated_at", location),
     }

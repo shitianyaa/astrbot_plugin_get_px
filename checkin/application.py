@@ -8,6 +8,7 @@ from astrbot.api.all import Image, Plain, logger
 from astrbot.api.event import AstrMessageEvent
 
 from .models import ACHIEVEMENTS, CheckinProfile, CheckinRecord
+from .quality import CHECKIN_JPEG_QUALITY, get_checkin_render_tier
 from .birthday import birthday_matches, parse_qq_birthday
 from .card import CardBackground, build_checkin_card_data
 from .content import CheckinContent, resolve_checkin_content
@@ -22,6 +23,15 @@ except ImportError:  # Direct imports used by the test suite.
 
 LOG_PREFIX = "[GetPx]"
 DEFAULT_AUTO_DOWNGRADE_ORIGINAL_LIMIT_MB = 3.0
+
+
+def _checkin_background_mode_label(mode: object) -> str:
+    value = str(mode or "none")
+    return {
+        "pixiv_daily": "在线图片",
+        "custom": "自定义背景",
+        "fallback": "占位图",
+    }.get(value, value)
 
 
 @dataclass(frozen=True)
@@ -73,6 +83,16 @@ class CheckinApplicationMixin:
         except Exception:
             platform = ""
         return group_id, group_name or group_id, platform
+
+    def _checkin_background_claims_enabled(self) -> bool:
+        image_index = getattr(self, "image_index", None)
+        if image_index is None:
+            return False
+        try:
+            return int(getattr(image_index, "retention_days", 1)) > 0
+        except (TypeError, ValueError):
+            # 未知的第三方索引实现按启用处理，避免误释放真实占用。
+            return True
 
     async def _handle_checkin(
         self,
@@ -133,8 +153,11 @@ class CheckinApplicationMixin:
                 platform=platform,
             )
         except Exception as e:
-            logger.error(f"{LOG_PREFIX} 签到写入失败: {e}")
-            yield event.plain_result(f"签到失败: {e}")
+            logger.error(
+                f"{LOG_PREFIX} 签到写入失败: stage=checkin "
+                f"error_type={type(e).__name__}"
+            )
+            yield event.plain_result("签到失败，请稍后再试")
             return
 
         record = result.record
@@ -150,70 +173,116 @@ class CheckinApplicationMixin:
             )
             result = replace(result, record=record)
         except Exception as e:
-            logger.warning(f"{LOG_PREFIX} 签到内容持久化失败，回退纯文字: {e}")
+            logger.warning(
+                f"{LOG_PREFIX} 签到内容持久化失败，回退纯文字: "
+                f"stage=local_content error_type={type(e).__name__}"
+            )
             yield event.plain_result(self._format_checkin_plain_text(result))
             return
 
         cache = getattr(self, "checkin_cache", None)
         if cache is None:
+            logger.warning(
+                f"{LOG_PREFIX} 签到卡回退纯文字: reason=cache_unavailable"
+            )
             yield event.plain_result(self._format_checkin_plain_text(result))
             return
 
         background: CardBackground | None = None
         card_path: Path | None = None
         claim_held = False
+        background_persisted = False
         profile_snapshot = self._checkin_profile_from_record(record)
         user_title = await self._get_checkin_user_title(record.user_id)
+        preferred_tier = (
+            self._record_checkin_render_tier(record)
+            if result.duplicate
+            else self._configured_checkin_render_tier()
+        )
+        stage = "background_selection"
+        cache_hit = False
         try:
             if result.duplicate:
                 background = self._checkin_background_from_record(record)
             else:
-                background = await self._prepare_checkin_background(event, record)
+                background = await self._prepare_checkin_background(
+                    event,
+                    record,
+                    render_tier=preferred_tier,
+                )
                 claim_held = bool(
                     background is not None
                     and background.mode == "pixiv_daily"
                     and background.illust_id
+                    and self._checkin_background_claims_enabled()
                 )
 
-            # 构建视图模型会把背景图整体编码为 Data URL，放入线程池执行
-            cache_key = await asyncio.to_thread(
-                self._checkin_card_cache_key,
+            stage = "cache_lookup"
+            cached_path, actual_tier = await self._get_cached_checkin_card(
                 event,
+                cache=cache,
                 profile=profile_snapshot,
                 record=record,
                 background=background,
                 bot_name=bot_name,
                 user_title=user_title,
+                preferred_tier=preferred_tier,
             )
-            cached_path = await asyncio.to_thread(cache.get, record.date_key, cache_key)
+            cache_hit = cached_path is not None
             if cached_path is None and result.duplicate:
+                stage = "background_restore"
                 background = await self._restore_checkin_background(event, record)
-
-            renderer_source_path = ""
-
-            async def render_card() -> str:
-                nonlocal renderer_source_path
-                renderer_source_path = await self._render_checkin_card(
+                restored_quality = str(getattr(background, "quality", "") or "")
+                saved_quality = str(
+                    getattr(record, "background_quality", "") or ""
+                )
+                if (
+                    background.mode == "pixiv_daily"
+                    and restored_quality
+                    and restored_quality != saved_quality
+                ):
+                    try:
+                        await self.checkin_store.update_record_background(
+                            user_id=user_id,
+                            date_key=record.date_key,
+                            mode=background.mode,
+                            source=background.source,
+                            illust_id=background.illust_id,
+                            title=background.title,
+                            author=background.author,
+                            quality=restored_quality,
+                        )
+                    except asyncio.CancelledError:
+                        raise
+                    except Exception as exc:
+                        logger.warning(
+                            f"{LOG_PREFIX} 签到背景实际质量同步失败: "
+                            f"error_type={type(exc).__name__}"
+                        )
+                    else:
+                        record = replace(
+                            record,
+                            background_quality=restored_quality,
+                        )
+                        logger.debug(
+                            f"{LOG_PREFIX} 签到背景实际质量已同步: "
+                            f"quality={restored_quality}"
+                        )
+            if cached_path is None:
+                stage = "card_render"
+                cached_path, actual_tier = await self._render_checkin_card_with_fallback(
                     event,
                     profile=profile_snapshot,
                     record=record,
                     background=background,
                     bot_name=bot_name,
                     user_title=user_title,
+                    preferred_tier=preferred_tier,
+                    cache=cache,
                 )
-                return renderer_source_path
-
-            if cached_path is None:
-                try:
-                    cached_path = await cache.store(
-                        record.date_key,
-                        cache_key,
-                        render_card,
-                    )
-                finally:
-                    cleanup(renderer_source_path)
 
             if not result.duplicate and background is not None:
+                stage = "background_persist"
                 await self.checkin_store.update_record_background(
                     user_id=user_id,
                     date_key=record.date_key,
@@ -222,24 +291,102 @@ class CheckinApplicationMixin:
                     illust_id=background.illust_id,
                     title=background.title,
                     author=background.author,
+                    quality=background.quality,
                 )
+                background_persisted = True
+                record = replace(
+                    record,
+                    background_mode=background.mode,
+                    background_source=background.source,
+                    background_illust_id=background.illust_id,
+                    background_title=background.title,
+                    background_author=background.author,
+                    background_quality=background.quality,
+                )
+            if not result.duplicate:
+                stage = "render_tier_persist"
+                record = await self._persist_checkin_render_tier(record, actual_tier)
+            result = replace(result, record=record)
             card_path = cached_path
             if card_path:
                 content = [Image.fromFileSystem(str(card_path))]
                 if background and background.pixiv_caption:
                     content.append(Plain(background.pixiv_caption))
+                stage = "card_send"
                 await event.send(event.chain_result(content))
-                await self._record_checkin_background(event, background)
+                # 图片发送成功后不再释放 pending；即使升级正式记录失败，也要继续去重。
                 claim_held = False
+                try:
+                    stage = "usage_record"
+                    await self._record_checkin_background(event, background)
+                except asyncio.CancelledError:
+                    logger.warning(
+                        f"{LOG_PREFIX} 签到背景使用记录被取消，保留已发送图片占用"
+                    )
+                    raise
+                except Exception as exc:
+                    logger.warning(
+                        f"{LOG_PREFIX} 签到背景使用记录失败，保留已发送图片占用: "
+                        f"error_type={type(exc).__name__}"
+                    )
+                logger.info(
+                    f"{LOG_PREFIX} 签到卡发送完成：实际画质={actual_tier} "
+                    f"缓存命中={'是' if cache_hit else '否'} "
+                    f"背景模式={_checkin_background_mode_label(getattr(background, 'mode', 'none'))}"
+                )
                 return
         except Exception as e:
             card_path = None
-            logger.warning(f"{LOG_PREFIX} 签到卡片渲染失败，回退纯文字: {e}")
+            logger.warning(
+                f"{LOG_PREFIX} 签到卡回退纯文字: stage={stage} "
+                f"首选画质={preferred_tier} "
+                f"错误类型={type(e).__name__}"
+            )
         finally:
             try:
-                if claim_held:
-                    await self._release_checkin_background_claim(event, background)
-                    claim_held = False
+                if claim_held and self._checkin_background_claims_enabled():
+                    can_release_claim = True
+                    if background_persisted:
+                        try:
+                            await self.checkin_store.update_record_background(
+                                user_id=user_id,
+                                date_key=record.date_key,
+                                mode="fallback",
+                                source="fallback",
+                                illust_id="",
+                                title="",
+                                author="",
+                                quality="",
+                            )
+                            if cached_path is not None:
+                                try:
+                                    Path(cached_path).unlink(missing_ok=True)
+                                except OSError as exc:
+                                    logger.warning(
+                                        f"{LOG_PREFIX} 未发送签到卡缓存清理失败: "
+                                        f"error_type={type(exc).__name__}"
+                                    )
+                            logger.debug(
+                                f"{LOG_PREFIX} 未发送签到背景持久化已撤销"
+                            )
+                        except asyncio.CancelledError:
+                            logger.warning(
+                                f"{LOG_PREFIX} 未发送签到背景撤销被取消，"
+                                f"保留去重占用"
+                            )
+                            raise
+                        except Exception as exc:
+                            can_release_claim = False
+                            logger.warning(
+                                f"{LOG_PREFIX} 未发送签到背景撤销失败，"
+                                f"保留去重占用: "
+                                f"error_type={type(exc).__name__}"
+                            )
+                    if can_release_claim:
+                        await self._release_checkin_background_claim(
+                            event, background
+                        )
+                        claim_held = False
             finally:
                 if (
                     background
@@ -247,6 +394,11 @@ class CheckinApplicationMixin:
                     and background.mode == "pixiv_daily"
                 ):
                     cleanup(background.image_path)
+                    if not Path(background.image_path).exists():
+                        logger.debug(
+                            f"{LOG_PREFIX} 签到背景临时文件清理完成: "
+                            f"mode=pixiv_daily"
+                        )
         yield event.plain_result(self._format_checkin_plain_text(result))
 
     async def _prepare_checkin_record_content(
@@ -264,7 +416,7 @@ class CheckinApplicationMixin:
             self._checkin_profile_from_record(record),
             mutate_features=True,
         )
-        record = await self.checkin_store.update_record_content(
+        local_record = await self.checkin_store.update_record_content(
             user_id=record.user_id,
             date_key=record.date_key,
             event_key=content.event_key,
@@ -275,23 +427,31 @@ class CheckinApplicationMixin:
             template_version=record.template_version or "default:1",
         )
         if not allow_ai:
-            return record
+            return local_record
         greeting, source, greeting_attribution = await self._generate_checkin_greeting(
             event, content
         )
         if source not in ("ai", "hitokoto"):
-            return record
-        return await self.checkin_store.update_record_content(
-            user_id=record.user_id,
-            date_key=record.date_key,
-            event_key=content.event_key,
-            event_label=content.event_label,
-            greeting=greeting,
-            greeting_source=source,
-            greeting_attribution=greeting_attribution,
-            secondary_note=content.secondary_note,
-            template_version=record.template_version or "default:1",
-        )
+            return local_record
+        try:
+            return await self.checkin_store.update_record_content(
+                user_id=record.user_id,
+                date_key=record.date_key,
+                event_key=content.event_key,
+                event_label=content.event_label,
+                greeting=greeting,
+                greeting_source=source,
+                greeting_attribution=greeting_attribution,
+                secondary_note=content.secondary_note,
+                template_version=record.template_version or "default:1",
+            )
+        except Exception as exc:
+            logger.warning(
+                f"{LOG_PREFIX} 远程签到问候升级失败，继续使用本地问候: "
+                f"source={source} stage=persist_upgrade "
+                f"error_type={type(exc).__name__}"
+            )
+            return local_record
 
     async def _compose_checkin_content(
         self,
@@ -416,7 +576,10 @@ class CheckinApplicationMixin:
                 greeting_attribution=attribution,
             )
         except Exception as exc:
-            logger.warning(f"{LOG_PREFIX} 刷新签到一言失败，保留原问候: {exc}")
+            logger.warning(
+                f"{LOG_PREFIX} 刷新签到一言失败，保留原问候: "
+                f"error_type={type(exc).__name__}"
+            )
             return record
 
     def _checkin_greeting_mode(self) -> str:
@@ -473,16 +636,22 @@ class CheckinApplicationMixin:
             if parsed is None:
                 logger.info(f"{LOG_PREFIX} QQ 生日未读取: 用户未公开生日")
             else:
-                logger.info(f"{LOG_PREFIX} QQ 生日读取成功: user_id={user_id}")
+                logger.info(f"{LOG_PREFIX} QQ 生日读取成功")
             return QQBirthdayLookup(parsed, True)
         except asyncio.TimeoutError:
-            logger.warning(f"{LOG_PREFIX} QQ 生日读取超时: user_id={user_id}")
+            logger.warning(f"{LOG_PREFIX} QQ 生日读取超时")
             return QQBirthdayLookup(None, False)
         except (TypeError, ValueError) as exc:
-            logger.warning(f"{LOG_PREFIX} QQ 生日资料解析失败: {exc}")
+            logger.warning(
+                f"{LOG_PREFIX} QQ 生日资料解析失败: "
+                f"error_type={type(exc).__name__}"
+            )
             return QQBirthdayLookup(None, False)
         except Exception as exc:
-            logger.warning(f"{LOG_PREFIX} QQ 生日读取异常: {exc}", exc_info=True)
+            logger.warning(
+                f"{LOG_PREFIX} QQ 生日读取异常: "
+                f"error_type={type(exc).__name__}"
+            )
             return QQBirthdayLookup(None, False)
 
     @staticmethod
@@ -510,6 +679,7 @@ class CheckinApplicationMixin:
             illust_id=record.background_illust_id,
             title=record.background_title,
             author=record.background_author,
+            quality=str(getattr(record, "background_quality", "") or ""),
         )
 
     def _checkin_card_cache_key(
@@ -521,6 +691,7 @@ class CheckinApplicationMixin:
         background: CardBackground | None,
         bot_name: str,
         user_title: str = "",
+        render_tier: str | None = None,
     ) -> str:
         background = background or self._checkin_background_from_record(record)
         identity_background = CardBackground(
@@ -529,6 +700,7 @@ class CheckinApplicationMixin:
             illust_id=background.illust_id,
             title=background.title,
             author=background.author,
+            quality=background.quality,
         )
         avatar_url = (
             self._checkin_avatar_url(event)
@@ -548,8 +720,13 @@ class CheckinApplicationMixin:
         )
         view_model["background_mode"] = identity_background.mode
         view_model["background_source"] = identity_background.source
-        view_model["render_quality"] = self._cfg_int(
-            "checkin_card_quality", 95, 60, 100
+        render_spec = get_checkin_render_tier(
+            render_tier or self._record_checkin_render_tier(record)
+        )
+        view_model["render_tier"] = render_spec.name
+        view_model["render_quality"] = CHECKIN_JPEG_QUALITY
+        view_model["background_quality"] = str(
+            background.quality or render_spec.background_quality
         )
         return self.checkin_cache.cache_key(
             date_key=record.date_key,
@@ -557,3 +734,20 @@ class CheckinApplicationMixin:
             template_version=get_checkin_theme(record.theme_id).template_version,
             view_model=view_model,
         )
+
+    async def _persist_checkin_render_tier(
+        self,
+        record: CheckinRecord,
+        render_tier: str,
+    ) -> CheckinRecord:
+        normalized = get_checkin_render_tier(render_tier).name
+        if self._record_checkin_render_tier(record) == normalized:
+            return record
+        updater = getattr(self.checkin_store, "update_record_render_tier", None)
+        if callable(updater):
+            return await updater(
+                user_id=record.user_id,
+                date_key=record.date_key,
+                render_tier=normalized,
+            )
+        return replace(record, render_tier=normalized)

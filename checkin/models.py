@@ -6,7 +6,7 @@ from zoneinfo import ZoneInfo
 
 
 SHANGHAI_TZ = ZoneInfo("Asia/Shanghai")
-CHECKIN_SNAPSHOT_SCHEMA_VERSION = 6
+CHECKIN_SNAPSHOT_SCHEMA_VERSION = 7
 CHECKIN_SNAPSHOT_SCOPE = "checkin"
 CHECKIN_SNAPSHOT_PLUGIN_NAME = "astrbot_plugin_get_px"
 
@@ -80,6 +80,7 @@ class CheckinRecord:
     background_author: str
     created_at: str
     updated_at: str
+    background_quality: str = ""
     event_key: str = ""
     event_label: str = ""
     greeting: str = ""
@@ -88,6 +89,7 @@ class CheckinRecord:
     secondary_note: str = ""
     template_version: str = "default:1"
     theme_id: str = "default"
+    render_tier: str = "省流量"
 
 
 @dataclass(frozen=True)

@@ -100,7 +100,7 @@ async def test_snapshot_round_trip_preserves_group_presence() -> None:
         )
         snapshot = await source.export_snapshot()
 
-        assert snapshot["schema_version"] == 6
+        assert snapshot["schema_version"] == 7
         assert len(snapshot["group_presence"]) == 1
 
         target = FrozenCheckinStore(dst, date_key="2026-07-13")

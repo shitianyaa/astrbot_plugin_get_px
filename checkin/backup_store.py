@@ -156,10 +156,11 @@ class BackupStoreMixin:
                             total_days_after, streak_days_after,
                             note, event_key, event_label, greeting,
                             greeting_source, greeting_attribution,
-                            secondary_note, template_version, theme_id,
+                            secondary_note, template_version, theme_id, render_tier,
                             background_mode, background_source,
                             background_illust_id, background_title,
-                            background_author, created_at, updated_at
+                            background_author, background_quality,
+                            created_at, updated_at
                         ) VALUES (
                             :date_key, :user_id, :username, :bot_name,
                             :base_coins, :bonus_coins, :coins_reward,
@@ -169,10 +170,11 @@ class BackupStoreMixin:
                             :total_days_after, :streak_days_after,
                             :note, :event_key, :event_label, :greeting,
                             :greeting_source, :greeting_attribution,
-                            :secondary_note, :template_version, :theme_id,
+                            :secondary_note, :template_version, :theme_id, :render_tier,
                             :background_mode, :background_source,
                             :background_illust_id, :background_title,
-                            :background_author, :created_at, :updated_at
+                            :background_author, :background_quality,
+                            :created_at, :updated_at
                         )
                         """,
                         records,

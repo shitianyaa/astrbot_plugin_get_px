@@ -192,7 +192,7 @@ async def test_user_themes_survive_snapshot_round_trip() -> None:
         await source.purchase_theme(user_id="10001", theme_id="red")
 
         snapshot = await source.export_snapshot()
-        assert snapshot["schema_version"] == 6
+        assert snapshot["schema_version"] == 7
         assert {row["theme_id"] for row in snapshot["user_themes"]} == {
             "default",
             "red",

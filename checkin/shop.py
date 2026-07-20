@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import asyncio
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -56,7 +55,7 @@ def build_checkin_shop_items(
         CheckinShopItem(
             item_id=f"boost:{days}",
             category="boost",
-            command=f"签到中心 商店 加持 {days}",
+            command=f"签到商店 加持 {days}",
             name=f"{days} 天",
             price=cost,
         )
@@ -66,7 +65,7 @@ def build_checkin_shop_items(
         CheckinShopItem(
             item_id="background:refresh",
             category="background",
-            command="签到中心 商店 刷新背景",
+            command="签到商店 刷新背景",
             name="",
             price=max(0, int(refresh_cost)),
         )
@@ -75,7 +74,7 @@ def build_checkin_shop_items(
         CheckinShopItem(
             item_id=f"theme:{theme.theme_id}",
             category="theme",
-            command=f"签到中心 商店 主题 购买 {theme.code}",
+            command=f"签到商店 主题 购买 {theme.code}",
             name=theme.name,
             price=(
                 0
@@ -101,8 +100,8 @@ class CheckinShopMixin:
             return
         if not days or not days.isdigit():
             yield event.plain_result(
-                "用法: 签到中心 商店 加持 <1|3|7>\n"
-                "示例: 签到中心 商店 加持 3"
+                "用法: 签到商店 加持 <1|3|7>\n"
+                "示例: 签到商店 加持 3"
             )
             return
         user_id = str(event.get_sender_id() or "")
@@ -115,7 +114,10 @@ class CheckinShopMixin:
                 days=int(days),
             )
         except Exception as exc:
-            logger.warning(f"{LOG_PREFIX} 购买签到加持失败: {exc}")
+            logger.warning(
+                f"{LOG_PREFIX} 购买签到加持失败: "
+                f"error_type={type(exc).__name__}"
+            )
             yield event.plain_result("购买失败，请稍后再试")
             return
         lines = [purchase.message, f"当前金币: {purchase.profile.coins}"]
@@ -137,10 +139,10 @@ class CheckinShopMixin:
             for item in build_checkin_shop_items(refresh_cost, theme_cost)
         )
         lines.append(
-            "使用“签到中心 商店 主题 查看 <编号>”预览，"
-            "“签到中心 商店 主题 列表”查看购买状态"
+            "使用“签到商店 主题 查看 <编号>”预览，"
+            "“签到商店 主题 列表”查看购买状态"
         )
-        lines.append("已购买主题可使用“签到中心 商店 主题 切换 <编号>”切换")
+        lines.append("已购买主题可使用“签到商店 主题 切换 <编号>”切换")
         return "\n".join(lines)
 
     async def _handle_checkin_themes(self, event: AstrMessageEvent) -> str:
@@ -162,18 +164,18 @@ class CheckinShopMixin:
                 state = "未购"
             lines.append(f"[{state}] {theme.code} · {theme.name} - {theme.description}")
         lines.append(
-            "使用“签到中心 商店 主题 查看 <编号>”预览，"
-            "“签到中心 商店 主题 购买 <编号>”购买"
+            "使用“签到商店 主题 查看 <编号>”预览，"
+            "“签到商店 主题 购买 <编号>”购买"
         )
-        lines.append("已购买主题可使用“签到中心 商店 主题 切换 <编号>”切换")
+        lines.append("已购买主题可使用“签到商店 主题 切换 <编号>”切换")
         return "\n".join(lines)
 
     async def _handle_checkin_theme_preview(self, event: AstrMessageEvent, value: str):
         theme = resolve_checkin_theme(value)
         if theme is None:
             return event.plain_result(
-                "用法：签到中心 商店 主题 查看 <编号>\n"
-                "示例：签到中心 商店 主题 查看 1"
+                "用法：签到商店 主题 查看 <编号>\n"
+                "示例：签到商店 主题 查看 1"
             )
         preview_path = theme.preview_path(PLUGIN_ROOT)
         if not preview_path.is_file():
@@ -196,7 +198,7 @@ class CheckinShopMixin:
             return "签到数据尚未初始化，请稍后再试"
         theme = resolve_checkin_theme(value)
         if theme is None:
-            return "未知主题。使用“签到中心 商店 主题 列表”查看主题编号。"
+            return "未知主题。使用“签到商店 主题 列表”查看主题编号。"
         if theme.theme_id == DEFAULT_CHECKIN_THEME_ID:
             return await self._handle_select_checkin_theme(event, theme.theme_id)
         user_id = str(event.get_sender_id() or "")
@@ -208,7 +210,10 @@ class CheckinShopMixin:
                 cost=theme_cost,
             )
         except Exception as exc:
-            logger.warning(f"{LOG_PREFIX} 购买签到主题失败: {exc}")
+            logger.warning(
+                f"{LOG_PREFIX} 购买签到主题失败: "
+                f"error_type={type(exc).__name__}"
+            )
             return "购买主题失败，请稍后再试"
         return "\n".join(
             [
@@ -226,7 +231,7 @@ class CheckinShopMixin:
             return "签到数据尚未初始化，请稍后再试"
         theme = resolve_checkin_theme(value)
         if theme is None:
-            return "未知主题。使用“签到中心 商店 主题 列表”查看主题编号。"
+            return "未知主题。使用“签到商店 主题 列表”查看主题编号。"
         user_id = str(event.get_sender_id() or "")
         try:
             await self.checkin_store.select_theme(
@@ -286,12 +291,15 @@ class CheckinShopMixin:
 
         background: CardBackground | None = None
         claim_held = False
-        renderer_source_path = ""
+        cache = getattr(self, "checkin_cache", None)
+        card_path: Path | None = None
+        refresh_tier = self._configured_checkin_render_tier()
         try:
             background = await self._prepare_checkin_background(
                 event,
                 record,
                 refresh_preview=True,
+                render_tier=refresh_tier,
             )
             claim_held = bool(
                 background is not None
@@ -313,6 +321,7 @@ class CheckinShopMixin:
                 illust_id=background.illust_id,
                 title=background.title,
                 author=background.author,
+                quality=background.quality,
             )
             if not purchase.success or purchase.record is None:
                 yield event.plain_result(purchase.message)
@@ -323,33 +332,17 @@ class CheckinShopMixin:
             record = await self._refresh_checkin_hitokoto(event, record)
             bot_name = self._cfg_str("checkin_bot_name", "neko") or "neko"
             user_title = await self._get_checkin_user_title(user_id)
-            cache = getattr(self, "checkin_cache", None)
-
-            async def render_card() -> str:
-                nonlocal renderer_source_path
-                renderer_source_path = await self._render_checkin_card(
-                    event,
-                    profile=profile,
-                    record=record,
-                    background=background,
-                    bot_name=bot_name,
-                    user_title=user_title,
-                )
-                return renderer_source_path
-
-            if cache is not None:
-                cache_key = await asyncio.to_thread(
-                    self._checkin_card_cache_key,
-                    event,
-                    profile=profile,
-                    record=record,
-                    background=background,
-                    bot_name=bot_name,
-                    user_title=user_title,
-                )
-                card_path = await cache.store(record.date_key, cache_key, render_card)
-            else:
-                card_path = Path(await render_card())
+            card_path, actual_tier = await self._render_checkin_card_with_fallback(
+                event,
+                profile=profile,
+                record=record,
+                background=background,
+                bot_name=bot_name,
+                user_title=user_title,
+                preferred_tier=refresh_tier,
+                cache=cache,
+            )
+            record = await self._persist_checkin_render_tier(record, actual_tier)
             content = [Plain(purchase.message), Image.fromFileSystem(str(card_path))]
             if background.pixiv_caption:
                 content.append(Plain(background.pixiv_caption))
@@ -357,19 +350,26 @@ class CheckinShopMixin:
             try:
                 await self._record_checkin_background(event, background)
             except Exception as exc:
-                logger.warning(f"{LOG_PREFIX} 记录签到背景使用状态失败: {exc}")
+                logger.warning(
+                    f"{LOG_PREFIX} 记录签到背景使用状态失败: "
+                    f"error_type={type(exc).__name__}"
+                )
             else:
                 claim_held = False
             return
         except Exception as exc:
-            logger.warning(f"{LOG_PREFIX} 更新签到背景失败: {exc}")
+            logger.warning(
+                f"{LOG_PREFIX} 更新签到背景失败: "
+                f"error_type={type(exc).__name__}"
+            )
             yield event.plain_result(
                 "更新背景失败；若金币已经扣除，重新发送“签到”可查看已保存的新背景"
             )
         finally:
-            cleanup(renderer_source_path)
             if claim_held:
                 await self._release_checkin_background_claim(event, background)
+            if cache is None and card_path is not None:
+                cleanup(str(card_path))
             if (
                 background is not None
                 and background.image_path

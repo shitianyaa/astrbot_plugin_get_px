@@ -98,7 +98,9 @@ class CheckinCommandMixin:
                 reverse=True,
             )
         except OSError as exc:
-            logger.warning(f"{LOG_PREFIX} 签到备份扫描失败: {type(exc).__name__}")
+            logger.warning(
+                f"{LOG_PREFIX} 签到备份扫描失败: error_type={type(exc).__name__}"
+            )
             return
         retained = set(candidates[:MAX_CHECKIN_BACKUP_FILES])
         if keep is not None:
@@ -113,10 +115,12 @@ class CheckinCommandMixin:
             except OSError as exc:
                 logger.warning(
                     f"{LOG_PREFIX} 签到旧备份清理失败: "
-                    f"file={item.name} error={type(exc).__name__}"
+                    f"file={item.name} error_type={type(exc).__name__}"
                 )
         if removed:
-            logger.info(f"{LOG_PREFIX} 签到旧备份已清理: removed={removed}")
+            logger.info(
+                f"{LOG_PREFIX} 签到旧备份已清理: removed_count={removed}"
+            )
 
     async def _read_uploaded_file_bytes(self, upload) -> bytes:
         filename = str(getattr(upload, "filename", "") or "").strip() or "upload.json"
@@ -198,8 +202,18 @@ class CheckinCommandMixin:
             self._checkin_profile_from_record(record),
             mutate_features=False,
         )
-        greeting, source, attribution = await self._generate_checkin_greeting(
-            event, content
+        try:
+            greeting, source, attribution = await self._generate_checkin_greeting(
+                event, content
+            )
+        except Exception as exc:
+            logger.warning(
+                f"{LOG_PREFIX} 签到预览问候生成失败，使用本地问候: "
+                f"preview=true error_type={type(exc).__name__}"
+            )
+            greeting, source, attribution = content.greeting, "local", ""
+        logger.debug(
+            f"{LOG_PREFIX} 签到预览问候完成: preview=true result={source}"
         )
         record = replace(
             record,
@@ -219,23 +233,30 @@ class CheckinCommandMixin:
 
         background: CardBackground | None = None
         card_path = ""
+        preview_tier = self._configured_checkin_render_tier()
         try:
             background = await self._prepare_checkin_background(
                 event,
                 record,
                 claim_usage=False,
                 refresh_preview=True,
+                render_tier=preview_tier,
             )
-            card_path = await self._render_checkin_card(
+            rendered_path, _actual_tier = await self._render_checkin_card_with_fallback(
                 event,
                 profile=preview_profile,
                 record=record,
                 background=background,
                 bot_name=bot_name,
                 user_title=user_title,
+                preferred_tier=preview_tier,
             )
+            card_path = str(rendered_path)
         except Exception as e:
-            logger.warning(f"{LOG_PREFIX} 签到测试卡片渲染失败，回退纯文字: {e}")
+            logger.warning(
+                f"{LOG_PREFIX} 签到测试卡片渲染失败，回退纯文字: "
+                f"preview=true error_type={type(e).__name__}"
+            )
 
         if card_path:
             try:
@@ -248,7 +269,10 @@ class CheckinCommandMixin:
                 await event.send(event.chain_result(content))
                 return
             except Exception as e:
-                logger.warning(f"{LOG_PREFIX} 签到测试卡片发送失败，回退纯文字: {e}")
+                logger.warning(
+                    f"{LOG_PREFIX} 签到测试卡片发送失败，回退纯文字: "
+                    f"preview=true error_type={type(e).__name__}"
+                )
             finally:
                 cleanup(card_path)
                 if (
@@ -325,7 +349,10 @@ class CheckinCommandMixin:
                 prefix="checkin-export"
             )
         except Exception as e:
-            logger.error(f"{LOG_PREFIX} 导出签到备份失败: {e}")
+            logger.error(
+                f"{LOG_PREFIX} 导出签到备份失败: "
+                f"error_type={type(e).__name__}"
+            )
             return event.plain_result("导出签到备份失败，请稍后再试")
         try:
             await event.send(
@@ -333,7 +360,10 @@ class CheckinCommandMixin:
             )
             return None
         except Exception as e:
-            logger.error(f"{LOG_PREFIX} 发送签到备份文件失败: {e}")
+            logger.error(
+                f"{LOG_PREFIX} 发送签到备份文件失败: "
+                f"error_type={type(e).__name__}"
+            )
             return event.plain_result("发送签到备份文件失败，请稍后再试")
 
     async def _handle_checkin_ranking(
@@ -357,7 +387,7 @@ class CheckinCommandMixin:
         }
         ranking_type = aliases.get(str(mode or "").strip())
         if ranking_type is None:
-            return "用法：签到中心 排行 [今日|月榜|连签|累计]"
+            return "请使用：签到排行 今日、月榜、连签或累计"
         result = await self.checkin_store.get_group_ranking(
             group_id=group_id,
             ranking_type=ranking_type,
@@ -406,7 +436,10 @@ class CheckinCommandMixin:
             profile = await self.checkin_store.get_profile(user_id)
             preference = await self.checkin_store.get_user_preference(user_id)
         except Exception as e:
-            logger.warning(f"{LOG_PREFIX} 读取签到状态失败: {e}")
+            logger.warning(
+                f"{LOG_PREFIX} 读取签到状态失败: "
+                f"error_type={type(e).__name__}"
+            )
             yield event.plain_result("读取签到状态失败，请稍后再试")
             return
         level = affection_level(profile.affection)
@@ -438,19 +471,19 @@ class CheckinCommandMixin:
             if action == "设置":
                 parsed = parse_month_day(value)
                 if parsed is None:
-                    return "用法: 签到中心 我的 生日 设置 MM-DD"
+                    return "用法: 签到我的 生日 设置 MM-DD"
                 preference = await self.checkin_store.set_birthday(
                     user_id=user_id, month=parsed[0], day=parsed[1], source="manual"
                 )
                 return f"生日已设置为 {preference.birthday_label}（手动）"
             if action == "清除":
                 await self.checkin_store.clear_birthday(user_id)
-                return "生日已清除，再次使用“签到中心 我的 生日”会重新读取 QQ 资料"
+                return "生日已清除，再次使用“签到我的 生日”会重新读取 QQ 资料"
             if action not in {"", "查看"}:
                 return (
-                    "用法: 签到中心 我的 生日 [查看]\n"
-                    "或: 签到中心 我的 生日 设置 MM-DD\n"
-                    "或: 签到中心 我的 生日 清除"
+                    "用法: 签到我的 生日 [查看]\n"
+                    "或: 签到我的 生日 设置 MM-DD\n"
+                    "或: 签到我的 生日 清除"
                 )
             preference = await self.checkin_store.get_user_preference(user_id)
             if preference.birthday_label:
@@ -512,7 +545,7 @@ class CheckinCommandMixin:
             title = str(ACHIEVEMENTS[achievement_id]["title"])
             mark = "当前" if achievement_id == preference.selected_title_id else "可用"
             lines.append(f"[{mark}] {title}（{achievement_id}）")
-        lines.append("使用“签到中心 我的 称号 佩戴 <称号ID或名称>”切换")
+        lines.append("使用“签到我的 称号 佩戴 <称号ID或名称>”切换")
         return "\n".join(lines)
 
     async def _handle_select_checkin_title(
@@ -521,7 +554,7 @@ class CheckinCommandMixin:
         if self.checkin_store is None:
             return "签到数据尚未初始化，请稍后再试"
         if not title:
-            return "用法: 签到中心 我的 称号 佩戴 <称号ID或名称>"
+            return "用法: 签到我的 称号 佩戴 <称号ID或名称>"
         try:
             user_id = str(event.get_sender_id() or "")
             profile = await self.checkin_store.get_profile(user_id)
@@ -556,7 +589,7 @@ class CheckinCommandMixin:
             )
         if action == "删除":
             if not event_type.isdigit():
-                return "用法: 签到中心 管理 事件 删除 ID"
+                return "用法: 签到管理 事件 删除 ID"
             deleted = await self.checkin_store.delete_global_event(int(event_type))
             return "事件已删除" if deleted else "未找到该事件"
         if action in {"添加年度", "添加单次"}:
@@ -565,12 +598,12 @@ class CheckinCommandMixin:
             event_type = action.removeprefix("添加")
             action = "添加"
         if action != "添加":
-            return "用法: 签到中心 管理 事件 添加 <年度|单次> <日期> <名称>"
+            return "用法: 签到管理 事件 添加 <年度|单次> <日期> <名称>"
         type_map = {"年度": "annual", "单次": "once"}
         if event_type not in type_map or not name:
             return (
-                "用法: 签到中心 管理 事件 添加年度 MM-DD 名称\n"
-                "或: 签到中心 管理 事件 添加单次 YYYY-MM-DD 名称"
+                "用法: 签到管理 事件 添加年度 MM-DD 名称\n"
+                "或: 签到管理 事件 添加单次 YYYY-MM-DD 名称"
             )
         try:
             item = await self.checkin_store.add_global_event(

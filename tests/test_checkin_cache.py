@@ -73,12 +73,106 @@ class CheckinCardCacheTest(unittest.IsolatedAsyncioTestCase):
         corrupt.parent.mkdir(parents=True)
         corrupt.write_bytes(b"not a jpeg")
 
-        self.assertIsNone(self.cache.get(self.date_key, self.key))
+        with patch("astrbot_plugin_get_px.checkin.cache.logger") as mock_logger:
+            self.assertIsNone(self.cache.get(self.date_key, self.key))
+        self.assertIn(
+            "原因=corrupt_or_unreadable",
+            " ".join(str(call) for call in mock_logger.warning.call_args_list),
+        )
         self.assertFalse(corrupt.exists())
 
         _write_jpeg(corrupt, size=(320, 180))
-        self.assertIsNone(self.cache.get(self.date_key, self.key))
+        with patch("astrbot_plugin_get_px.checkin.cache.logger") as mock_logger:
+            self.assertIsNone(self.cache.get(self.date_key, self.key))
+        self.assertIn(
+            "原因=size_mismatch",
+            " ".join(str(call) for call in mock_logger.warning.call_args_list),
+        )
         self.assertFalse(corrupt.exists())
+
+    def test_cleanup_failure_does_not_block_a_current_cache_hit(self):
+        current = self.root / self.date_key / f"{self.key}.jpg"
+        _write_jpeg(current)
+        old_date = (date.fromisoformat(self.date_key) - timedelta(days=2)).isoformat()
+        (self.root / old_date).mkdir(parents=True)
+
+        with (
+            patch(
+                "astrbot_plugin_get_px.checkin.cache.shutil.rmtree",
+                side_effect=PermissionError(r"C:\secret\locked"),
+            ),
+            patch("astrbot_plugin_get_px.checkin.cache.logger") as mock_logger,
+        ):
+            cached = self.cache.get(self.date_key, self.key)
+
+        self.assertEqual(cached, current.resolve())
+        messages = " ".join(str(call) for call in mock_logger.warning.call_args_list)
+        self.assertIn("阶段=删除缓存条目", messages)
+        self.assertIn("错误类型=PermissionError", messages)
+        self.assertNotIn("secret", messages)
+
+        self.assertEqual(
+            self.cache.cleanup_expired(today=date.fromisoformat(self.date_key)), 1
+        )
+        self.assertFalse((self.root / old_date).exists())
+
+    def test_rejected_cache_delete_failure_does_not_block_miss(self):
+        corrupt = self.root / self.date_key / f"{self.key}.jpg"
+        corrupt.parent.mkdir(parents=True)
+        corrupt.write_bytes(b"not a jpeg")
+
+        with (
+            patch.object(Path, "unlink", side_effect=PermissionError("private path")),
+            patch("astrbot_plugin_get_px.checkin.cache.logger") as mock_logger,
+        ):
+            cached = self.cache.get(self.date_key, self.key)
+
+        self.assertIsNone(cached)
+        messages = " ".join(str(call) for call in mock_logger.warning.call_args_list)
+        self.assertIn("阶段=删除拒绝文件", messages)
+        self.assertIn("错误类型=PermissionError", messages)
+        self.assertNotIn("private path", messages)
+
+    def test_expected_size_is_validated_per_render_tier(self):
+        cached = self.root / self.date_key / f"{self.key}.jpg"
+        _write_jpeg(cached, size=(1248, 702))
+
+        self.assertEqual(
+            self.cache.get(
+                self.date_key,
+                self.key,
+                expected_size=(1248, 702),
+            ),
+            cached.resolve(),
+        )
+        self.assertIsNone(
+            self.cache.get(
+                self.date_key,
+                self.key,
+                expected_size=(1728, 972),
+            )
+        )
+        self.assertFalse(cached.exists())
+
+    async def test_store_accepts_exact_non_default_tier_size(self):
+        renderer_output = Path(self._tmp.name) / "clear-output.jpg"
+        _write_jpeg(renderer_output, size=(1248, 702))
+
+        stored = await self.cache.store(
+            self.date_key,
+            self.key,
+            lambda: str(renderer_output),
+            expected_size=(1248, 702),
+        )
+
+        self.assertEqual(
+            self.cache.get(
+                self.date_key,
+                self.key,
+                expected_size=(1248, 702),
+            ),
+            stored,
+        )
 
     async def test_store_copies_valid_renderer_output_atomically(self):
         renderer_output = Path(self._tmp.name) / "renderer-output.jpg"

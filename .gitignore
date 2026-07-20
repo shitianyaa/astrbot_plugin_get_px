@@ -13,3 +13,12 @@ test-results/
 scratch/
 data/
 docs/images/checkin-event-matrix/
+
+# 新增文档（暂不提交）
+CLAUDE.md
+AGENTS.md
+docs/README.md
+docs/project/README.md
+docs/project/overview.md
+docs/project/configuration.md
+docs/dev/

@@ -8,6 +8,10 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 
 from astrbot_plugin_get_px.checkin import CheckinProfile, CheckinRecord
 from astrbot_plugin_get_px.checkin.content import resolve_checkin_content
+from astrbot_plugin_get_px.checkin.greeting import (
+    DEFAULT_CHECKIN_GREETING_PROMPT,
+    CheckinGreetingGenerator,
+)
 from astrbot_plugin_get_px.checkin.holiday import OnlineHoliday
 
 
@@ -243,3 +247,35 @@ def test_content_limits_badges_and_greeting_and_accepts_plain_birthday_data() ->
     assert content.context.username == "Alice"
     assert content.context.user_id_hint != "10001"
     assert "10001" not in content.context.to_plain_text()
+
+
+def test_ai_prompt_anonymizes_missing_or_user_id_fallback_username() -> None:
+    for username in ("", "10001", " 10001 "):
+        content = resolve_checkin_content(
+            make_record(username=username),
+            make_profile(),
+        )
+
+        prompt = CheckinGreetingGenerator._build_prompt(
+            DEFAULT_CHECKIN_GREETING_PROMPT,
+            content.context,
+        )
+
+        assert content.context.username == "匿名用户"
+        assert "用户昵称：匿名用户" in prompt
+        assert "10001" not in prompt
+
+
+def test_ai_prompt_preserves_available_username() -> None:
+    content = resolve_checkin_content(
+        make_record(username="Alice"),
+        make_profile(),
+    )
+
+    prompt = CheckinGreetingGenerator._build_prompt(
+        DEFAULT_CHECKIN_GREETING_PROMPT,
+        content.context,
+    )
+
+    assert content.context.username == "Alice"
+    assert "用户昵称：Alice" in prompt

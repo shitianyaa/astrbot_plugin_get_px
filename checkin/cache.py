@@ -15,12 +15,14 @@ import threading
 from typing import Any, Awaitable, Callable
 from zoneinfo import ZoneInfo
 
+from astrbot.api.all import logger
 from PIL import Image
 
 
+LOG_PREFIX = "[GetPx]"
 SHANGHAI_TZ = ZoneInfo("Asia/Shanghai")
 _CACHE_KEY_PATTERN = re.compile(r"[0-9a-f]{64}")
-_EXPECTED_SIZE = (960, 540)
+_DEFAULT_EXPECTED_SIZE = (960, 540)
 
 Renderer = Callable[[], str | Path | Awaitable[str | Path]]
 
@@ -69,18 +71,43 @@ class CheckinCardCache:
         )
         return hashlib.sha256(identity.encode("utf-8")).hexdigest()
 
-    def get(self, date_key: str, key: str) -> Path | None:
+    def get(
+        self,
+        date_key: str,
+        key: str,
+        *,
+        expected_size: tuple[int, int] = _DEFAULT_EXPECTED_SIZE,
+    ) -> Path | None:
         """Return a validated cache hit, removing corrupt derived files."""
         path = self._cache_path(date_key, key)
         self.cleanup_expired()
         if not path.is_file():
             return None
-        if _is_valid_card_jpeg(path):
+        rejection_reason = _card_jpeg_rejection_reason(path, expected_size)
+        if rejection_reason is None:
             return path
-        path.unlink(missing_ok=True)
+        width, height = expected_size
+        logger.warning(
+            f"{LOG_PREFIX} 签到卡缓存拒绝: 原因={rejection_reason} "
+            f"日期={date_key} 输出尺寸={width}x{height}"
+        )
+        try:
+            path.unlink(missing_ok=True)
+        except OSError as exc:
+            logger.warning(
+                f"{LOG_PREFIX} 签到卡缓存清理失败: 阶段=删除拒绝文件 "
+                f"错误类型={type(exc).__name__}"
+            )
         return None
 
-    async def store(self, date_key: str, key: str, renderer: Renderer) -> Path:
+    async def store(
+        self,
+        date_key: str,
+        key: str,
+        renderer: Renderer,
+        *,
+        expected_size: tuple[int, int] = _DEFAULT_EXPECTED_SIZE,
+    ) -> Path:
         """Render at most once for a key and atomically publish the result."""
         final_path = self._cache_path(date_key, key)
         with self._active_store_lock:
@@ -90,8 +117,17 @@ class CheckinCardCache:
             )
         try:
             async with lock:
-                cached = await asyncio.to_thread(self.get, date_key, key)
+                cached = await asyncio.to_thread(
+                    self.get,
+                    date_key,
+                    key,
+                    expected_size=expected_size,
+                )
                 if cached is not None:
+                    logger.debug(
+                        f"{LOG_PREFIX} 签到卡缓存并发命中: 日期={date_key} "
+                        f"输出尺寸={expected_size[0]}x{expected_size[1]}"
+                    )
                     return cached
 
                 rendered = renderer()
@@ -101,6 +137,7 @@ class CheckinCardCache:
                         self._store_sync,
                         Path(source),
                         final_path,
+                        expected_size,
                     )
                 )
                 cancelled = False
@@ -119,8 +156,14 @@ class CheckinCardCache:
                         pass
                     raise asyncio.CancelledError
                 if worker.done():
-                    return worker.result()
-                return result
+                    stored = worker.result()
+                else:
+                    stored = result
+                logger.debug(
+                    f"{LOG_PREFIX} 签到卡缓存写入完成: 日期={date_key} "
+                    f"输出尺寸={expected_size[0]}x{expected_size[1]}"
+                )
+                return stored
         finally:
             self._end_store(date_key)
 
@@ -136,6 +179,7 @@ class CheckinCardCache:
             return 0
 
         removed = 0
+        cleanup_incomplete = False
         cutoff = current - timedelta(days=self.retention_days - 1)
         with self._active_store_lock:
             deferred_expired_store = any(
@@ -144,40 +188,66 @@ class CheckinCardCache:
                     _directory_date(date_key) for date_key in self._active_store_dates
                 )
             )
-            self.root.mkdir(parents=True, exist_ok=True)
-            for entry in tuple(self.root.iterdir()):
-                if entry.is_file() or entry.is_symlink():
-                    if entry.name.endswith(".tmp"):
-                        entry.unlink(missing_ok=True)
-                        removed += 1
-                    elif entry.is_symlink():
-                        entry_date = _directory_date(entry.name)
-                        if entry_date is not None and entry_date < cutoff:
+            try:
+                self.root.mkdir(parents=True, exist_ok=True)
+            except OSError as exc:
+                logger.warning(
+                    f"{LOG_PREFIX} 签到卡缓存清理失败: 阶段=准备缓存目录 "
+                    f"错误类型={type(exc).__name__}"
+                )
+                return 0
+            try:
+                entries = tuple(self.root.iterdir())
+            except OSError as exc:
+                logger.warning(
+                    f"{LOG_PREFIX} 签到卡缓存清理失败: 阶段=读取缓存目录 "
+                    f"错误类型={type(exc).__name__}"
+                )
+                return 0
+            for entry in entries:
+                try:
+                    if entry.is_file() or entry.is_symlink():
+                        if entry.name.endswith(".tmp"):
                             entry.unlink(missing_ok=True)
                             removed += 1
-                    continue
+                        elif entry.is_symlink():
+                            entry_date = _directory_date(entry.name)
+                            if entry_date is not None and entry_date < cutoff:
+                                entry.unlink(missing_ok=True)
+                                removed += 1
+                        continue
 
-                if not entry.is_dir():
-                    continue
-                entry_date = _directory_date(entry.name)
-                if entry_date is None:
-                    continue
-                if entry.name in self._active_store_dates:
+                    if not entry.is_dir():
+                        continue
+                    entry_date = _directory_date(entry.name)
+                    if entry_date is None:
+                        continue
+                    if entry.name in self._active_store_dates:
+                        if entry_date < cutoff:
+                            deferred_expired_store = True
+                        continue
+                    try:
+                        resolved = _inside(entry, self.root)
+                    except ValueError:
+                        cleanup_incomplete = True
+                        logger.warning(
+                            f"{LOG_PREFIX} 签到卡缓存清理跳过越界目录"
+                        )
+                        continue
                     if entry_date < cutoff:
-                        deferred_expired_store = True
-                    continue
-                try:
-                    resolved = _inside(entry, self.root)
-                except ValueError:
-                    continue
-                if entry_date < cutoff:
-                    shutil.rmtree(resolved)
-                    removed += 1
-                    continue
-                for temporary in resolved.glob("*.tmp"):
-                    if temporary.is_file() or temporary.is_symlink():
-                        temporary.unlink(missing_ok=True)
+                        shutil.rmtree(resolved)
                         removed += 1
+                        continue
+                    for temporary in resolved.glob("*.tmp"):
+                        if temporary.is_file() or temporary.is_symlink():
+                            temporary.unlink(missing_ok=True)
+                            removed += 1
+                except OSError as exc:
+                    cleanup_incomplete = True
+                    logger.warning(
+                        f"{LOG_PREFIX} 签到卡缓存清理失败: 阶段=删除缓存条目 "
+                        f"错误类型={type(exc).__name__}"
+                    )
 
             self._locks = {
                 lock_key: lock
@@ -187,7 +257,12 @@ class CheckinCardCache:
                 or lock_date >= cutoff
             }
 
-        if not deferred_expired_store:
+        if removed:
+            logger.debug(
+                f"{LOG_PREFIX} 签到卡缓存清理完成: 清理数量={removed} "
+                f"截止日期={cutoff.isoformat()}"
+            )
+        if not deferred_expired_store and not cleanup_incomplete:
             self._last_cleanup_date = current
         return removed
 
@@ -210,7 +285,11 @@ class CheckinCardCache:
         )
 
     @staticmethod
-    def _store_sync(source: Path, final_path: Path) -> Path:
+    def _store_sync(
+        source: Path,
+        final_path: Path,
+        expected_size: tuple[int, int],
+    ) -> Path:
         if not source.is_file():
             raise ValueError("renderer did not produce a file")
         final_path.parent.mkdir(parents=True, exist_ok=True)
@@ -231,14 +310,23 @@ class CheckinCardCache:
                 temporary_file.flush()
                 os.fsync(temporary_file.fileno())
 
-            if not _is_valid_card_jpeg(temporary_path):
-                raise ValueError("renderer output must be a valid 960x540 JPEG")
+            if not is_valid_card_jpeg(temporary_path, expected_size):
+                width, height = expected_size
+                raise ValueError(
+                    f"renderer output must be a valid {width}x{height} JPEG"
+                )
             os.replace(temporary_path, final_path)
             temporary_path = None
             return final_path.resolve()
         finally:
             if temporary_path is not None:
-                temporary_path.unlink(missing_ok=True)
+                try:
+                    temporary_path.unlink(missing_ok=True)
+                except OSError as exc:
+                    logger.warning(
+                        f"{LOG_PREFIX} 签到卡缓存清理失败: "
+                        f"阶段=删除临时文件 错误类型={type(exc).__name__}"
+                    )
 
 
 def _validated_date_key(value: str) -> str:
@@ -270,15 +358,23 @@ def _inside(path: Path, root: Path) -> Path:
     return resolved_path
 
 
-def _is_valid_card_jpeg(path: Path) -> bool:
+def is_valid_card_jpeg(path: Path, expected_size: tuple[int, int]) -> bool:
+    return _card_jpeg_rejection_reason(path, expected_size) is None
+
+
+def _card_jpeg_rejection_reason(
+    path: Path, expected_size: tuple[int, int]
+) -> str | None:
     try:
         with Image.open(path) as image:
-            if image.format != "JPEG" or image.size != _EXPECTED_SIZE:
-                return False
+            if image.format != "JPEG":
+                return "format_mismatch"
+            if image.size != expected_size:
+                return "size_mismatch"
             image.verify()
-        return True
+        return None
     except (OSError, ValueError):
-        return False
+        return "corrupt_or_unreadable"
 
 
 def _json_default(value: Any) -> Any:

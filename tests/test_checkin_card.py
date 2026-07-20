@@ -6,7 +6,7 @@ import unittest
 from io import BytesIO
 from pathlib import Path
 from types import SimpleNamespace
-from unittest.mock import AsyncMock, Mock
+from unittest.mock import AsyncMock, Mock, patch
 
 from PIL import Image
 
@@ -178,34 +178,38 @@ class FileToDataUrlTest(unittest.TestCase):
 
 
 class CheckinCardRenderQualityTest(unittest.IsolatedAsyncioTestCase):
-    async def test_configured_jpeg_quality_is_passed_to_renderer(self):
+    async def test_render_tiers_use_fixed_jpeg_quality_and_scale_options(self):
         plugin = object.__new__(GetPxPlugin)
-        plugin.config = {
-            "checkin_avatar_enabled": False,
-            "checkin_card_quality": 97,
-        }
+        plugin.config = {"checkin_avatar_enabled": False}
         plugin.html_render = AsyncMock(return_value="card.jpg")
 
-        result = await plugin._render_checkin_card(
-            SimpleNamespace(),
-            profile=_profile(),
-            record=_record(),
-            background=None,
-            bot_name="neko",
-        )
+        for tier, scale_level in (
+            ("省流量", None),
+            ("清晰", "high"),
+            ("极致", "ultra"),
+        ):
+            with self.subTest(tier=tier):
+                result = await plugin._render_checkin_card(
+                    SimpleNamespace(),
+                    profile=_profile(),
+                    record=_record(),
+                    background=None,
+                    bot_name="neko",
+                    render_tier=tier,
+                )
 
-        self.assertEqual(result, "card.jpg")
-        options = plugin.html_render.await_args.kwargs["options"]
-        self.assertEqual(options["type"], "jpeg")
-        self.assertEqual(options["quality"], 97)
+                self.assertEqual(result, "card.jpg")
+                options = plugin.html_render.await_args.kwargs["options"]
+                self.assertEqual(options["type"], "jpeg")
+                self.assertEqual(options["quality"], 95)
+                self.assertEqual(
+                    options.get("device_scale_factor_level"), scale_level
+                )
 
-    def test_quality_changes_the_daily_cache_key(self):
+    def test_render_tier_changes_the_daily_cache_key(self):
         with tempfile.TemporaryDirectory() as tmp:
             plugin = object.__new__(GetPxPlugin)
-            plugin.config = {
-                "checkin_avatar_enabled": False,
-                "checkin_card_quality": 80,
-            }
+            plugin.config = {"checkin_avatar_enabled": False}
             plugin.checkin_cache = CheckinCardCache(Path(tmp) / "cache")
             kwargs = {
                 "profile": _profile(),
@@ -214,17 +218,89 @@ class CheckinCardRenderQualityTest(unittest.IsolatedAsyncioTestCase):
                 "bot_name": "neko",
             }
 
-            quality_80 = plugin._checkin_card_cache_key(SimpleNamespace(), **kwargs)
-            plugin.config["checkin_card_quality"] = 98
-            quality_98 = plugin._checkin_card_cache_key(SimpleNamespace(), **kwargs)
+            economy = plugin._checkin_card_cache_key(
+                SimpleNamespace(), **kwargs, render_tier="省流量"
+            )
+            clear = plugin._checkin_card_cache_key(
+                SimpleNamespace(), **kwargs, render_tier="清晰"
+            )
 
-            self.assertNotEqual(quality_80, quality_98)
+            self.assertNotEqual(economy, clear)
+
+    def test_persisted_background_quality_recreates_the_same_cache_key(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            plugin = object.__new__(GetPxPlugin)
+            plugin.config = {"checkin_avatar_enabled": False}
+            plugin.checkin_cache = CheckinCardCache(Path(tmp) / "cache")
+            record = replace(
+                _record(),
+                render_tier="清晰",
+                background_mode="pixiv_daily",
+                background_source="lolicon:tag",
+                background_illust_id="445566",
+                background_title="Blue Sky",
+                background_author="Someone",
+                background_quality="medium",
+            )
+            initial = CardBackground(
+                mode="pixiv_daily",
+                source="lolicon:tag",
+                illust_id="445566",
+                title="Blue Sky",
+                author="Someone",
+                quality="medium",
+            )
+            kwargs = {
+                "profile": _profile(),
+                "record": record,
+                "bot_name": "neko",
+                "render_tier": "清晰",
+            }
+
+            first_key = plugin._checkin_card_cache_key(
+                SimpleNamespace(), background=initial, **kwargs
+            )
+            restored_key = plugin._checkin_card_cache_key(
+                SimpleNamespace(),
+                background=plugin._checkin_background_from_record(record),
+                **kwargs,
+            )
+
+            self.assertEqual(first_key, restored_key)
+
+    async def test_ultimate_render_failure_falls_back_to_clear(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            plugin = object.__new__(GetPxPlugin)
+            attempts = []
+
+            async def render(*_args, render_tier, **_kwargs):
+                attempts.append(render_tier)
+                if render_tier == "极致":
+                    raise RuntimeError("ultra unavailable")
+                path = Path(tmp) / f"{render_tier}.jpg"
+                Image.new("RGB", (1248, 702), (238, 224, 196)).save(
+                    path, format="JPEG"
+                )
+                return str(path)
+
+            plugin._render_checkin_card = AsyncMock(side_effect=render)
+            path, actual_tier = await plugin._render_checkin_card_with_fallback(
+                SimpleNamespace(),
+                profile=_profile(),
+                record=_record(),
+                background=None,
+                bot_name="neko",
+                preferred_tier="极致",
+            )
+
+            self.assertEqual(attempts, ["极致", "清晰"])
+            self.assertEqual(actual_tier, "清晰")
+            self.assertTrue(path.is_file())
 
     def test_current_theme_version_invalidates_an_older_daily_cache(self):
         plugin = object.__new__(GetPxPlugin)
         plugin.config = {
             "checkin_avatar_enabled": False,
-            "checkin_card_quality": 95,
         }
         plugin.checkin_cache = SimpleNamespace(cache_key=Mock(return_value="cache-key"))
 
@@ -245,6 +321,79 @@ class CheckinCardRenderQualityTest(unittest.IsolatedAsyncioTestCase):
             plugin.checkin_cache.cache_key.call_args.kwargs["template_version"],
             "yellow:1",
         )
+
+
+class CheckinT2IProbeCleanupTest(unittest.IsolatedAsyncioTestCase):
+    async def test_probe_removes_render_source_after_success(self):
+        from astrbot_plugin_get_px.scripts import probe_checkin_t2i_quality as probe
+
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            source = root / "renderer-source.jpg"
+            rendered = Image.new("RGB", (960, 540), (238, 224, 196))
+            rendered.paste((40, 80, 160), (120, 90, 840, 450))
+            rendered.save(source, format="JPEG")
+            spec = next(iter(probe.CHECKIN_RENDER_TIERS.values()))
+            with (
+                patch.object(probe, "CHECKIN_RENDER_TIERS", {spec.name: spec}),
+                patch.object(
+                    probe.html_renderer,
+                    "render_custom_template",
+                    AsyncMock(return_value=str(source)),
+                ),
+            ):
+                result = await probe.run(root / "output")
+
+            self.assertFalse(source.exists())
+            self.assertEqual(len(result["report"]), 1)
+            self.assertTrue((root / "output" / "1_normal.jpg").is_file())
+
+    async def test_probe_removes_render_source_when_copy_or_validation_fails(self):
+        from astrbot_plugin_get_px.scripts import probe_checkin_t2i_quality as probe
+
+        for failure_stage in ("copy", "inspect"):
+            with self.subTest(failure_stage=failure_stage):
+                with tempfile.TemporaryDirectory() as tmp:
+                    root = Path(tmp)
+                    source = root / "renderer-source.jpg"
+                    Image.new("RGB", (960, 540), (238, 224, 196)).save(
+                        source, format="JPEG"
+                    )
+                    spec = next(iter(probe.CHECKIN_RENDER_TIERS.values()))
+                    patches = [
+                        patch.object(
+                            probe,
+                            "CHECKIN_RENDER_TIERS",
+                            {spec.name: spec},
+                        ),
+                        patch.object(
+                            probe.html_renderer,
+                            "render_custom_template",
+                            AsyncMock(return_value=str(source)),
+                        ),
+                    ]
+                    if failure_stage == "copy":
+                        patches.append(
+                            patch.object(
+                                probe.shutil,
+                                "copyfile",
+                                side_effect=OSError("copy failed"),
+                            )
+                        )
+                    else:
+                        patches.append(
+                            patch.object(
+                                probe,
+                                "_inspect_image",
+                                side_effect=RuntimeError("invalid image"),
+                            )
+                        )
+
+                    with patches[0], patches[1], patches[2]:
+                        with self.assertRaises((OSError, RuntimeError)):
+                            await probe.run(root / "output")
+
+                    self.assertFalse(source.exists())
 
 
 if __name__ == "__main__":

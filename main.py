@@ -11,8 +11,11 @@
 
 签到指令：
     /签到                      每日签到
-    /签到中心                  查看签到功能分组
-    /签到帮助                  发送签到中心帮助图
+    /签到帮助                  查看所有签到指令
+    /签到我的                  个人签到资料
+    /签到排行                  查看签到排行
+    /签到商店                  访问签到商店
+    /签到管理                  签到管理功能（仅管理员）
 """
 
 # 注意：不要在本模块使用 `from __future__ import annotations`。
@@ -59,8 +62,8 @@ WEB_INTERNAL_ERROR_MESSAGE = "服务内部错误，请稍后重试"
 
 AUTO_TRIGGER_PATTERN = r"^/?(来\s*(.*?)(份|个|张|点))(.*?)(福利|色|瑟|涩|塞)?图$"
 CHECKIN_REGEX_PATTERN = r"^(?!/)签到$"
-CHECKIN_CENTER_HELP_IMAGE = (
-    Path(__file__).resolve().parent / "assets" / "checkin_center_help_v3.png"
+CHECKIN_HELP_IMAGE = (
+    Path(__file__).resolve().parent / "assets" / "checkin_help_v4.png"
 )
 
 
@@ -98,7 +101,9 @@ class GetPxPlugin(
         self.config = config
         self.client: PixivClient | None = None
         self.lolicon_client: LoliconClient | None = None
-        self.downloader = ImageDownloader()
+        self.downloader = ImageDownloader(
+            self._cfg_str("lolicon_image_proxy_origins", "")
+        )
         self._last_request: dict[str, float] = {}
         self.data_dir: Path | None = None
         self.image_index: ImageIndexStore | None = None
@@ -126,10 +131,15 @@ class GetPxPlugin(
         """插件加载时初始化 Pixiv 客户端。"""
         data_dir = StarTools.get_data_dir(PLUGIN_NAME)
         self.data_dir = Path(data_dir)
+        dedupe_days = self._migrate_dedupe_config()
         self._init_client()
         # SQLite DDL/迁移是同步操作，放入线程池避免阻塞事件循环
-        self.image_index = await asyncio.to_thread(ImageIndexStore, data_dir)
-        await self.image_index.cleanup_old_days()
+        self.image_index = await asyncio.to_thread(
+            ImageIndexStore,
+            data_dir,
+            retention_days=dedupe_days,
+        )
+        await self.image_index.cleanup_old_days(trigger="startup")
         checkin_database_existed = (self.data_dir / "checkin.sqlite3").exists()
         try:
             self.checkin_store = await asyncio.to_thread(CheckinStore, data_dir)
@@ -168,7 +178,10 @@ class GetPxPlugin(
         except asyncio.CancelledError:
             raise
         except Exception as exc:
-            logger.warning(f"{LOG_PREFIX} 节假日数据更新失败，继续使用本地规则: {exc}")
+            logger.warning(
+                f"{LOG_PREFIX} 节假日数据更新失败，继续使用本地规则: "
+                f"error_type={type(exc).__name__}"
+            )
 
     def _init_client(self):
         """初始化 Lolicon 主源和可选的 Pixiv 回退客户端。"""
@@ -243,24 +256,36 @@ class GetPxPlugin(
             try:
                 await self.client.close()
             except Exception as exc:
-                logger.warning(f"{LOG_PREFIX} 关闭 Pixiv 客户端失败: {exc}")
+                logger.warning(
+                    f"{LOG_PREFIX} 关闭 Pixiv 客户端失败: "
+                    f"error_type={type(exc).__name__}"
+                )
             finally:
                 self.client = None
         if getattr(self, "lolicon_client", None) is not None:
             try:
                 await self.lolicon_client.close()
             except Exception as exc:
-                logger.warning(f"{LOG_PREFIX} 关闭 Lolicon 客户端失败: {exc}")
+                logger.warning(
+                    f"{LOG_PREFIX} 关闭 Lolicon 客户端失败: "
+                    f"error_type={type(exc).__name__}"
+                )
             finally:
                 self.lolicon_client = None
         try:
             await self.downloader.close()
         except Exception as exc:
-            logger.warning(f"{LOG_PREFIX} 关闭图片下载器失败: {exc}")
+            logger.warning(
+                f"{LOG_PREFIX} 关闭图片下载器失败: "
+                f"error_type={type(exc).__name__}"
+            )
         try:
             await self.checkin_greeting.close()
         except Exception as exc:
-            logger.warning(f"{LOG_PREFIX} 关闭签到问候会话失败: {exc}")
+            logger.warning(
+                f"{LOG_PREFIX} 关闭签到问候会话失败: "
+                f"error_type={type(exc).__name__}"
+            )
         self._last_request.clear()
         locks = getattr(self, "_checkin_flow_locks", None)
         if locks is not None:
@@ -269,7 +294,10 @@ class GetPxPlugin(
             try:
                 self.image_index.close()
             except Exception as exc:
-                logger.warning(f"{LOG_PREFIX} 关闭图片索引失败: {exc}")
+                logger.warning(
+                    f"{LOG_PREFIX} 关闭图片索引失败: "
+                    f"error_type={type(exc).__name__}"
+                )
         self.image_index = None
         self.checkin_store = None
         logger.info(f"{LOG_PREFIX} 插件已停止")
@@ -316,34 +344,30 @@ class GetPxPlugin(
 
     @filter.command("签到帮助")
     async def cmd_checkin_help(self, event: AstrMessageEvent):
-        """发送签到中心功能帮助图。"""
+        """发送签到功能帮助图。"""
         event.stop_event()
-        if not CHECKIN_CENTER_HELP_IMAGE.is_file():
+        if not CHECKIN_HELP_IMAGE.is_file():
             logger.error(
-                f"{LOG_PREFIX} 签到中心帮助图片不存在: {CHECKIN_CENTER_HELP_IMAGE}"
+                f"{LOG_PREFIX} 签到帮助图片不存在: {CHECKIN_HELP_IMAGE}"
             )
-            yield event.plain_result("签到中心帮助图片缺失，请联系管理员重新安装插件")
+            yield event.plain_result("签到帮助图片缺失，请联系管理员重新安装插件")
             return
         yield event.chain_result(
-            [Image.fromFileSystem(str(CHECKIN_CENTER_HELP_IMAGE))]
+            [Image.fromFileSystem(str(CHECKIN_HELP_IMAGE))]
         )
 
-    @filter.command_group("签到中心")
-    def checkin_center(self):
-        """签到功能中心。"""
-
-    @checkin_center.group("我的")
-    def checkin_personal(self):
+    @filter.command_group("签到我的")
+    def checkin_my(self):
         """个人签到资料。"""
 
-    @checkin_personal.command("状态")
+    @checkin_my.command("状态")
     async def cmd_checkin_status(self, event: AstrMessageEvent):
         """查看金币、好感度和连续签到状态。"""
         event.stop_event()
         async for result in self._handle_checkin_status(event):
             yield result
 
-    @checkin_personal.command("生日")
+    @checkin_my.command("生日")
     async def cmd_checkin_birthday(
         self, event: AstrMessageEvent, action: str = "", value: str = ""
     ):
@@ -353,13 +377,13 @@ class GetPxPlugin(
             await self._handle_checkin_birthday(event, action, value)
         )
 
-    @checkin_personal.command("成就")
+    @checkin_my.command("成就")
     async def cmd_checkin_achievements(self, event: AstrMessageEvent):
         """查看签到成就。"""
         event.stop_event()
         yield event.plain_result(await self._handle_checkin_achievements(event))
 
-    @checkin_personal.group("称号")
+    @checkin_my.group("称号")
     def checkin_titles(self):
         """查看和佩戴签到称号。"""
 
@@ -375,11 +399,33 @@ class GetPxPlugin(
         event.stop_event()
         yield event.plain_result(await self._handle_select_checkin_title(event, title))
 
-    @checkin_center.command("排行")
-    async def cmd_checkin_ranking(self, event: AstrMessageEvent, mode: str = ""):
+    @filter.command_group("签到排行")
+    def checkin_ranking(self):
         """查看当前群的签到排行。"""
+
+    @checkin_ranking.command("今日")
+    async def cmd_checkin_ranking_today(self, event: AstrMessageEvent):
+        """查看今日签到排行。"""
         event.stop_event()
-        yield event.plain_result(await self._handle_checkin_ranking(event, mode))
+        yield event.plain_result(await self._handle_checkin_ranking(event, "今日"))
+
+    @checkin_ranking.command("月榜")
+    async def cmd_checkin_ranking_month(self, event: AstrMessageEvent):
+        """查看本月签到排行。"""
+        event.stop_event()
+        yield event.plain_result(await self._handle_checkin_ranking(event, "月榜"))
+
+    @checkin_ranking.command("连签")
+    async def cmd_checkin_ranking_streak(self, event: AstrMessageEvent):
+        """查看连续签到排行。"""
+        event.stop_event()
+        yield event.plain_result(await self._handle_checkin_ranking(event, "连签"))
+
+    @checkin_ranking.command("累计")
+    async def cmd_checkin_ranking_total(self, event: AstrMessageEvent):
+        """查看累计签到排行。"""
+        event.stop_event()
+        yield event.plain_result(await self._handle_checkin_ranking(event, "累计"))
 
     @filter.regex(CHECKIN_REGEX_PATTERN)
     async def checkin_auto_trigger(self, event: AstrMessageEvent):
@@ -390,7 +436,7 @@ class GetPxPlugin(
         async for result in self._handle_checkin(event, silent_when_disabled=True):
             yield result
 
-    @checkin_center.group("商店")
+    @filter.command_group("签到商店")
     def checkin_shop(self):
         """签到金币商店。"""
 
@@ -445,7 +491,7 @@ class GetPxPlugin(
         async for result in self._handle_refresh_checkin_background(event):
             yield result
 
-    @checkin_center.group("管理")
+    @filter.command_group("签到管理")
     def checkin_admin(self):
         """管理员签到维护功能。"""
 
@@ -479,11 +525,11 @@ class GetPxPlugin(
         """管理员维护全局签到纪念日。"""
         event.stop_event()
         parts = event.get_message_str().strip().split(maxsplit=6)
-        if parts[:3] == ["签到中心", "管理", "事件"]:
-            action = parts[3] if len(parts) > 3 else action
-            event_type = parts[4] if len(parts) > 4 else event_type
-            date_value = parts[5] if len(parts) > 5 else date_value
-            name = parts[6] if len(parts) > 6 else name
+        if parts[:2] == ["签到管理", "事件"]:
+            action = parts[2] if len(parts) > 2 else action
+            event_type = parts[3] if len(parts) > 3 else event_type
+            date_value = parts[4] if len(parts) > 4 else date_value
+            name = parts[5] if len(parts) > 5 else name
         yield event.plain_result(
             await self._handle_checkin_event_admin(
                 event, action, event_type, date_value, name
@@ -521,7 +567,10 @@ class GetPxPlugin(
             if not count_str:
                 count_str = "1"
 
-        logger.info(f"{LOG_PREFIX} 自然语言触发: count={count_str} tag={tag_part!r}")
+        logger.info(
+            f"{LOG_PREFIX} 自然语言触发: count={count_str} "
+            f"tag_configured={'yes' if tag_part else 'no'}"
+        )
         async for result in self._handle_search(
             event, tag=tag_part, count_str=count_str
         ):
@@ -565,6 +614,32 @@ class GetPxPlugin(
     # ──────────────────────────────────────────────────────────────
     # 配置读取（带类型校验）
     # ──────────────────────────────────────────────────────────────
+
+    def _migrate_dedupe_config(self) -> int:
+        config = getattr(self, "config", None)
+        if config is None:
+            return 1
+        if not self._cfg_bool("dedupe_days_migrated", False):
+            legacy_value = self._cfg_float("dedupe_ttl_hours", 24.0, 0.0, 24.0)
+            config["dedupe_days"] = 0 if legacy_value <= 0 else 1
+            config["dedupe_days_migrated"] = True
+            persisted = False
+            save_config = getattr(config, "save_config", None)
+            if callable(save_config):
+                try:
+                    save_config()
+                    persisted = True
+                except Exception as exc:
+                    logger.warning(
+                        f"{LOG_PREFIX} 保存去重配置迁移结果失败: "
+                        f"error_type={type(exc).__name__}"
+                    )
+            logger.info(
+                f"{LOG_PREFIX} 已迁移旧去重配置: "
+                f"dedupe_ttl_hours={legacy_value:g} -> "
+                f"dedupe_days={config['dedupe_days']}, persisted={persisted}"
+            )
+        return self._cfg_int("dedupe_days", 1, 0, 7)
 
     def _cfg_str(self, key: str, default: str = "") -> str:
         val = self.config.get(key, default)

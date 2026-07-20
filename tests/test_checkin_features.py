@@ -118,7 +118,7 @@ async def test_snapshot_preserves_feature_tables() -> None:
             event_type="annual", date_value="07-11", name="相遇纪念日", created_by="1"
         )
         snapshot = await source.export_snapshot()
-        assert snapshot["schema_version"] == 6
+        assert snapshot["schema_version"] == 7
 
         target = CheckinStore(target_tmp)
         summary = await target.import_snapshot(snapshot)

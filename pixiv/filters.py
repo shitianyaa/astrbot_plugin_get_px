@@ -132,7 +132,10 @@ class FiltersMixin:
         try:
             used_ids = await self.image_index.get_used_illust_ids(scope, source_key)
         except Exception as e:
-            logger.warning(f"{LOG_PREFIX} 读取当天发图索引失败: {e}")
+            logger.warning(
+                f"{LOG_PREFIX} 读取发图去重索引失败: "
+                f"error_type={type(e).__name__}"
+            )
             return []
 
         ordered = ordered_by_unused(illusts, used_ids)
@@ -144,7 +147,10 @@ class FiltersMixin:
             try:
                 await self.image_index.advance_page_offset(scope, source_key, raw_count)
             except Exception as e:
-                logger.warning(f"{LOG_PREFIX} 分页游标更新失败: {e}")
+                logger.warning(
+                    f"{LOG_PREFIX} 分页游标更新失败: "
+                    f"error_type={type(e).__name__}"
+                )
 
         candidates = random.sample(fresh, len(fresh)) + random.sample(
             repeated, len(repeated)
@@ -165,8 +171,7 @@ class FiltersMixin:
                     feature="normal_pending",
                     user_id=user_id,
                 )
-            except Exception as e:
-                logger.warning(f"{LOG_PREFIX} 占用当天发图索引失败: {e}")
+            except Exception:
                 return chosen
             if claimed:
                 chosen.append(illust)

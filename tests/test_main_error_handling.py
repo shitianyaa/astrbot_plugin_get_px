@@ -51,6 +51,9 @@ class _FakeEvent:
     def get_platform_name(self):
         return "aiocqhttp"
 
+    def get_self_id(self):
+        return "20001"
+
     def plain_result(self, text):
         return text
 
@@ -129,6 +132,7 @@ class _FakeCheckinStore:
         self.order = order
         self.content_updates = []
         self.background_updates = []
+        self.render_tier_updates = []
 
     async def checkin(self, **_kwargs):
         self.order.append("checkin")
@@ -152,6 +156,10 @@ class _FakeCheckinStore:
     async def update_record_background(self, **kwargs):
         self.order.append("background_metadata")
         self.background_updates.append(kwargs)
+
+    async def update_record_render_tier(self, **kwargs):
+        self.render_tier_updates.append(kwargs["render_tier"])
+        return replace(self.result.record, render_tier=kwargs["render_tier"])
 
 
 class _FakeGreetingGenerator:
@@ -188,14 +196,14 @@ class _FakeCache:
         self.key_inputs.append(kwargs)
         return "a" * 64
 
-    def get(self, date_key, key):
+    def get(self, date_key, key, *, expected_size=(960, 540)):
         self.order.append("cache_get")
-        self.get_calls.append((date_key, key))
+        self.get_calls.append((date_key, key, expected_size))
         return self.cache_path if self.hit else None
 
-    async def store(self, date_key, key, renderer):
+    async def store(self, date_key, key, renderer, *, expected_size=(960, 540)):
         self.order.append("cache_store")
-        self.store_calls.append((date_key, key))
+        self.store_calls.append((date_key, key, expected_size))
         rendered_path = Path(await renderer())
         if self.fail_store:
             raise ValueError("invalid rendered card")
@@ -224,6 +232,7 @@ def _plugin_for_checkin(tmp: str, result: CheckinResult, order, *, cache_hit=Fal
     }
     plugin.checkin_store = _FakeCheckinStore(result, order)
     plugin.checkin_greeting = _FakeGreetingGenerator(order)
+    plugin.image_index = SimpleNamespace(retention_days=1)
     cache_path = Path(tmp) / "cache" / "card.jpg"
     if cache_hit:
         _make_card(cache_path)
@@ -274,6 +283,171 @@ class _ConcurrentCheckinStore(_FakeCheckinStore):
 
 
 class MainErrorHandlingTest(unittest.IsolatedAsyncioTestCase):
+    def _plugin_for_search_usage_cancellation(
+        self,
+        tmp: str,
+        illusts: list[dict],
+        *,
+        send_as_forward: bool,
+    ):
+        plugin = object.__new__(GetPxPlugin)
+        plugin.config = {
+            "rate_limit_seconds": 0,
+            "max_count": len(illusts),
+            "request_timeout": 30,
+            "image_quality": "original",
+            "auto_downgrade_original_mb": 3,
+            "filter_manga": False,
+            "dedupe_days": 1,
+            "send_as_forward": send_as_forward,
+        }
+        plugin._last_request = {}
+        plugin._fetch_source_candidates = AsyncMock(
+            return_value=(illusts, len(illusts), "lolicon:random")
+        )
+        plugin._filter_blacklisted_illusts = AsyncMock(return_value=illusts)
+        plugin._pick_illusts = AsyncMock(return_value=illusts)
+        paths = []
+        for illust in illusts:
+            path = Path(tmp) / f"{illust['id']}.jpg"
+            path.write_bytes(b"image")
+            paths.append((str(path), "original", 5))
+        plugin.downloader = SimpleNamespace(
+            download_for_send=AsyncMock(side_effect=paths)
+        )
+        plugin.image_index = SimpleNamespace(
+            retention_days=1,
+            release_usage=AsyncMock(),
+        )
+        plugin._record_image_usage = AsyncMock(side_effect=asyncio.CancelledError())
+        return plugin
+
+    async def test_per_image_send_cancellation_while_recording_keeps_pending_usage(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            illusts = [{"id": 101, "title": "First"}]
+            plugin = self._plugin_for_search_usage_cancellation(
+                tmp, illusts, send_as_forward=False
+            )
+            event = _FakeEvent()
+
+            with self.assertRaises(asyncio.CancelledError):
+                await _collect(plugin._handle_search(event, "", "1"))
+
+            self.assertEqual(len(event.sent), 1)
+            plugin.image_index.release_usage.assert_not_awaited()
+
+    async def test_forward_send_cancellation_while_recording_keeps_all_pending_usage(
+        self,
+    ):
+        with tempfile.TemporaryDirectory() as tmp:
+            illusts = [
+                {"id": 101, "title": "First"},
+                {"id": 202, "title": "Second"},
+            ]
+            plugin = self._plugin_for_search_usage_cancellation(
+                tmp, illusts, send_as_forward=True
+            )
+            event = _FakeEvent()
+
+            with self.assertRaises(asyncio.CancelledError):
+                await _collect(plugin._handle_search(event, "", "2"))
+
+            self.assertEqual(len(event.sent), 1)
+            plugin.image_index.release_usage.assert_not_awaited()
+
+    async def test_per_image_send_success_is_logged_at_info(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            illusts = [{"id": 101, "title": "First"}]
+            plugin = self._plugin_for_search_usage_cancellation(
+                tmp, illusts, send_as_forward=False
+            )
+            plugin._record_image_usage = AsyncMock()
+            event = _FakeEvent()
+
+            with patch("astrbot_plugin_get_px.pixiv.search.logger") as mock_logger:
+                output = await _collect(plugin._handle_search(event, "", "1"))
+
+            self.assertEqual(output, [])
+            messages = " ".join(
+                str(call.args[0]) for call in mock_logger.info.call_args_list
+            )
+            self.assertIn("作品 101 已发送", messages)
+
+    async def test_forward_fallback_send_success_is_logged_at_info(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            illusts = [{"id": 101, "title": "First"}]
+            plugin = self._plugin_for_search_usage_cancellation(
+                tmp, illusts, send_as_forward=True
+            )
+            plugin._record_image_usage = AsyncMock()
+            event = _FakeEvent()
+            event.send = AsyncMock(
+                side_effect=[
+                    RuntimeError("forward failed"),
+                    RuntimeError("forward failed"),
+                    RuntimeError("forward failed"),
+                    None,
+                    None,
+                ]
+            )
+
+            with (
+                patch("astrbot_plugin_get_px.pixiv.search.logger") as mock_logger,
+                patch("astrbot_plugin_get_px.pixiv.search.asyncio.sleep", AsyncMock()),
+            ):
+                output = await _collect(plugin._handle_search(event, "", "1"))
+
+            self.assertEqual(output, [])
+            messages = " ".join(
+                str(call.args[0]) for call in mock_logger.info.call_args_list
+            )
+            self.assertIn("[降级] 作品 101 已发送", messages)
+
+    def test_legacy_disabled_dedupe_migrates_to_zero_days_once(self):
+        class Config(dict):
+            def __init__(self):
+                super().__init__(dedupe_ttl_hours=0, dedupe_days=1)
+                self.save_calls = 0
+
+            def save_config(self):
+                self.save_calls += 1
+
+        plugin = object.__new__(GetPxPlugin)
+        plugin.config = Config()
+
+        self.assertEqual(plugin._migrate_dedupe_config(), 0)
+        self.assertTrue(plugin.config["dedupe_days_migrated"])
+        self.assertEqual(plugin.config.save_calls, 1)
+
+        plugin.config["dedupe_days"] = 7
+        self.assertEqual(plugin._migrate_dedupe_config(), 7)
+        self.assertEqual(plugin.config.save_calls, 1)
+
+    def test_legacy_enabled_dedupe_migrates_to_one_day(self):
+        plugin = object.__new__(GetPxPlugin)
+        plugin.config = {"dedupe_ttl_hours": 7, "dedupe_days": 5}
+
+        self.assertEqual(plugin._migrate_dedupe_config(), 1)
+        self.assertTrue(plugin.config["dedupe_days_migrated"])
+
+    def test_dedupe_migration_save_failure_log_does_not_expose_exception_text(self):
+        class Config(dict):
+            def save_config(self):
+                raise RuntimeError("https://private.example/config?token=secret")
+
+        plugin = object.__new__(GetPxPlugin)
+        plugin.config = Config(dedupe_ttl_hours=24)
+
+        with patch("astrbot_plugin_get_px.main.logger") as mocked_logger:
+            self.assertEqual(plugin._migrate_dedupe_config(), 1)
+
+        warning = str(mocked_logger.warning.call_args.args[0])
+        info = str(mocked_logger.info.call_args.args[0])
+        self.assertIn("error_type=RuntimeError", warning)
+        self.assertNotIn("private.example", warning)
+        self.assertNotIn("secret", warning)
+        self.assertIn("persisted=False", info)
+
     async def test_concurrent_terminate_calls_wait_for_same_cleanup(self):
         plugin = object.__new__(GetPxPlugin)
         plugin._termination_task = None
@@ -415,7 +589,8 @@ class MainErrorHandlingTest(unittest.IsolatedAsyncioTestCase):
         plugin._init_client = lambda: None
 
         class FakeImageIndex:
-            async def cleanup_old_days(self):
+            async def cleanup_old_days(self, *, trigger="manual"):
+                self.trigger = trigger
                 return None
 
         with (
@@ -548,7 +723,11 @@ class MainErrorHandlingTest(unittest.IsolatedAsyncioTestCase):
     async def test_duplicate_cache_miss_restores_same_artwork_and_rerenders(self):
         with tempfile.TemporaryDirectory() as tmp:
             order = []
-            record = _record()
+            record = replace(
+                _record(),
+                background_quality="large",
+                render_tier="清晰",
+            )
             result = CheckinResult(_profile(), record, duplicate=True)
             plugin = _plugin_for_checkin(tmp, result, order)
             source = Path(tmp) / "restored.png"
@@ -560,8 +739,10 @@ class MainErrorHandlingTest(unittest.IsolatedAsyncioTestCase):
                 illust_id=record.background_illust_id,
                 title=record.background_title,
                 author=record.background_author,
+                quality="medium",
             )
             plugin._restore_checkin_background.return_value = restored
+            plugin._persist_checkin_render_tier = AsyncMock()
             rendered = Path(tmp) / "rendered.jpg"
 
             async def render(*_args, **_kwargs):
@@ -583,7 +764,11 @@ class MainErrorHandlingTest(unittest.IsolatedAsyncioTestCase):
             )
             self.assertEqual(plugin.checkin_greeting.calls, [])
             self.assertTrue(plugin.checkin_cache.cache_path.exists())
-            self.assertEqual(plugin.checkin_store.background_updates, [])
+            self.assertEqual(len(plugin.checkin_store.background_updates), 1)
+            self.assertEqual(
+                plugin.checkin_store.background_updates[0]["quality"], "medium"
+            )
+            plugin._persist_checkin_render_tier.assert_not_awaited()
             self.assertLess(order.index("cache_get"), order.index("render"))
             self.assertLess(order.index("render"), order.index("send"))
 
@@ -604,6 +789,7 @@ class MainErrorHandlingTest(unittest.IsolatedAsyncioTestCase):
                 illust_id="445566",
                 title="Blue Sky",
                 author="Someone",
+                quality="large",
                 illust={"id": 445566, "width": 750, "height": 1000},
             )
 
@@ -634,6 +820,9 @@ class MainErrorHandlingTest(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(
                 plugin.checkin_store.background_updates[0]["illust_id"], "445566"
             )
+            self.assertEqual(
+                plugin.checkin_store.background_updates[0]["quality"], "large"
+            )
             self.assertEqual(len(plugin.checkin_greeting.calls), 1)
             self.assertLess(order.index("content:local"), order.index("ai"))
             self.assertLess(order.index("ai"), order.index("content:ai"))
@@ -642,6 +831,32 @@ class MainErrorHandlingTest(unittest.IsolatedAsyncioTestCase):
             self.assertLess(order.index("send"), order.index("usage"))
             self.assertTrue(plugin.checkin_cache.cache_path.exists())
             self.assertFalse(rendered.exists())
+
+    async def test_first_checkin_persists_the_actual_fallback_render_tier(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            order = []
+            record = _record(persisted=False, with_background=False)
+            plugin = _plugin_for_checkin(
+                tmp, CheckinResult(_profile(), record, duplicate=False), order
+            )
+            plugin.config["checkin_card_quality_tier"] = "极致"
+            plugin._prepare_checkin_background.return_value = None
+
+            async def render(*_args, render_tier, **_kwargs):
+                if render_tier == "极致":
+                    raise RuntimeError("ultra unavailable")
+                path = Path(tmp) / f"{render_tier}.jpg"
+                PILImage.new("RGB", (1248, 702), (238, 224, 196)).save(
+                    path, format="JPEG"
+                )
+                return str(path)
+
+            plugin._render_checkin_card.side_effect = render
+
+            output = await _collect(plugin._handle_checkin(_FakeEvent(order)))
+
+            self.assertEqual(output, [])
+            self.assertEqual(plugin.checkin_store.render_tier_updates, ["清晰"])
 
     async def test_hitokoto_mode_upgrades_local_greeting_once(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -672,6 +887,36 @@ class MainErrorHandlingTest(unittest.IsolatedAsyncioTestCase):
                 plugin.checkin_greeting.calls[-1][1]["categories"],
                 ["动画", "诗词"],
             )
+
+    async def test_remote_greeting_persist_failure_keeps_local_card_content(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            order = []
+            record = _record(persisted=False, with_background=False)
+            plugin = _plugin_for_checkin(
+                tmp, CheckinResult(_profile(), record, duplicate=False), order
+            )
+            original_update = plugin.checkin_store.update_record_content
+
+            async def update_content(**kwargs):
+                if kwargs["greeting_source"] == "ai":
+                    raise RuntimeError("sqlite:///private/path")
+                return await original_update(**kwargs)
+
+            plugin.checkin_store.update_record_content = update_content
+
+            with patch(
+                "astrbot_plugin_get_px.checkin.application.logger"
+            ) as mock_logger:
+                updated = await plugin._prepare_checkin_record_content(
+                    _FakeEvent(order), record, allow_ai=True
+                )
+
+            self.assertEqual(updated.greeting_source, "local")
+            self.assertTrue(updated.greeting)
+            message = str(mock_logger.warning.call_args.args[0])
+            self.assertIn("stage=persist_upgrade", message)
+            self.assertIn("error_type=RuntimeError", message)
+            self.assertNotIn("private/path", message)
 
     async def test_render_failure_does_not_persist_artwork_or_usage(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -705,7 +950,7 @@ class MainErrorHandlingTest(unittest.IsolatedAsyncioTestCase):
             plugin._release_checkin_background_claim.assert_awaited_once()
             self.assertFalse(rendered.exists())
 
-    async def test_send_failure_keeps_cache_but_does_not_record_usage(self):
+    async def test_send_failure_rolls_back_background_before_releasing_claim(self):
         with tempfile.TemporaryDirectory() as tmp:
             order = []
             result = CheckinResult(
@@ -732,10 +977,92 @@ class MainErrorHandlingTest(unittest.IsolatedAsyncioTestCase):
             )
 
             self.assertEqual(len(output), 1)
-            self.assertEqual(len(plugin.checkin_store.background_updates), 1)
-            self.assertTrue(plugin.checkin_cache.cache_path.exists())
+            self.assertEqual(len(plugin.checkin_store.background_updates), 2)
+            self.assertEqual(
+                plugin.checkin_store.background_updates[-1]["mode"], "fallback"
+            )
+            self.assertEqual(
+                plugin.checkin_store.background_updates[-1]["illust_id"], ""
+            )
+            self.assertFalse(plugin.checkin_cache.cache_path.exists())
             plugin._record_checkin_background.assert_not_awaited()
             plugin._release_checkin_background_claim.assert_awaited_once()
+            self.assertLess(
+                max(
+                    index
+                    for index, item in enumerate(order)
+                    if item == "background_metadata"
+                ),
+                order.index("release_claim"),
+            )
+
+    async def test_send_failure_with_dedupe_disabled_keeps_background_and_cache(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            order = []
+            result = CheckinResult(
+                _profile(),
+                _record(persisted=False, with_background=False),
+                duplicate=False,
+            )
+            plugin = _plugin_for_checkin(tmp, result, order)
+            plugin.image_index.retention_days = 0
+            source = Path(tmp) / "selected.png"
+            PILImage.new("RGB", (750, 1000), (40, 80, 160)).save(source)
+            plugin._prepare_checkin_background.return_value = CardBackground(
+                image_path=str(source),
+                mode="pixiv_daily",
+                source="pixiv:recommended",
+                illust_id="445566",
+                title="Blue Sky",
+                author="Someone",
+            )
+            rendered = Path(tmp) / "rendered.jpg"
+            plugin._render_checkin_card.return_value = _make_card(rendered)
+
+            output = await _collect(
+                plugin._handle_checkin(_FakeEvent(order, fail_send=True))
+            )
+
+            self.assertEqual(len(output), 1)
+            self.assertEqual(len(plugin.checkin_store.background_updates), 1)
+            self.assertEqual(
+                plugin.checkin_store.background_updates[0]["illust_id"], "445566"
+            )
+            self.assertTrue(plugin.checkin_cache.cache_path.exists())
+            plugin._record_checkin_background.assert_not_awaited()
+            plugin._release_checkin_background_claim.assert_not_awaited()
+
+    async def test_background_cleanup_does_not_log_success_when_file_remains(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            order = []
+            result = CheckinResult(
+                _profile(),
+                _record(persisted=False, with_background=False),
+                duplicate=False,
+            )
+            plugin = _plugin_for_checkin(tmp, result, order)
+            source = Path(tmp) / "selected.png"
+            PILImage.new("RGB", (750, 1000), (40, 80, 160)).save(source)
+            plugin._prepare_checkin_background.return_value = CardBackground(
+                image_path=str(source),
+                mode="pixiv_daily",
+                source="pixiv:recommended",
+                illust_id="445566",
+            )
+            rendered = Path(tmp) / "rendered.jpg"
+            plugin._render_checkin_card.return_value = _make_card(rendered)
+
+            with (
+                patch("astrbot_plugin_get_px.checkin.application.cleanup"),
+                patch("astrbot_plugin_get_px.checkin.application.logger") as logger,
+            ):
+                await _collect(plugin._handle_checkin(_FakeEvent(order)))
+
+            self.assertTrue(source.exists())
+            debug_messages = " ".join(
+                str(call) for call in logger.debug.call_args_list
+            )
+            self.assertNotIn("签到背景临时文件清理完成", debug_messages)
 
     async def test_cache_store_cancellation_releases_claim_and_cleans_pixiv_source(
         self,
@@ -760,7 +1087,7 @@ class MainErrorHandlingTest(unittest.IsolatedAsyncioTestCase):
             )
             final_cache = plugin.checkin_cache.cache_path
 
-            async def cancel_after_cache_publish(*_args):
+            async def cancel_after_cache_publish(*_args, **_kwargs):
                 _make_card(final_cache)
                 raise asyncio.CancelledError()
 
@@ -775,7 +1102,7 @@ class MainErrorHandlingTest(unittest.IsolatedAsyncioTestCase):
             self.assertFalse(source.exists())
             self.assertTrue(final_cache.exists())
 
-    async def test_usage_cancellation_releases_claim_cleans_source_and_keeps_cache(
+    async def test_usage_cancellation_keeps_sent_claim_cleans_source_and_keeps_cache(
         self,
     ):
         with tempfile.TemporaryDirectory() as tmp:
@@ -803,13 +1130,50 @@ class MainErrorHandlingTest(unittest.IsolatedAsyncioTestCase):
             with self.assertRaises(asyncio.CancelledError):
                 await _collect(plugin._handle_checkin(_FakeEvent(order)))
 
-            plugin._release_checkin_background_claim.assert_awaited_once()
+            plugin._release_checkin_background_claim.assert_not_awaited()
             self.assertFalse(source.exists())
             self.assertTrue(plugin.checkin_cache.cache_path.exists())
 
-    async def test_failed_first_send_then_cached_resend_records_metadata_usage_once(
-        self,
-    ):
+    async def test_usage_record_failure_after_send_does_not_emit_plain_fallback(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            order = []
+            result = CheckinResult(
+                _profile(),
+                _record(persisted=False, with_background=False),
+                duplicate=False,
+            )
+            plugin = _plugin_for_checkin(tmp, result, order)
+            source = Path(tmp) / "selected.png"
+            PILImage.new("RGB", (750, 1000), (40, 80, 160)).save(source)
+            plugin._prepare_checkin_background.return_value = CardBackground(
+                image_path=str(source),
+                mode="pixiv_daily",
+                source="pixiv:recommended",
+                illust_id="445566",
+            )
+            rendered = Path(tmp) / "rendered.jpg"
+            plugin._render_checkin_card.return_value = _make_card(rendered)
+            plugin._record_checkin_background.side_effect = RuntimeError(
+                "database secret path"
+            )
+            event = _FakeEvent(order)
+
+            with patch(
+                "astrbot_plugin_get_px.checkin.application.logger"
+            ) as mock_logger:
+                output = await _collect(plugin._handle_checkin(event))
+
+            self.assertEqual(output, [])
+            self.assertEqual(len(event.sent), 1)
+            plugin._release_checkin_background_claim.assert_not_awaited()
+            messages = " ".join(
+                str(call) for call in mock_logger.warning.call_args_list
+            )
+            self.assertIn("使用记录失败", messages)
+            self.assertIn("error_type=RuntimeError", messages)
+            self.assertNotIn("secret", messages)
+
+    async def test_failed_send_keeps_claim_when_background_rollback_fails(self):
         with tempfile.TemporaryDirectory() as tmp:
             order = []
             first_result = CheckinResult(
@@ -820,9 +1184,6 @@ class MainErrorHandlingTest(unittest.IsolatedAsyncioTestCase):
             plugin = _plugin_for_checkin(tmp, first_result, order)
             store = _ConcurrentCheckinStore(first_result, order)
             plugin.checkin_store = store
-            del plugin._record_checkin_background
-            plugin._record_sent_image = AsyncMock()
-            plugin._record_image_usage = AsyncMock()
             source = Path(tmp) / "selected.png"
             PILImage.new("RGB", (750, 1000), (40, 80, 160)).save(source)
             plugin._prepare_checkin_background.return_value = CardBackground(
@@ -836,23 +1197,24 @@ class MainErrorHandlingTest(unittest.IsolatedAsyncioTestCase):
             )
             rendered = Path(tmp) / "rendered.jpg"
             plugin._render_checkin_card.return_value = _make_card(rendered)
+            original_update = store.update_record_background
 
-            first_output = await _collect(
+            async def update_background(**kwargs):
+                if kwargs["mode"] == "fallback":
+                    raise RuntimeError("rollback failed")
+                await original_update(**kwargs)
+
+            store.update_record_background = update_background
+
+            output = await _collect(
                 plugin._handle_checkin(_FakeEvent(order, fail_send=True))
             )
-            second_output = await _collect(plugin._handle_checkin(_FakeEvent(order)))
 
-            self.assertEqual(len(first_output), 1)
-            self.assertEqual(second_output, [])
+            self.assertEqual(len(output), 1)
             self.assertEqual(plugin._prepare_checkin_background.await_count, 1)
-            plugin._restore_checkin_background.assert_not_awaited()
-            plugin._record_sent_image.assert_not_awaited()
-            plugin._record_image_usage.assert_awaited_once()
-            usage_args = plugin._record_image_usage.await_args
-            self.assertEqual(usage_args.args[1], "pixiv:recommended")
-            self.assertEqual(str(usage_args.args[2]["id"]), "445566")
-            self.assertEqual(usage_args.kwargs["feature"], "checkin")
-            self.assertEqual(usage_args.kwargs["user_id"], "10001")
+            self.assertTrue(plugin.checkin_cache.cache_path.exists())
+            plugin._record_checkin_background.assert_not_awaited()
+            plugin._release_checkin_background_claim.assert_not_awaited()
 
     async def test_same_user_concurrent_checkins_wait_for_the_first_full_flow(self):
         with tempfile.TemporaryDirectory() as tmp:

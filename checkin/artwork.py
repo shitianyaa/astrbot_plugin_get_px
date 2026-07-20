@@ -24,18 +24,40 @@ from .card import (
     build_checkin_card_data,
     get_checkin_card_template,
 )
+from .cache import is_valid_card_jpeg
+from .quality import (
+    CHECKIN_JPEG_QUALITY,
+    DEFAULT_CHECKIN_RENDER_TIER,
+    CheckinRenderTier,
+    checkin_render_fallbacks,
+    get_checkin_render_tier,
+    normalize_checkin_render_tier,
+)
+
+
+_CHECKIN_BACKGROUND_MODE_LABELS = {
+    "pixiv_daily": "在线图片",
+    "custom": "自定义背景",
+    "fallback": "占位图",
+}
+
+
+def _checkin_background_mode_label(background: CardBackground | None) -> str:
+    mode = getattr(background, "mode", "") or "none"
+    return _CHECKIN_BACKGROUND_MODE_LABELS.get(str(mode), str(mode))
 
 try:
     from ..pixiv.index import ordered_by_unused
+    from ..pixiv.downloader import cleanup
 except ImportError:  # Direct imports used by the test suite.
     from pixiv.index import ordered_by_unused
+    from pixiv.downloader import cleanup
 
 
 LOG_PREFIX = "[GetPx]"
 PLUGIN_NAME = "astrbot_plugin_get_px"
 CHECKIN_BACKGROUND_PAGE_ATTEMPTS = 5
 CHECKIN_PREVIEW_BACKGROUND_TTL_SECONDS = 300.0
-CHECKIN_BACKGROUND_QUALITY = "medium"
 
 
 class CheckinArtworkMixin:
@@ -74,10 +96,18 @@ class CheckinArtworkMixin:
                 self._cfg_str("checkin_custom_background", "")
             )
             if custom_path is not None:
+                logger.debug(f"{LOG_PREFIX} 签到背景恢复完成: mode=custom")
                 return replace(saved, image_path=str(custom_path), mode="custom")
+            logger.warning(
+                f"{LOG_PREFIX} 签到背景恢复失败: mode=custom "
+                f"reason=custom_file_unavailable"
+            )
             return replace(saved, mode="fallback")
 
         if not record.background_illust_id:
+            logger.debug(
+                f"{LOG_PREFIX} 签到背景恢复跳过: reason=no_persisted_illust"
+            )
             return replace(saved, mode="fallback")
         source = str(record.background_source or "")
         detail_id_text = str(record.background_illust_id)
@@ -88,25 +118,48 @@ class CheckinArtworkMixin:
                 try:
                     detail_page = int(page_text)
                 except ValueError:
+                    logger.warning(
+                        f"{LOG_PREFIX} 签到背景恢复失败: "
+                        f"reason=invalid_lolicon_page"
+                    )
                     return replace(saved, mode="fallback")
             if not self._cfg_str("pixiv_refresh_token"):
+                logger.warning(
+                    f"{LOG_PREFIX} 签到背景恢复失败: "
+                    f"reason=lolicon_restore_requires_pixiv_token"
+                )
                 return replace(saved, mode="fallback")
         try:
             detail_id = int(detail_id_text)
         except ValueError:
+            logger.warning(
+                f"{LOG_PREFIX} 签到背景恢复失败: reason=invalid_illust_id"
+            )
             return replace(saved, mode="fallback")
         if getattr(self, "client", None) is None:
             self._init_client()
         if self.client is None:
+            logger.warning(
+                f"{LOG_PREFIX} 签到背景恢复失败: reason=pixiv_client_unavailable"
+            )
             return replace(saved, mode="fallback")
 
         try:
             illust = await self.client.illust_detail(detail_id)
             if not illust:
+                logger.warning(
+                    f"{LOG_PREFIX} 签到背景恢复失败: reason=detail_not_found "
+                    f"illust_id={record.background_illust_id}"
+                )
                 return replace(saved, mode="fallback")
             if source.startswith("lolicon:"):
                 illust = self._select_pixiv_detail_page(illust, detail_page)
                 if not illust:
+                    logger.warning(
+                        f"{LOG_PREFIX} 签到背景恢复失败: "
+                        f"reason=detail_page_not_found "
+                        f"illust_id={record.background_illust_id}"
+                    )
                     return replace(saved, mode="fallback")
             if await self._blacklist_reason_for_illust(
                 illust, record.background_illust_id
@@ -125,14 +178,26 @@ class CheckinArtworkMixin:
                     f"{LOG_PREFIX} 签到背景恢复拒绝非 3:4 作品 {record.background_illust_id}"
                 )
                 return replace(saved, mode="fallback")
+            if source.startswith("lolicon:"):
+                illust = dict(illust)
+                illust["_source"] = "lolicon"
 
             timeout_sec = self._cfg_float("request_timeout", 30.0, 5.0, 120.0)
+            saved_quality = str(getattr(record, "background_quality", "") or "")
+            background_quality = saved_quality or get_checkin_render_tier(
+                self._record_checkin_render_tier(record)
+            ).background_quality
             path, actual_quality, file_size = await self.downloader.download_for_send(
                 illust,
-                CHECKIN_BACKGROUND_QUALITY,
+                background_quality,
                 timeout=timeout_sec,
                 downgrade_limit_bytes=0,
                 log_context=f"[签到背景恢复] 作品 {record.background_illust_id}",
+            )
+            logger.debug(
+                f"{LOG_PREFIX} 签到背景恢复完成: mode=pixiv_daily "
+                f"source={source.partition(':')[0] or 'unknown'} "
+                f"illust_id={record.background_illust_id} quality={actual_quality}"
             )
             return CardBackground(
                 image_path=path,
@@ -147,7 +212,9 @@ class CheckinArtworkMixin:
             )
         except Exception as e:
             logger.warning(
-                f"{LOG_PREFIX} 签到背景 {record.background_illust_id} 恢复失败\uff0c使用占位图: {e}"
+                f"{LOG_PREFIX} 签到背景恢复失败，使用占位图: "
+                f"illust_id={record.background_illust_id} "
+                f"error_type={type(e).__name__}"
             )
             return replace(saved, mode="fallback")
 
@@ -181,6 +248,7 @@ class CheckinArtworkMixin:
         background: CardBackground | None,
         bot_name: str,
         user_title: str = "",
+        render_tier: str | None = None,
     ) -> str:
         avatar_url = (
             self._checkin_avatar_url(event)
@@ -189,7 +257,9 @@ class CheckinArtworkMixin:
         )
         width = CHECKIN_CARD_WIDTH
         height = CHECKIN_CARD_HEIGHT
-        quality = self._cfg_int("checkin_card_quality", 95, 60, 100)
+        render_spec = get_checkin_render_tier(
+            render_tier or self._configured_checkin_render_tier()
+        )
         # 视图模型构建含背景图 Data URL 编码（读文件 + base64），放入线程池
         data = await asyncio.to_thread(
             build_checkin_card_data,
@@ -205,19 +275,184 @@ class CheckinArtworkMixin:
                 "checkin_background_refresh_cost", 100, 0, 500
             ),
         )
+        options = {
+            "full_page": False,
+            "type": "jpeg",
+            "quality": CHECKIN_JPEG_QUALITY,
+            "clip": {"x": 0, "y": 0, "width": width, "height": height},
+            "viewport": {"width": width, "height": height},
+            "animations": "disabled",
+        }
+        if render_spec.scale_level is not None:
+            options["device_scale_factor_level"] = render_spec.scale_level
         return await self.html_render(
             get_checkin_card_template(getattr(record, "theme_id", "default")),
             data,
             return_url=False,
-            options={
-                "full_page": False,
-                "type": "jpeg",
-                "quality": quality,
-                "clip": {"x": 0, "y": 0, "width": width, "height": height},
-                "viewport": {"width": width, "height": height},
-                "animations": "disabled",
-            },
+            options=options,
         )
+
+    def _configured_checkin_render_tier(self) -> str:
+        return normalize_checkin_render_tier(
+            self._cfg_str("checkin_card_quality_tier", DEFAULT_CHECKIN_RENDER_TIER)
+        )
+
+    @staticmethod
+    def _record_checkin_render_tier(record: CheckinRecord) -> str:
+        return normalize_checkin_render_tier(
+            getattr(record, "render_tier", DEFAULT_CHECKIN_RENDER_TIER)
+        )
+
+    @staticmethod
+    def _cache_get_for_tier(cache, date_key: str, cache_key: str, spec):
+        return cache.get(
+            date_key,
+            cache_key,
+            expected_size=spec.expected_size,
+        )
+
+    @staticmethod
+    async def _cache_store_for_tier(
+        cache,
+        date_key: str,
+        cache_key: str,
+        renderer,
+        spec: CheckinRenderTier,
+    ):
+        return await cache.store(
+            date_key,
+            cache_key,
+            renderer,
+            expected_size=spec.expected_size,
+        )
+
+    async def _get_cached_checkin_card(
+        self,
+        event: AstrMessageEvent,
+        *,
+        cache,
+        profile,
+        record,
+        background: CardBackground | None,
+        bot_name: str,
+        user_title: str,
+        preferred_tier: str,
+    ) -> tuple[Path | None, str]:
+        for spec in checkin_render_fallbacks(preferred_tier):
+            cache_key = await asyncio.to_thread(
+                self._checkin_card_cache_key,
+                event,
+                profile=profile,
+                record=record,
+                background=background,
+                bot_name=bot_name,
+                user_title=user_title,
+                render_tier=spec.name,
+            )
+            cached = await asyncio.to_thread(
+                self._cache_get_for_tier,
+                cache,
+                record.date_key,
+                cache_key,
+                spec,
+            )
+            if cached is not None:
+                logger.debug(
+                    f"{LOG_PREFIX} 签到卡缓存命中: 画质={spec.name} "
+                    f"日期={record.date_key} 输出尺寸={spec.expected_size[0]}x{spec.expected_size[1]}"
+                )
+                return Path(cached), spec.name
+            logger.debug(
+                f"{LOG_PREFIX} 签到卡缓存未命中: 画质={spec.name} "
+                f"日期={record.date_key} 输出尺寸={spec.expected_size[0]}x{spec.expected_size[1]}"
+            )
+        return None, normalize_checkin_render_tier(preferred_tier)
+
+    async def _render_checkin_card_with_fallback(
+        self,
+        event: AstrMessageEvent,
+        *,
+        profile,
+        record,
+        background: CardBackground | None,
+        bot_name: str,
+        user_title: str = "",
+        preferred_tier: str,
+        cache=None,
+    ) -> tuple[Path, str]:
+        last_error: Exception | None = None
+        fallback_specs = checkin_render_fallbacks(preferred_tier)
+        for tier_index, spec in enumerate(fallback_specs):
+            renderer_source_path = ""
+            render_succeeded = False
+            started_at = time.monotonic()
+
+            async def render_card() -> str:
+                nonlocal renderer_source_path
+                renderer_source_path = await self._render_checkin_card(
+                    event,
+                    profile=profile,
+                    record=record,
+                    background=background,
+                    bot_name=bot_name,
+                    user_title=user_title,
+                    render_tier=spec.name,
+                )
+                return renderer_source_path
+
+            try:
+                logger.debug(
+                    f"{LOG_PREFIX} 签到卡开始渲染: 画质={spec.name} "
+                    f"输出尺寸={spec.expected_size[0]}x{spec.expected_size[1]} "
+                    f"背景模式={_checkin_background_mode_label(background)}"
+                )
+                if cache is None:
+                    card_path = Path(await render_card())
+                    if not is_valid_card_jpeg(card_path, spec.expected_size):
+                        width, height = spec.expected_size
+                        raise ValueError(
+                            f"renderer output must be a valid {width}x{height} JPEG"
+                        )
+                else:
+                    cache_key = await asyncio.to_thread(
+                        self._checkin_card_cache_key,
+                        event,
+                        profile=profile,
+                        record=record,
+                        background=background,
+                        bot_name=bot_name,
+                        user_title=user_title,
+                        render_tier=spec.name,
+                    )
+                    card_path = Path(
+                        await self._cache_store_for_tier(
+                            cache,
+                            record.date_key,
+                            cache_key,
+                            render_card,
+                            spec,
+                        )
+                    )
+                render_succeeded = True
+                logger.info(
+                    f"{LOG_PREFIX} 签到卡渲染完成：画质={spec.name} "
+                    f"输出尺寸={spec.expected_size[0]}x{spec.expected_size[1]} "
+                    f"耗时={int((time.monotonic() - started_at) * 1000)}ms"
+                )
+                return card_path, spec.name
+            except Exception as exc:
+                last_error = exc
+                has_lower_tier = tier_index + 1 < len(fallback_specs)
+                logger.warning(
+                    f"{LOG_PREFIX} 签到卡渲染失败: 画质={spec.name} "
+                    f"输出尺寸={spec.expected_size[0]}x{spec.expected_size[1]} "
+                    f"是否降档={'是' if has_lower_tier else '否'} "
+                    f"错误类型={type(exc).__name__}"
+                )
+            finally:
+                if cache is not None or not render_succeeded:
+                    cleanup(renderer_source_path)
+        raise RuntimeError("all check-in card render tiers failed") from last_error
 
     async def _prepare_checkin_background(
         self,
@@ -226,6 +461,7 @@ class CheckinArtworkMixin:
         *,
         claim_usage: bool = True,
         refresh_preview: bool = False,
+        render_tier: str | None = None,
     ) -> CardBackground | None:
         mode = self._cfg_str("checkin_background_mode", "pixiv_daily") or "pixiv_daily"
         if mode == "custom":
@@ -233,6 +469,7 @@ class CheckinArtworkMixin:
                 self._cfg_str("checkin_custom_background", "")
             )
             if custom_path:
+                logger.debug(f"{LOG_PREFIX} 签到背景选择完成: mode=custom")
                 return CardBackground(
                     image_path=str(custom_path),
                     mode="custom",
@@ -275,6 +512,9 @@ class CheckinArtworkMixin:
             claim_usage=claim_usage,
             preview_nonce=preview_nonce,
             preview_excluded_ids=preview_excluded_ids,
+            background_quality=get_checkin_render_tier(
+                render_tier or self._configured_checkin_render_tier()
+            ).background_quality,
         )
         if pixiv_bg is not None:
             if refresh_preview and pixiv_bg.illust_id:
@@ -284,6 +524,10 @@ class CheckinArtworkMixin:
                 recent.append((pixiv_bg.illust_id, time.monotonic()))
                 self._checkin_preview_background_ids[record.user_id] = recent[-20:]
             return pixiv_bg
+        logger.info(
+            f"{LOG_PREFIX} 签到背景选择失败，使用占位图: "
+            f"reason=no_available_online_background"
+        )
         return CardBackground(mode="fallback", source="fallback")
 
     def _resolve_custom_background_path(self, value: str) -> Path | None:
@@ -295,11 +539,21 @@ class CheckinArtworkMixin:
             path = Path(StarTools.get_data_dir(PLUGIN_NAME)) / raw
         try:
             resolved = path.resolve()
-        except OSError:
+        except OSError as exc:
+            logger.debug(
+                f"{LOG_PREFIX} 签到自定义背景不可用: stage=resolve "
+                f"error_type={type(exc).__name__}"
+            )
             return None
         if not resolved.is_file():
+            logger.debug(
+                f"{LOG_PREFIX} 签到自定义背景不可用: reason=file_not_found"
+            )
             return None
         if resolved.suffix.lower() not in {".jpg", ".jpeg", ".png", ".webp"}:
+            logger.debug(
+                f"{LOG_PREFIX} 签到自定义背景不可用: reason=unsupported_format"
+            )
             return None
         try:
             from PIL import Image as PILImage
@@ -310,7 +564,9 @@ class CheckinArtworkMixin:
             with PILImage.open(resolved) as img:
                 img.verify()
         except Exception:
-            logger.warning(f"{LOG_PREFIX} 签到自定义背景文件无效或损坏: {resolved}")
+            logger.debug(
+                f"{LOG_PREFIX} 签到自定义背景不可用: reason=corrupt_or_unreadable"
+            )
             return None
         return resolved
 
@@ -322,6 +578,7 @@ class CheckinArtworkMixin:
         claim_usage: bool = True,
         preview_nonce: int = 0,
         preview_excluded_ids: set[str] | None = None,
+        background_quality: str = "medium",
         _selected_tag: str | None = None,
     ) -> CardBackground | None:
         if _selected_tag is None:
@@ -333,6 +590,7 @@ class CheckinArtworkMixin:
                     claim_usage=claim_usage,
                     preview_nonce=preview_nonce,
                     preview_excluded_ids=preview_excluded_ids,
+                    background_quality=background_quality,
                     _selected_tag=selected_tag,
                 )
                 if background is not None:
@@ -360,7 +618,9 @@ class CheckinArtworkMixin:
                 )
             except Exception as e:
                 logger.warning(
-                    f"{LOG_PREFIX} 签到背景请求失败(tag={selected_tag!r}): {e}"
+                    f"{LOG_PREFIX} 签到背景请求失败: "
+                    f"tag_configured={'yes' if selected_tag else 'no'} "
+                    f"error_type={type(e).__name__}"
                 )
                 return None
             if preview_nonce:
@@ -376,7 +636,14 @@ class CheckinArtworkMixin:
 
             if self._cfg_bool("filter_manga", True):
                 illusts = self._filter_manga(illusts)
-            illusts = await self._filter_blacklisted_illusts(illusts)
+            try:
+                illusts = await self._filter_blacklisted_illusts(illusts)
+            except RuntimeError as exc:
+                logger.warning(
+                    f"{LOG_PREFIX} 签到背景安全检查不可用，使用占位图: "
+                    f"error_type={type(exc).__name__}"
+                )
+                return None
             illusts = filter_illusts_by_aspect_ratio(
                 illusts,
                 CHECKIN_ARTWORK_TARGET_RATIO,
@@ -395,7 +662,10 @@ class CheckinArtworkMixin:
                         f"{LOG_PREFIX} 签到背景第 {page_attempt} 页无符合 3:4 的竖向作品\uff0c切换下一页"
                     )
                 except Exception as e:
-                    logger.warning(f"{LOG_PREFIX} 签到背景分页游标更新失败: {e}")
+                    logger.warning(
+                        f"{LOG_PREFIX} 签到背景分页游标更新失败: "
+                        f"error_type={type(e).__name__}"
+                    )
                     return None
                 continue
 
@@ -412,7 +682,7 @@ class CheckinArtworkMixin:
                 continue
             if self.image_index is None:
                 logger.info(
-                    f"{LOG_PREFIX} 签到背景候选均已在当天去重索引中，跳过图片源背景"
+                    f"{LOG_PREFIX} 签到背景候选均已在去重窗口内使用，跳过图片源背景"
                 )
                 return None
 
@@ -424,7 +694,10 @@ class CheckinArtworkMixin:
                     f"{LOG_PREFIX} 签到背景第 {page_attempt} 页候选均已使用\uff0c切换下一页"
                 )
             except Exception as e:
-                logger.warning(f"{LOG_PREFIX} 签到背景分页游标更新失败: {e}")
+                logger.warning(
+                    f"{LOG_PREFIX} 签到背景分页游标更新失败: "
+                    f"error_type={type(e).__name__}"
+                )
                 return None
         else:
             logger.info(
@@ -451,11 +724,15 @@ class CheckinArtworkMixin:
                 # 自定义安全词/黑名单读取失败时 fail-closed：不放过该候选，
                 # 跳过去试下一个；若所有候选都不可用则回退占位图。
                 logger.warning(
-                    f"{LOG_PREFIX} 签到背景安全检查不可用，跳过作品 {illust_id}: {exc}"
+                    f"{LOG_PREFIX} 签到背景安全检查不可用，跳过作品: "
+                    f"illust_id={illust_id} error_type={type(exc).__name__}"
                 )
                 continue
             if reason:
-                logger.info(f"{LOG_PREFIX} 签到背景跳过\uff1a{reason}")
+                logger.debug(
+                    f"{LOG_PREFIX} 签到背景跳过: reason=content_policy "
+                    f"illust_id={illust_id}"
+                )
                 continue
             claimed = False
             if claim_usage:
@@ -463,7 +740,7 @@ class CheckinArtworkMixin:
                     event, source_key, illust_id
                 )
                 if not claimed:
-                    logger.info(
+                    logger.debug(
                         f"{LOG_PREFIX} 签到背景跳过\uff1a作品 {illust_id} 已被其他签到占用"
                     )
                     continue
@@ -472,10 +749,10 @@ class CheckinArtworkMixin:
             try:
                 path, actual_q, file_size = await self.downloader.download_for_send(
                     illust,
-                    CHECKIN_BACKGROUND_QUALITY,
+                    background_quality,
                     timeout=timeout_sec,
                     downgrade_limit_bytes=0,
-                    log_context=f"[签到背景 {idx}] 作品 {illust_id} 「{title}」",
+                    log_context=f"[签到背景 {idx}] 作品 {illust_id}",
                 )
                 author = str((illust.get("user") or {}).get("name") or "")
                 background = CardBackground(
@@ -490,13 +767,23 @@ class CheckinArtworkMixin:
                     file_size=file_size,
                 )
                 background_ready = True
+                logger.debug(
+                    f"{LOG_PREFIX} 签到背景选择完成: mode=pixiv_daily "
+                    f"source={source_key.partition(':')[0] or 'unknown'} "
+                    f"illust_id={illust_id} quality={actual_q} file_size={file_size}"
+                )
                 return background
             except asyncio.TimeoutError:
-                logger.warning(
-                    f"{LOG_PREFIX} 签到背景 {illust_id} 下载超时 ({timeout_sec}s)"
+                logger.debug(
+                    f"{LOG_PREFIX} 签到背景候选跳过: reason=timeout "
+                    f"illust_id={illust_id}"
                 )
             except Exception as e:
-                logger.warning(f"{LOG_PREFIX} 签到背景 {illust_id} 下载失败: {e}")
+                logger.debug(
+                    f"{LOG_PREFIX} 签到背景候选跳过: reason=download_error "
+                    f"illust_id={illust_id} "
+                    f"error_type={type(e).__name__}"
+                )
             finally:
                 if claimed and not background_ready:
                     await self._release_checkin_background_usage(
@@ -518,16 +805,26 @@ class CheckinArtworkMixin:
         if self.image_index is None or not source_key or not illust_id:
             return True
         try:
-            return await self.image_index.claim_usage(
+            claimed = await self.image_index.claim_usage(
                 scope=self._event_scope(event),
                 source_key=source_key,
                 illust_id=illust_id,
                 feature="checkin_pending",
                 user_id=str(event.get_sender_id() or ""),
             )
-        except Exception as e:
-            logger.warning(f"{LOG_PREFIX} 签到背景占用索引失败: {e}")
-            return True
+            logger.debug(
+                f"{LOG_PREFIX} 签到背景占用结果: "
+                f"result={'claimed' if claimed else 'duplicate'} "
+                f"source={source_key.partition(':')[0] or 'unknown'} "
+                f"illust_id={illust_id}"
+            )
+            return claimed
+        except Exception as exc:
+            logger.debug(
+                f"{LOG_PREFIX} 签到背景占用失败，拒绝使用候选: "
+                f"reason=index_error error_type={type(exc).__name__}"
+            )
+            return False
 
     async def _release_checkin_background_usage(
         self, event: AstrMessageEvent, source_key: str, illust_id: str
@@ -541,8 +838,16 @@ class CheckinArtworkMixin:
                 illust_id=illust_id,
                 feature="checkin_pending",
             )
-        except Exception as e:
-            logger.warning(f"{LOG_PREFIX} 释放签到背景占用失败: {e}")
+            logger.debug(
+                f"{LOG_PREFIX} 签到背景占用已释放: "
+                f"source={source_key.partition(':')[0] or 'unknown'} "
+                f"illust_id={illust_id}"
+            )
+        except Exception as exc:
+            logger.debug(
+                f"{LOG_PREFIX} 签到背景占用释放未完成: "
+                f"reason=index_error error_type={type(exc).__name__}"
+            )
 
     async def _release_checkin_background_claim(
         self, event: AstrMessageEvent, background: CardBackground | None
@@ -570,7 +875,10 @@ class CheckinArtworkMixin:
                     )
                 )
             except Exception as e:
-                logger.warning(f"{LOG_PREFIX} 签到背景读取去重索引失败: {e}")
+                logger.warning(
+                    f"{LOG_PREFIX} 签到背景读取去重索引失败: "
+                    f"error_type={type(e).__name__}"
+                )
         return used_ids
 
     def _checkin_avatar_url(self, event: AstrMessageEvent) -> str:

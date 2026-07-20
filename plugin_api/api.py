@@ -133,7 +133,8 @@ class PluginWebApi:
 
     def internal_error(self, action: str, exc: Exception):
         logger.error(
-            f"{self.log_prefix} Web API {action}失败: {type(exc).__name__}: {exc}"
+            f"{self.log_prefix} Web API {action}失败: "
+            f"error_type={type(exc).__name__}"
         )
         return jsonify({"success": False, "error": self.internal_error_message}), 500
 
@@ -411,7 +412,7 @@ class PluginWebApi:
             cfg_float = getattr(self.plugin, "_cfg_float", None)
             if callable(cfg_float):
                 timeout = cfg_float("request_timeout", 30.0, 5.0, 120.0)
-            temp_path = await downloader.download(
+            temp_path, _ = await downloader.download(
                 url,
                 timeout=timeout,
             )
@@ -541,8 +542,11 @@ class PluginWebApi:
             filename = str(getattr(upload, "filename", "") or "").strip()
             if Path(filename).suffix.lower() != ".json":
                 return jsonify({"success": False, "error": "只支持 JSON 备份文件"}), 400
-            logger.info(f"{self.log_prefix} 开始导入签到 JSON 备份: file={filename!r}")
             raw = await self.plugin._read_uploaded_file_bytes(upload)
+            logger.info(
+                f"{self.log_prefix} 开始导入签到 JSON 备份: "
+                f"size_bytes={len(raw)}"
+            )
             snapshot = load_checkin_snapshot_json(raw)
             rollback_path, result = (
                 await self.plugin.checkin_store.import_snapshot_with_rollback(
@@ -558,8 +562,7 @@ class PluginWebApi:
             )
             logger.warning(
                 f"{self.log_prefix} 现有签到数据已由 JSON 备份覆盖: "
-                f"file={filename!r}, users={result['users']}, "
-                f"records={result['records']}"
+                f"users={result['users']}, records={result['records']}"
             )
             return jsonify(
                 {
@@ -572,7 +575,7 @@ class PluginWebApi:
         except ValueError as exc:
             logger.warning(
                 f"{self.log_prefix} 签到数据导入被拒绝: "
-                f"file={filename!r}, reason={exc}"
+                f"error_type={type(exc).__name__}"
             )
             return jsonify({"success": False, "error": str(exc)}), 400
         except Exception as exc:

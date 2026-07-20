@@ -6,7 +6,7 @@ import sqlite3
 from .themes import CHECKIN_THEMES
 
 
-CHECKIN_DB_SCHEMA_VERSION = 1
+CHECKIN_DB_SCHEMA_VERSION = 2
 
 
 class UnversionedCheckinDatabaseError(RuntimeError):
@@ -23,7 +23,7 @@ class SchemaMixin:
     def _init_db(self) -> None:
         with closing(self._connect()) as conn:
             schema_version = int(conn.execute("PRAGMA user_version").fetchone()[0])
-            if schema_version not in (0, CHECKIN_DB_SCHEMA_VERSION):
+            if schema_version not in (0, 1, CHECKIN_DB_SCHEMA_VERSION):
                 raise RuntimeError(
                     f"unsupported check-in database schema: {schema_version}"
                 )
@@ -38,6 +38,8 @@ class SchemaMixin:
             conn.execute("PRAGMA journal_mode = WAL")
             conn.execute("BEGIN IMMEDIATE")
             try:
+                if schema_version in (1, CHECKIN_DB_SCHEMA_VERSION):
+                    self._ensure_v2_record_columns(conn)
                 self._create_checkin_schema(conn)
                 self._sync_builtin_themes(conn)
                 conn.execute(f"PRAGMA user_version = {CHECKIN_DB_SCHEMA_VERSION}")
@@ -45,6 +47,23 @@ class SchemaMixin:
             except Exception:
                 conn.rollback()
                 raise
+
+    @staticmethod
+    def _ensure_v2_record_columns(conn: sqlite3.Connection) -> None:
+        columns = {
+            str(row["name"])
+            for row in conn.execute("PRAGMA table_info(checkin_records)").fetchall()
+        }
+        if "render_tier" not in columns:
+            conn.execute(
+                "ALTER TABLE checkin_records "
+                "ADD COLUMN render_tier TEXT NOT NULL DEFAULT '省流量'"
+            )
+        if "background_quality" not in columns:
+            conn.execute(
+                "ALTER TABLE checkin_records "
+                "ADD COLUMN background_quality TEXT NOT NULL DEFAULT ''"
+            )
 
     @staticmethod
     def _create_checkin_schema(conn: sqlite3.Connection) -> None:
@@ -128,11 +147,13 @@ class SchemaMixin:
                 secondary_note TEXT NOT NULL DEFAULT '',
                 template_version TEXT NOT NULL DEFAULT 'default:1',
                 theme_id TEXT NOT NULL DEFAULT 'default',
+                render_tier TEXT NOT NULL DEFAULT '省流量',
                 background_mode TEXT NOT NULL DEFAULT '',
                 background_source TEXT NOT NULL DEFAULT '',
                 background_illust_id TEXT NOT NULL DEFAULT '',
                 background_title TEXT NOT NULL DEFAULT '',
                 background_author TEXT NOT NULL DEFAULT '',
+                background_quality TEXT NOT NULL DEFAULT '',
                 created_at TEXT NOT NULL,
                 updated_at TEXT NOT NULL,
                 PRIMARY KEY (date_key, user_id),

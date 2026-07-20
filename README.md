@@ -7,7 +7,7 @@
 一个面向 AstrBot 的安全发图与签到插件：Lolicon 优先取图，失败时可用 Pixiv refresh_token 回退，并在 WebUI 管理群排行、成员数值、内容安全和签到数据。
 
 ![AstrBot](https://img.shields.io/badge/AstrBot-plugin-5865f2?style=flat-square)
-![Version](https://img.shields.io/badge/version-3.3.2-22c55e?style=flat-square)
+![Version](https://img.shields.io/badge/version-3.4.0-22c55e?style=flat-square)
 ![Python](https://img.shields.io/badge/Python-3.10%2B-3776ab?style=flat-square)
 ![Platform](https://img.shields.io/badge/platform-OneBot%20%2F%20aiocqhttp-f97316?style=flat-square)
 ![License](https://img.shields.io/badge/license-MIT-3b82f6?style=flat-square)
@@ -31,13 +31,25 @@
 
 ## 界面展示
 
+### 签到卡主题
+
 | `00` · 米白 | `01` · 浅蓝 |
 | :---: | :---: |
 | ![米白](templates/checkin_themes/default/preview.png) | ![浅蓝](templates/checkin_themes/blue/preview.png) |
 | `02` · 红黑 | `03` · 黄黑 |
 | ![红黑](templates/checkin_themes/red/preview.png) | ![黄黑](templates/checkin_themes/yellow/preview.png) |
 
-签到卡 `960 × 540`。`/签到中心 商店 主题 查看 <编号>` 可免费看预览（如 `/签到中心 商店 主题 查看 1`），不扣金币、不切换主题。
+签到卡支持 `省流量`（960×540）、`清晰`（1248×702）和 `极致`（1728×972）三档。`/签到商店 主题 查看 <编号>` 可免费看预览（如 `/签到商店 主题 查看 1`），不扣金币、不切换主题。
+
+### WebUI 管理中心
+
+<div align="center">
+<img src="Webui.png" alt="插件管理中心界面" width="100%">
+</div>
+
+<br>
+
+插件管理中心提供群排行与趋势图表、成员数值编辑、内容安全管理和签到数据备份功能，所有操作均通过可视化界面完成。
 
 ## 功能一览
 
@@ -48,7 +60,7 @@
 | 内容安全 | 强制普通分级、内置安全词（不可关）、自定义安全词、作品 ID 黑名单 |
 | 每日签到 | H 纸张画册卡片、竖向随机背景、金币、好感度、连签、商店与主题 |
 | 管理中心 | 群排行与趋势、成员数值、安全词与黑名单、签到备份 |
-| 稳定性 | 频率限制、当天去重、发送失败重试、临时文件自动清理 |
+| 稳定性 | 0–7 个自然日去重、发送失败重试、临时文件自动清理 |
 
 > 主要面向 QQ OneBot / aiocqhttp。其他平台会尽量降级为逐条发送，请自行测试兼容性。
 
@@ -63,11 +75,14 @@
 ```text
 /p 初音ミク 3
 /签到
-/签到中心
+/签到我的
+/签到排行
+/签到商店
+/签到管理
 /签到帮助
 ```
 
-当前默认分支不提供代理配置，Pixiv 登录、API 请求和图片下载均使用本机直连；需要代理时请使用 [`proxy` 分支](https://github.com/shitianyaa/astrbot_plugin_get_px/tree/proxy)，配置说明以该分支 README 为准。
+默认分支仍不提供用于 Pixiv 登录、API 请求或图片下载的 HTTP/SOCKS 出站代理；这类网络代理请使用 [`proxy` 分支](https://github.com/shitianyaa/astrbot_plugin_get_px/tree/proxy)。如果只是 Lolicon 返回的图片地址不可用，可在 `lolicon_image_proxy_origins` 中按行填写图片反代 origin，插件只改写 Lolicon 图片 URL，不代理 API 或 Pixiv 登录。
 
 > [!WARNING]
 > **跨版本升级与签到数据**
@@ -88,21 +103,18 @@
 | `/p [标签] [数量]` | 按标签搜索发图 | `/p 初音ミク 3` |
 | `/p [数量]` | 无标签时随机发图 | `/p 5` |
 | `/签到` | 每日签到 | `/签到` |
-| `/签到中心` | 显示“我的、排行、商店、管理”指令树 | `/签到中心` |
-| `/签到帮助` | 发送签到中心完整帮助图 | `/签到帮助` |
-| `/签到中心 我的 状态` | 金币、好感、连签等 | `/签到中心 我的 状态` |
-| `/签到中心 排行 [今日\|月榜\|连签\|累计]` | 当前群的签到排行，省略模式时显示今日排行 | `/签到中心 排行 月榜` |
-| `/签到中心 商店 查看` | 加持、背景刷新、主题商品 | `/签到中心 商店 查看` |
-| `/签到中心 商店 主题 查看 <编号>` | 免费主题预览 | `/签到中心 商店 主题 查看 1` |
+| `/签到我的 状态` | 金币、好感、连签等 | `/签到我的 状态` |
+| `/签到排行 今日\|月榜\|连签\|累计` | 当前群的签到排行 | `/签到排行 月榜` |
+| `/签到商店 查看` | 加持、背景刷新、主题商品 | `/签到商店 查看` |
+| `/签到商店 主题 查看 <编号>` | 免费主题预览 | `/签到商店 主题 查看 1` |
 
-签到中心按功能分为四块：
+签到功能按四个独立指令组组织：
 
 ```text
-签到中心
-├── 我的：状态、生日、成就、称号
-├── 排行：今日、月榜、连签、累计
-├── 商店：加持、主题、刷新背景
-└── 管理：预览、导出、全局事件
+签到我的：状态、生日、成就、称号
+签到排行：今日、月榜、连签、累计
+签到商店：加持、主题、刷新背景
+签到管理：预览、导出、全局事件
 ```
 
 完整指令（含商店购买、生日、成就、管理员事件/导出等）见 [指令参考](docs/user/commands.md)。
@@ -129,7 +141,7 @@ AstrBot WebUI 插件页的「pluginCenter」可：
 - 按群查看今日 / 月度 / 连签 / 累计排行与 7/30 天趋势
 - 搜索成员并调整金币、好感度、累计与连续签到当前值
 - 维护自定义屏蔽词与作品 ID 黑名单
-- 下载 / 上传签到备份（schema v6，仅接受当前版本 JSON）
+- 下载 / 上传签到备份（导出 schema v7，并兼容导入 schema v6）
 
 成员数值编辑只改当前资料，不回写历史奖励、群排行或已生成卡片。
 
@@ -148,8 +160,9 @@ AstrBot WebUI 插件页的「pluginCenter」可：
 | `pixiv_refresh_token` | 可选，作为 Lolicon 失败后的 Pixiv 回退 |
 | `image_quality` | 省流量用 `large`，优先原图用 `original` |
 | `send_as_forward` | QQ 场景建议开启 |
-| `checkin_card_quality` | 推荐 `95`；文字糊可提到 `97–100` |
-| `dedupe_ttl_hours` | 默认即可，同群同标签当天尽量不重复 |
+| `checkin_card_quality_tier` | 默认 `省流量`；日常推荐 `清晰`，高分辨率显示可选 `极致` |
+| `dedupe_days` | 默认 `1`；需要跨日避免重复时可设为 `2–7`，`0` 为关闭 |
+| `lolicon_image_proxy_origins` | 图片地址无法访问时再配置；每行一个 http(s) origin |
 | `auto_trigger_enabled` | 需要「来张图」时再开 |
 
 <details>
@@ -160,9 +173,10 @@ AstrBot WebUI 插件页的「pluginCenter」可：
 | `pixiv_refresh_token` | Pixiv refresh_token，可选回退 | 空 |
 | `lolicon_api_url` | Lolicon 首选图片源地址；留空时停用 Lolicon | `https://api.lolicon.app/setu/v2` |
 | `lolicon_exclude_ai` | 请求 Lolicon 时排除 AI 作品；R18 始终关闭 | `true` |
+| `lolicon_image_proxy_origins` | 可选 Lolicon 图片反代 origin，多行按顺序轮换；不代理 API 或 Pixiv 登录 | 空 |
 | `filter_manga` | 过滤 Pixiv 回退结果中的漫画作品 | `true` |
 | `max_count` | 单次最大发送数量，范围 1-20 | `5` |
-| `dedupe_ttl_hours` | 普通发图当天去重；范围 `0–24`，设为 `0` 关闭；当前按自然日去重，不按小时滚动过期 | `24` |
+| `dedupe_days` | 最近 `0–7` 个北京时间自然日去重；`0` 为关闭并清空去重索引 | `1` |
 | `request_timeout` | 单张图片下载超时，单位秒 | `30` |
 | `image_quality` | 图片质量：`original`、`large`、`medium` | `original` |
 | `auto_downgrade_original_mb` | 原图超过该大小时自动降级，单位 MiB；`0` 为禁用 | `3.0` |
@@ -176,11 +190,11 @@ AstrBot WebUI 插件页的「pluginCenter」可：
 | `checkin_background_tag` | 签到背景标签；留空时 Lolicon 随机取图，失败后使用 Pixiv 推荐作品 | 空 |
 | `checkin_custom_background` | 本地图片路径；默认主题按竖向作品相框完整显示 | 空 |
 | `checkin_avatar_enabled` | 签到卡片显示用户头像 | `true` |
-| `checkin_card_quality` | 签到卡片 JPEG 清晰度，范围 60–100；修改后自动生成新的当天缓存 | `95` |
+| `checkin_card_quality_tier` | 签到卡画质：`省流量` / `清晰` / `极致`；预览和刷新背景立即生效，普通重复签到保持当天档位 | `省流量` |
 | `checkin_greeting_mode` | 签到问候来源：`local` / `hitokoto` / `ai` | `hitokoto` |
-| `checkin_hitokoto_categories` | 一言类型中文多选；选择“全部”或留空时从全部分类随机 | `全部` |
-| `checkin_ai_greeting_provider_id` | 签到问候文本模型；留空时尝试当前会话文本模型 | 空 |
-| `checkin_ai_greeting_prompt` | 签到问候提示词，使用 `{checkin_data}` 注入受控数据 | 见配置页 |
+| `checkin_hitokoto_categories` | 一言类型中文多选；选择”全部”或留空时从全部分类随机 | `全部` |
+| `checkin_ai_greeting_provider_id` | 签到问候文本模型；留空时尝试当前会话模型，仍不可用则使用本地文案 | 空 |
+| `checkin_ai_greeting_prompt` | 自定义角色和语气；固定安全约束由插件以 system prompt 追加 | 见配置页 |
 | `checkin_ai_greeting_timeout` | 单次问候模型调用超时秒数；失败后回退本地文案 | `8.0` |
 | `checkin_hitokoto_timeout` | 一言 API 请求超时秒数；失败后回退本地文案 | `5.0` |
 | `rate_limit_seconds` | 同一用户请求频率限制，单位秒；`0` 为禁用 | `3` |
@@ -196,7 +210,9 @@ AstrBot WebUI 插件页的「pluginCenter」可：
 | [签到说明](docs/user/checkin.md) | 发奖、商店、好感、卡片、问候、生日事件与称号 |
 | [项目架构](docs/project/architecture.md) | 模块划分（开发用） |
 
-**数据简述：** 发图当天去重与签到数据在插件数据目录；发送用临时图发完即清；签到 JPEG 缓存按天自过期，不会整目录清空数据库、黑名单或备份。
+**数据简述：** 发图去重窗口与签到数据保存在插件数据目录；发送用临时图发完即清；签到 JPEG 缓存按天自过期，不会整目录清空数据库、黑名单或备份。
+
+AI 签到问候会向所选 AstrBot 文本模型发送可用昵称、日期、签到统计、关系阶段、奖励、称号和成就；不会把用户 ID 当作昵称发送，昵称不可用时使用“匿名用户”。模型异常、错误角色或输出不合规时使用已保存的本地问候。
 
 ## 获取 Pixiv Token
 

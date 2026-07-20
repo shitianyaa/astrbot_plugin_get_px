@@ -11,6 +11,26 @@ from .downloader import cleanup
 
 LOG_PREFIX = "[GetPx]"
 DEFAULT_AUTO_DOWNGRADE_ORIGINAL_LIMIT_MB = 3.0
+
+
+def _search_quality_label(value: object) -> str:
+    return {
+        "original": "原图",
+        "large": "大图",
+        "medium": "中图",
+        "square_medium": "方形缩略图",
+    }.get(str(value or ""), str(value or ""))
+
+
+def _search_source_label(value: object) -> str:
+    source = str(value or "")
+    if source.startswith("lolicon"):
+        return "Lolicon"
+    if source.startswith("pixiv"):
+        return "Pixiv"
+    return source
+
+
 class SearchMixin:
     """Search and source-fallback flows."""
 
@@ -68,7 +88,11 @@ class SearchMixin:
                 if illusts:
                     return illusts, len(illusts), source_key
             except Exception as exc:
-                logger.warning(f"{LOG_PREFIX} Lolicon 请求失败(tag={tag!r})，尝试 Pixiv 回退: {exc}")
+                logger.warning(
+                    f"{LOG_PREFIX} Lolicon 请求失败，尝试 Pixiv 回退: "
+                    f"是否配置标签={'是' if tag else '否'} "
+                    f"错误类型={type(exc).__name__}"
+                )
 
         pixiv_source_key = self._source_key(tag, "pixiv") if tag else "pixiv:recommended"
         page_offset = offset
@@ -78,7 +102,10 @@ class SearchMixin:
                     self._event_scope(event), pixiv_source_key
                 )
             except Exception as exc:
-                logger.warning(f"{LOG_PREFIX} 读取 Pixiv 回退分页游标失败: {exc}")
+                logger.warning(
+                    f"{LOG_PREFIX} 读取 Pixiv 回退分页游标失败: "
+                    f"错误类型={type(exc).__name__}"
+                )
 
         if self.client is None:
             self._init_client()
@@ -92,7 +119,11 @@ class SearchMixin:
                 illusts = await self.client.recommended(offset=page_offset)
                 source_key = pixiv_source_key
         except Exception as exc:
-            logger.warning(f"{LOG_PREFIX} Pixiv 回退请求失败(tag={tag!r}): {exc}")
+            logger.warning(
+                f"{LOG_PREFIX} Pixiv 回退请求失败: "
+                f"是否配置标签={'是' if tag else '否'} "
+                f"错误类型={type(exc).__name__}"
+            )
             return [], 0, pixiv_source_key
         return illusts, len(illusts), source_key
 
@@ -118,8 +149,8 @@ class SearchMixin:
                 feature=feature,
                 user_id=user_id,
             )
-        except Exception as exc:
-            logger.warning(f"{LOG_PREFIX} 写入当天发图索引失败: {exc}")
+        except Exception:
+            pass
 
     async def _handle_search(
         self,
@@ -167,8 +198,8 @@ class SearchMixin:
             event, tag, count=max_count
         )
         logger.info(
-            f"{LOG_PREFIX} 搜索: tag={tag!r} source={source_key} count={count} "
-            f"quality={quality} raw_count={raw_count}"
+            f"{LOG_PREFIX} 搜索：标签={tag or '随机'} 来源={_search_source_label(source_key)} "
+            f"请求数量={count} 画质={_search_quality_label(quality)} 返回数量={raw_count}"
         )
 
         if not illusts:
@@ -195,25 +226,34 @@ class SearchMixin:
             return
 
         pick_count = min(count, len(illusts))
-        dedupe_ttl_hours = self._cfg_float("dedupe_ttl_hours", 24.0, 0.0, 24.0)
+        dedupe_days = self._cfg_int("dedupe_days", 1, 0, 7)
+        if (
+            self.image_index is not None
+            and self.image_index.retention_days != dedupe_days
+        ):
+            try:
+                await self.image_index.set_retention_days(dedupe_days)
+            except Exception:
+                yield event.plain_result("图片去重索引更新失败，请稍后重试")
+                return
 
         chosen = await self._pick_illusts(
             event,
             illusts,
             pick_count,
             source_key=source_key,
-            dedupe_enabled=dedupe_ttl_hours > 0,
+            dedupe_enabled=dedupe_days > 0,
             raw_count=raw_count,
         )
         if not chosen:
             yield event.plain_result(
-                "今天这个范围内没有未发送过的图片了，换个标签或明天再试"
+                "当前去重范围内没有未发送过的图片了，换个标签或稍后再试"
             )
             return
         pick_count = len(chosen)
         pending_illust_ids: set[str] = set()
         sent_illust_ids: set[str] = set()
-        if dedupe_ttl_hours > 0 and self.image_index is not None:
+        if dedupe_days > 0 and self.image_index is not None:
             pending_illust_ids = {
                 str(illust.get("id") or "") for illust in chosen if illust.get("id")
             }
@@ -235,10 +275,11 @@ class SearchMixin:
                         quality,
                         timeout=timeout_sec,
                         downgrade_limit_bytes=downgrade_limit_bytes,
-                        log_context=f"[{idx}/{pick_count}] 作品 {illust_id} 「{title}」",
+                        log_context=f"[{idx}/{pick_count}] 作品 {illust_id}",
                     )
-                    logger.info(
-                        f"{LOG_PREFIX} [{idx}/{pick_count}] 下载完成 {illust_id} -> {path} ({file_size / 1024:.1f} KB, quality={actual_q})"
+                    logger.debug(
+                        f"{LOG_PREFIX} [{idx}/{pick_count}] 作品 {illust_id} "
+                        f"下载完成（大小={file_size / 1024:.2f}KB，画质={_search_quality_label(actual_q)}）"
                     )
                     temp_paths.append(path)
                     downloaded.append((illust, path, actual_q, file_size))
@@ -247,8 +288,9 @@ class SearchMixin:
                         f"{LOG_PREFIX} [{idx}/{pick_count}] 作品 {illust_id} 下载超时 ({timeout_sec}s)"
                     )
                 except Exception as e:
-                    logger.error(
-                        f"{LOG_PREFIX} [{idx}/{pick_count}] 作品 {illust_id} 下载失败: {e}"
+                    logger.debug(
+                        f"{LOG_PREFIX} [{idx}/{pick_count}] 作品 {illust_id} "
+                        f"下载跳过: 错误类型={type(e).__name__}"
                     )
 
             # 统一发送（避免 yield 和 send 混用导致消息拆分）
@@ -306,6 +348,11 @@ class SearchMixin:
                 for attempt in range(1, max_retries + 1):
                     try:
                         await event.send(event.chain_result([nodes]))
+                        sent_illust_ids.update(
+                            str(illust.get("id") or "")
+                            for illust, *_rest in downloaded
+                            if illust.get("id")
+                        )
                         logger.info(
                             f"{LOG_PREFIX} 合并转发 {len(nodes.nodes)} 条作品"
                             + (f" (第{attempt}次尝试)" if attempt > 1 else "")
@@ -316,13 +363,18 @@ class SearchMixin:
                         if attempt < max_retries:
                             wait_sec = attempt * 2
                             logger.warning(
-                                f"{LOG_PREFIX} 合并转发失败 (第{attempt}次): {e}，{wait_sec}秒后重试..."
+                                f"{LOG_PREFIX} 合并转发失败，准备重试: "
+                                f"尝试次数={attempt}/{max_retries} "
+                                f"等待={wait_sec}s "
+                                f"错误类型={type(e).__name__}"
                             )
                             await asyncio.sleep(wait_sec)
                         else:
                             friendly_err = self._friendly_send_error(e)
                             logger.warning(
-                                f"{LOG_PREFIX} 合并转发失败 (已重试{max_retries}次): {friendly_err} | 原始错误: {e}，降级为逐条发送"
+                                f"{LOG_PREFIX} 合并转发失败，降级为逐条发送: "
+                                f"尝试次数={max_retries} 错误原因={friendly_err} "
+                                f"错误类型={type(e).__name__}"
                             )
 
                 # 合并转发失败，降级为逐条发送
@@ -341,6 +393,7 @@ class SearchMixin:
                         for attempt in range(1, max_retries + 1):
                             try:
                                 await event.send(event.chain_result(content))
+                                sent_illust_ids.add(str(illust.get("id") or ""))
                                 logger.info(
                                     f"{LOG_PREFIX} [降级] 作品 {illust_id} 已发送"
                                 )
@@ -351,7 +404,6 @@ class SearchMixin:
                                     feature="normal",
                                     user_id=str(event.get_sender_id() or ""),
                                 )
-                                sent_illust_ids.add(str(illust.get("id") or ""))
                                 break
                             except Exception as e:
                                 if attempt < max_retries:
@@ -359,7 +411,10 @@ class SearchMixin:
                                 else:
                                     friendly_err = self._friendly_send_error(e)
                                     logger.error(
-                                        f"{LOG_PREFIX} [降级] 作品 {illust_id} 发送失败: {friendly_err} | 原始错误: {e}"
+                                        f"{LOG_PREFIX} [降级] 作品 {illust_id} "
+                                        f"发送失败：尝试次数={max_retries} "
+                                        f"错误原因={friendly_err} "
+                                        f"错误类型={type(e).__name__}"
                                     )
                                     try:
                                         await event.send(
@@ -378,7 +433,6 @@ class SearchMixin:
                             feature="normal",
                             user_id=str(event.get_sender_id() or ""),
                         )
-                        sent_illust_ids.add(str(illust.get("id") or ""))
             else:
                 # 逐条发送模式
                 for illust, path, actual_q, file_size in downloaded:
@@ -393,6 +447,7 @@ class SearchMixin:
                     for attempt in range(1, max_retries + 1):
                         try:
                             await event.send(event.chain_result(content))
+                            sent_illust_ids.add(str(illust.get("id") or ""))
                             logger.info(
                                 f"{LOG_PREFIX} 作品 {illust_id} 已发送"
                                 + (f" (第{attempt}次尝试)" if attempt > 1 else "")
@@ -404,19 +459,23 @@ class SearchMixin:
                                 feature="normal",
                                 user_id=str(event.get_sender_id() or ""),
                             )
-                            sent_illust_ids.add(str(illust.get("id") or ""))
                             break
                         except Exception as e:
                             if attempt < max_retries:
                                 wait_sec = attempt * 2
                                 logger.warning(
-                                    f"{LOG_PREFIX} 作品 {illust_id} 发送失败 (第{attempt}次): {e}，{wait_sec}秒后重试..."
+                                    f"{LOG_PREFIX} 作品 {illust_id} 发送失败，准备重试: "
+                                    f"尝试次数={attempt}/{max_retries} "
+                                    f"等待={wait_sec}s "
+                                    f"错误类型={type(e).__name__}"
                                 )
                                 await asyncio.sleep(wait_sec)
                             else:
                                 friendly_err = self._friendly_send_error(e)
                                 logger.error(
-                                    f"{LOG_PREFIX} 作品 {illust_id} 发送失败 (已重试{max_retries}次): {friendly_err} | 原始错误: {e}"
+                                    f"{LOG_PREFIX} 作品 {illust_id} 发送失败: "
+                                    f"尝试次数={max_retries} 错误原因={friendly_err} "
+                                    f"错误类型={type(e).__name__}"
                                 )
                                 try:
                                     await event.send(
@@ -438,5 +497,5 @@ class SearchMixin:
                             illust_id=illust_id,
                             feature="normal_pending",
                         )
-                    except Exception as e:
-                        logger.warning(f"{LOG_PREFIX} 释放当天发图占用失败: {e}")
+                    except Exception:
+                        pass
