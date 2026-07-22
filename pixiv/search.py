@@ -88,10 +88,10 @@ class SearchMixin:
                 if illusts:
                     return illusts, len(illusts), source_key
             except Exception as exc:
-                logger.warning(
+                logger.info(
                     f"{LOG_PREFIX} Lolicon 请求失败，尝试 Pixiv 回退: "
-                    f"是否配置标签={'是' if tag else '否'} "
-                    f"错误类型={type(exc).__name__}"
+                    f"tag_configured={'yes' if tag else 'no'} "
+                    f"error_type={type(exc).__name__}"
                 )
 
         pixiv_source_key = self._source_key(tag, "pixiv") if tag else "pixiv:recommended"
@@ -104,7 +104,7 @@ class SearchMixin:
             except Exception as exc:
                 logger.warning(
                     f"{LOG_PREFIX} 读取 Pixiv 回退分页游标失败: "
-                    f"错误类型={type(exc).__name__}"
+                    f"error_type={type(exc).__name__}"
                 )
 
         if self.client is None:
@@ -121,8 +121,8 @@ class SearchMixin:
         except Exception as exc:
             logger.warning(
                 f"{LOG_PREFIX} Pixiv 回退请求失败: "
-                f"是否配置标签={'是' if tag else '否'} "
-                f"错误类型={type(exc).__name__}"
+                f"tag_configured={'yes' if tag else 'no'} "
+                f"error_type={type(exc).__name__}"
             )
             return [], 0, pixiv_source_key
         return illusts, len(illusts), source_key
@@ -162,8 +162,8 @@ class SearchMixin:
         # 频率限制
         wait = self._check_rate_limit(event.get_sender_id())
         if wait > 0:
-            logger.warning(
-                f"{LOG_PREFIX} 用户 {event.get_sender_id()} 触发频率限制，需等待 {wait} 秒"
+            logger.debug(
+                f"{LOG_PREFIX} 搜索请求触发频率限制: retry_after_seconds={wait}"
             )
             yield event.plain_result(f"⏳ 请求太频繁，请 {wait} 秒后再试")
             return
@@ -198,8 +198,11 @@ class SearchMixin:
             event, tag, count=max_count
         )
         logger.info(
-            f"{LOG_PREFIX} 搜索：标签={tag or '随机'} 来源={_search_source_label(source_key)} "
-            f"请求数量={count} 画质={_search_quality_label(quality)} 返回数量={raw_count}"
+            f"{LOG_PREFIX} 搜索候选获取完成: "
+            f"tag_configured={'yes' if tag else 'no'} "
+            f"source={_search_source_label(source_key)} "
+            f"requested_count={count} quality={_search_quality_label(quality)} "
+            f"candidate_count={raw_count}"
         )
 
         if not illusts:
@@ -284,13 +287,16 @@ class SearchMixin:
                     temp_paths.append(path)
                     downloaded.append((illust, path, actual_q, file_size))
                 except asyncio.TimeoutError:
-                    logger.warning(
-                        f"{LOG_PREFIX} [{idx}/{pick_count}] 作品 {illust_id} 下载超时 ({timeout_sec}s)"
+                    logger.debug(
+                        f"{LOG_PREFIX} 下载候选跳过: illust_id={illust_id} "
+                        f"candidate={idx}/{pick_count} reason=timeout "
+                        f"timeout_seconds={timeout_sec}"
                     )
                 except Exception as e:
                     logger.debug(
-                        f"{LOG_PREFIX} [{idx}/{pick_count}] 作品 {illust_id} "
-                        f"下载跳过: 错误类型={type(e).__name__}"
+                        f"{LOG_PREFIX} 下载候选跳过: illust_id={illust_id} "
+                        f"candidate={idx}/{pick_count} reason=download_error "
+                        f"error_type={type(e).__name__}"
                     )
 
             # 统一发送（避免 yield 和 send 混用导致消息拆分）
@@ -362,19 +368,19 @@ class SearchMixin:
                     except Exception as e:
                         if attempt < max_retries:
                             wait_sec = attempt * 2
-                            logger.warning(
+                            logger.info(
                                 f"{LOG_PREFIX} 合并转发失败，准备重试: "
-                                f"尝试次数={attempt}/{max_retries} "
-                                f"等待={wait_sec}s "
-                                f"错误类型={type(e).__name__}"
+                                f"attempt={attempt}/{max_retries} "
+                                f"retry_after_seconds={wait_sec} "
+                                f"error_type={type(e).__name__}"
                             )
                             await asyncio.sleep(wait_sec)
                         else:
                             friendly_err = self._friendly_send_error(e)
                             logger.warning(
                                 f"{LOG_PREFIX} 合并转发失败，降级为逐条发送: "
-                                f"尝试次数={max_retries} 错误原因={friendly_err} "
-                                f"错误类型={type(e).__name__}"
+                                f"attempts={max_retries} reason={friendly_err} "
+                                f"error_type={type(e).__name__}"
                             )
 
                 # 合并转发失败，降级为逐条发送
@@ -411,10 +417,10 @@ class SearchMixin:
                                 else:
                                     friendly_err = self._friendly_send_error(e)
                                     logger.error(
-                                        f"{LOG_PREFIX} [降级] 作品 {illust_id} "
-                                        f"发送失败：尝试次数={max_retries} "
-                                        f"错误原因={friendly_err} "
-                                        f"错误类型={type(e).__name__}"
+                                        f"{LOG_PREFIX} 降级发送失败: "
+                                        f"illust_id={illust_id} attempts={max_retries} "
+                                        f"reason={friendly_err} "
+                                        f"error_type={type(e).__name__}"
                                     )
                                     try:
                                         await event.send(
@@ -463,19 +469,21 @@ class SearchMixin:
                         except Exception as e:
                             if attempt < max_retries:
                                 wait_sec = attempt * 2
-                                logger.warning(
-                                    f"{LOG_PREFIX} 作品 {illust_id} 发送失败，准备重试: "
-                                    f"尝试次数={attempt}/{max_retries} "
-                                    f"等待={wait_sec}s "
-                                    f"错误类型={type(e).__name__}"
+                                logger.info(
+                                    f"{LOG_PREFIX} 作品发送失败，准备重试: "
+                                    f"illust_id={illust_id} "
+                                    f"attempt={attempt}/{max_retries} "
+                                    f"retry_after_seconds={wait_sec} "
+                                    f"error_type={type(e).__name__}"
                                 )
                                 await asyncio.sleep(wait_sec)
                             else:
                                 friendly_err = self._friendly_send_error(e)
                                 logger.error(
-                                    f"{LOG_PREFIX} 作品 {illust_id} 发送失败: "
-                                    f"尝试次数={max_retries} 错误原因={friendly_err} "
-                                    f"错误类型={type(e).__name__}"
+                                    f"{LOG_PREFIX} 作品发送失败: "
+                                    f"illust_id={illust_id} attempts={max_retries} "
+                                    f"reason={friendly_err} "
+                                    f"error_type={type(e).__name__}"
                                 )
                                 try:
                                     await event.send(

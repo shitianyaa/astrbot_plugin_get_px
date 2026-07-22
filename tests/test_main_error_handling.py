@@ -373,6 +373,21 @@ class MainErrorHandlingTest(unittest.IsolatedAsyncioTestCase):
             )
             self.assertIn("作品 101 已发送", messages)
 
+    async def test_search_rate_limit_log_is_debug_and_does_not_include_user_id(self):
+        plugin = object.__new__(GetPxPlugin)
+        plugin._check_rate_limit = Mock(return_value=9)
+        event = _FakeEvent()
+
+        with patch("astrbot_plugin_get_px.pixiv.search.logger") as mock_logger:
+            output = await _collect(plugin._handle_search(event, "private-tag", "1"))
+
+        self.assertEqual(output, ["⏳ 请求太频繁，请 9 秒后再试"])
+        mock_logger.warning.assert_not_called()
+        message = str(mock_logger.debug.call_args.args[0])
+        self.assertIn("retry_after_seconds=9", message)
+        self.assertNotIn("10001", message)
+        self.assertNotIn("private-tag", message)
+
     async def test_forward_fallback_send_success_is_logged_at_info(self):
         with tempfile.TemporaryDirectory() as tmp:
             illusts = [{"id": 101, "title": "First"}]

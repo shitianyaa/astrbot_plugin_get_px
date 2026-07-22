@@ -3,6 +3,7 @@ from __future__ import annotations
 import tempfile
 from pathlib import Path
 from types import SimpleNamespace
+from unittest.mock import patch
 
 import pytest
 from quart import Quart
@@ -240,41 +241,42 @@ async def test_management_api_lists_and_updates_checkin_members() -> None:
             methods=["POST"],
         )
         try:
-            async with app.test_app():
-                client = app.test_client()
-                listed_response = await client.get("/members?query=Alice&limit=10")
-                listed = await listed_response.get_json()
-                updated_response = await client.post(
-                    "/members/update",
-                    json={
-                        "user_id": "10001",
-                        "coins": 800,
-                        "affection": 66.6,
-                        "total_days": 20,
-                        "streak_days": 7,
-                    },
-                )
-                updated = await updated_response.get_json()
-                invalid_response = await client.post(
-                    "/members/update",
-                    json={
-                        "user_id": "10001",
-                        "coins": 800,
-                        "affection": 66.6,
-                        "total_days": 2,
-                        "streak_days": 7,
-                    },
-                )
-                missing_response = await client.post(
-                    "/members/update",
-                    json={
-                        "user_id": "404",
-                        "coins": 0,
-                        "affection": 0,
-                        "total_days": 0,
-                        "streak_days": 0,
-                    },
-                )
+            with patch("plugin_api.api.logger") as mock_logger:
+                async with app.test_app():
+                    client = app.test_client()
+                    listed_response = await client.get("/members?query=Alice&limit=10")
+                    listed = await listed_response.get_json()
+                    updated_response = await client.post(
+                        "/members/update",
+                        json={
+                            "user_id": "10001",
+                            "coins": 800,
+                            "affection": 66.6,
+                            "total_days": 20,
+                            "streak_days": 7,
+                        },
+                    )
+                    updated = await updated_response.get_json()
+                    invalid_response = await client.post(
+                        "/members/update",
+                        json={
+                            "user_id": "10001",
+                            "coins": 800,
+                            "affection": 66.6,
+                            "total_days": 2,
+                            "streak_days": 7,
+                        },
+                    )
+                    missing_response = await client.post(
+                        "/members/update",
+                        json={
+                            "user_id": "404",
+                            "coins": 0,
+                            "affection": 0,
+                            "total_days": 0,
+                            "streak_days": 0,
+                        },
+                    )
 
             assert listed_response.status_code == 200
             assert listed["total"] == 1
@@ -282,6 +284,11 @@ async def test_management_api_lists_and_updates_checkin_members() -> None:
             assert updated_response.status_code == 200
             assert updated["member"]["coins"] == 800
             assert updated["member"]["streak_days"] == 7
+            log_message = str(mock_logger.info.call_args.args[0])
+            assert "管理页调整签到成员数值" in log_message
+            assert "coins=" in log_message
+            assert "user_id" not in log_message
+            assert "10001" not in log_message
             assert invalid_response.status_code == 400
             assert missing_response.status_code == 404
         finally:

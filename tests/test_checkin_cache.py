@@ -76,7 +76,7 @@ class CheckinCardCacheTest(unittest.IsolatedAsyncioTestCase):
         with patch("astrbot_plugin_get_px.checkin.cache.logger") as mock_logger:
             self.assertIsNone(self.cache.get(self.date_key, self.key))
         self.assertIn(
-            "原因=corrupt_or_unreadable",
+            "reason=corrupt_or_unreadable",
             " ".join(str(call) for call in mock_logger.warning.call_args_list),
         )
         self.assertFalse(corrupt.exists())
@@ -85,7 +85,7 @@ class CheckinCardCacheTest(unittest.IsolatedAsyncioTestCase):
         with patch("astrbot_plugin_get_px.checkin.cache.logger") as mock_logger:
             self.assertIsNone(self.cache.get(self.date_key, self.key))
         self.assertIn(
-            "原因=size_mismatch",
+            "reason=size_mismatch",
             " ".join(str(call) for call in mock_logger.warning.call_args_list),
         )
         self.assertFalse(corrupt.exists())
@@ -107,8 +107,8 @@ class CheckinCardCacheTest(unittest.IsolatedAsyncioTestCase):
 
         self.assertEqual(cached, current.resolve())
         messages = " ".join(str(call) for call in mock_logger.warning.call_args_list)
-        self.assertIn("阶段=删除缓存条目", messages)
-        self.assertIn("错误类型=PermissionError", messages)
+        self.assertIn("stage=remove_cache_entry", messages)
+        self.assertIn("error_type=PermissionError", messages)
         self.assertNotIn("secret", messages)
 
         self.assertEqual(
@@ -129,8 +129,8 @@ class CheckinCardCacheTest(unittest.IsolatedAsyncioTestCase):
 
         self.assertIsNone(cached)
         messages = " ".join(str(call) for call in mock_logger.warning.call_args_list)
-        self.assertIn("阶段=删除拒绝文件", messages)
-        self.assertIn("错误类型=PermissionError", messages)
+        self.assertIn("stage=remove_rejected_file", messages)
+        self.assertIn("error_type=PermissionError", messages)
         self.assertNotIn("private path", messages)
 
     def test_expected_size_is_validated_per_render_tier(self):

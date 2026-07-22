@@ -88,15 +88,15 @@ class CheckinCardCache:
             return path
         width, height = expected_size
         logger.warning(
-            f"{LOG_PREFIX} 签到卡缓存拒绝: 原因={rejection_reason} "
-            f"日期={date_key} 输出尺寸={width}x{height}"
+            f"{LOG_PREFIX} 签到卡缓存拒绝: reason={rejection_reason} "
+            f"date={date_key} size={width}x{height}"
         )
         try:
             path.unlink(missing_ok=True)
         except OSError as exc:
             logger.warning(
-                f"{LOG_PREFIX} 签到卡缓存清理失败: 阶段=删除拒绝文件 "
-                f"错误类型={type(exc).__name__}"
+                f"{LOG_PREFIX} 签到卡缓存清理失败: stage=remove_rejected_file "
+                f"error_type={type(exc).__name__}"
             )
         return None
 
@@ -125,8 +125,8 @@ class CheckinCardCache:
                 )
                 if cached is not None:
                     logger.debug(
-                        f"{LOG_PREFIX} 签到卡缓存并发命中: 日期={date_key} "
-                        f"输出尺寸={expected_size[0]}x{expected_size[1]}"
+                        f"{LOG_PREFIX} 签到卡缓存并发命中: date={date_key} "
+                        f"size={expected_size[0]}x{expected_size[1]}"
                     )
                     return cached
 
@@ -160,8 +160,8 @@ class CheckinCardCache:
                 else:
                     stored = result
                 logger.debug(
-                    f"{LOG_PREFIX} 签到卡缓存写入完成: 日期={date_key} "
-                    f"输出尺寸={expected_size[0]}x{expected_size[1]}"
+                    f"{LOG_PREFIX} 签到卡缓存写入完成: date={date_key} "
+                    f"size={expected_size[0]}x{expected_size[1]}"
                 )
                 return stored
         finally:
@@ -192,16 +192,16 @@ class CheckinCardCache:
                 self.root.mkdir(parents=True, exist_ok=True)
             except OSError as exc:
                 logger.warning(
-                    f"{LOG_PREFIX} 签到卡缓存清理失败: 阶段=准备缓存目录 "
-                    f"错误类型={type(exc).__name__}"
+                    f"{LOG_PREFIX} 签到卡缓存清理失败: stage=prepare_cache_dir "
+                    f"error_type={type(exc).__name__}"
                 )
                 return 0
             try:
                 entries = tuple(self.root.iterdir())
             except OSError as exc:
                 logger.warning(
-                    f"{LOG_PREFIX} 签到卡缓存清理失败: 阶段=读取缓存目录 "
-                    f"错误类型={type(exc).__name__}"
+                    f"{LOG_PREFIX} 签到卡缓存清理失败: stage=read_cache_dir "
+                    f"error_type={type(exc).__name__}"
                 )
                 return 0
             for entry in entries:
@@ -245,8 +245,8 @@ class CheckinCardCache:
                 except OSError as exc:
                     cleanup_incomplete = True
                     logger.warning(
-                        f"{LOG_PREFIX} 签到卡缓存清理失败: 阶段=删除缓存条目 "
-                        f"错误类型={type(exc).__name__}"
+                        f"{LOG_PREFIX} 签到卡缓存清理失败: stage=remove_cache_entry "
+                        f"error_type={type(exc).__name__}"
                     )
 
             self._locks = {
@@ -259,8 +259,8 @@ class CheckinCardCache:
 
         if removed:
             logger.debug(
-                f"{LOG_PREFIX} 签到卡缓存清理完成: 清理数量={removed} "
-                f"截止日期={cutoff.isoformat()}"
+                f"{LOG_PREFIX} 签到卡缓存清理完成: removed_count={removed} "
+                f"cutoff_date={cutoff.isoformat()}"
             )
         if not deferred_expired_store and not cleanup_incomplete:
             self._last_cleanup_date = current
@@ -325,7 +325,7 @@ class CheckinCardCache:
                 except OSError as exc:
                     logger.warning(
                         f"{LOG_PREFIX} 签到卡缓存清理失败: "
-                        f"阶段=删除临时文件 错误类型={type(exc).__name__}"
+                        f"stage=remove_temp_file error_type={type(exc).__name__}"
                     )
 
 
