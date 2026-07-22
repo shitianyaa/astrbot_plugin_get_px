@@ -74,7 +74,7 @@ def build_checkin_shop_items(
         CheckinShopItem(
             item_id=f"theme:{theme.theme_id}",
             category="theme",
-            command=f"签到商店 主题 购买 {theme.code}",
+            command=f"签到商店 主题购买 {theme.code}",
             name=theme.name,
             price=(
                 0
@@ -139,10 +139,10 @@ class CheckinShopMixin:
             for item in build_checkin_shop_items(refresh_cost, theme_cost)
         )
         lines.append(
-            "使用“签到商店 主题 查看 <编号>”预览，"
-            "“签到商店 主题 列表”查看购买状态"
+            "使用“签到商店 主题查看 <编号>”预览，"
+            "“签到商店 主题列表”查看购买状态"
         )
-        lines.append("已购买主题可使用“签到商店 主题 切换 <编号>”切换")
+        lines.append("已购买主题可使用“签到商店 主题切换 <编号>”切换")
         return "\n".join(lines)
 
     async def _handle_checkin_themes(self, event: AstrMessageEvent) -> str:
@@ -164,18 +164,18 @@ class CheckinShopMixin:
                 state = "未购"
             lines.append(f"[{state}] {theme.code} · {theme.name} - {theme.description}")
         lines.append(
-            "使用“签到商店 主题 查看 <编号>”预览，"
-            "“签到商店 主题 购买 <编号>”购买"
+            "使用“签到商店 主题查看 <编号>”预览，"
+            "“签到商店 主题购买 <编号>”购买"
         )
-        lines.append("已购买主题可使用“签到商店 主题 切换 <编号>”切换")
+        lines.append("已购买主题可使用“签到商店 主题切换 <编号>”切换")
         return "\n".join(lines)
 
     async def _handle_checkin_theme_preview(self, event: AstrMessageEvent, value: str):
         theme = resolve_checkin_theme(value)
         if theme is None:
             return event.plain_result(
-                "用法：签到商店 主题 查看 <编号>\n"
-                "示例：签到商店 主题 查看 1"
+                "用法：签到商店 主题查看 <编号>\n"
+                "示例：签到商店 主题查看 1"
             )
         preview_path = theme.preview_path(PLUGIN_ROOT)
         if not preview_path.is_file():
@@ -198,7 +198,7 @@ class CheckinShopMixin:
             return "签到数据尚未初始化，请稍后再试"
         theme = resolve_checkin_theme(value)
         if theme is None:
-            return "未知主题。使用“签到商店 主题 列表”查看主题编号。"
+            return "未知主题。使用“签到商店 主题列表”查看主题编号。"
         if theme.theme_id == DEFAULT_CHECKIN_THEME_ID:
             return await self._handle_select_checkin_theme(event, theme.theme_id)
         user_id = str(event.get_sender_id() or "")
@@ -231,7 +231,7 @@ class CheckinShopMixin:
             return "签到数据尚未初始化，请稍后再试"
         theme = resolve_checkin_theme(value)
         if theme is None:
-            return "未知主题。使用“签到商店 主题 列表”查看主题编号。"
+            return "未知主题。使用“签到商店 主题列表”查看主题编号。"
         user_id = str(event.get_sender_id() or "")
         try:
             await self.checkin_store.select_theme(

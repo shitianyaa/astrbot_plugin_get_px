@@ -57,7 +57,7 @@ from .plugin_api import PluginWebApi
 
 LOG_PREFIX = "[GetPx]"
 PLUGIN_NAME = "astrbot_plugin_get_px"
-PLUGIN_VERSION = "v3.3.2"
+PLUGIN_VERSION = "v3.4.1"
 WEB_INTERNAL_ERROR_MESSAGE = "服务内部错误，请稍后重试"
 
 AUTO_TRIGGER_PATTERN = r"^/?(来\s*(.*?)(份|个|张|点))(.*?)(福利|色|瑟|涩|塞)?图$"
@@ -367,14 +367,30 @@ class GetPxPlugin(
         async for result in self._handle_checkin_status(event):
             yield result
 
-    @checkin_my.command("生日")
-    async def cmd_checkin_birthday(
-        self, event: AstrMessageEvent, action: str = "", value: str = ""
-    ):
-        """查看、设置或清除签到生日。"""
+    @checkin_my.command("生日查看")
+    async def cmd_checkin_birthday_view(self, event: AstrMessageEvent):
+        """查看签到生日。"""
         event.stop_event()
         yield event.plain_result(
-            await self._handle_checkin_birthday(event, action, value)
+            await self._handle_checkin_birthday(event, "查看", "")
+        )
+
+    @checkin_my.command("生日设置")
+    async def cmd_checkin_birthday_set(
+        self, event: AstrMessageEvent, value: str = ""
+    ):
+        """手动设置签到生日。"""
+        event.stop_event()
+        yield event.plain_result(
+            await self._handle_checkin_birthday(event, "设置", value)
+        )
+
+    @checkin_my.command("生日清除")
+    async def cmd_checkin_birthday_clear(self, event: AstrMessageEvent):
+        """清除签到生日。"""
+        event.stop_event()
+        yield event.plain_result(
+            await self._handle_checkin_birthday(event, "清除", "")
         )
 
     @checkin_my.command("成就")
@@ -383,17 +399,13 @@ class GetPxPlugin(
         event.stop_event()
         yield event.plain_result(await self._handle_checkin_achievements(event))
 
-    @checkin_my.group("称号")
-    def checkin_titles(self):
-        """查看和佩戴签到称号。"""
-
-    @checkin_titles.command("查看")
+    @checkin_my.command("称号查看")
     async def cmd_checkin_titles(self, event: AstrMessageEvent):
         """查看已解锁的签到称号。"""
         event.stop_event()
         yield event.plain_result(await self._handle_checkin_titles(event))
 
-    @checkin_titles.command("佩戴")
+    @checkin_my.command("称号佩戴")
     async def cmd_select_checkin_title(self, event: AstrMessageEvent, title: str = ""):
         """佩戴已解锁的签到称号。"""
         event.stop_event()
@@ -456,29 +468,25 @@ class GetPxPlugin(
         async for result in self._handle_buy_checkin_boost(event, days):
             yield result
 
-    @checkin_shop.group("主题")
-    def checkin_themes(self):
-        """签到主题商店。"""
-
-    @checkin_themes.command("列表")
+    @checkin_shop.command("主题列表")
     async def cmd_checkin_themes(self, event: AstrMessageEvent):
         """查看已购买和可购买的签到主题。"""
         event.stop_event()
         yield event.plain_result(await self._handle_checkin_themes(event))
 
-    @checkin_themes.command("查看")
+    @checkin_shop.command("主题查看")
     async def cmd_preview_checkin_theme(self, event: AstrMessageEvent, theme: str = ""):
         """查看指定签到主题的静态预览图。"""
         event.stop_event()
         yield await self._handle_checkin_theme_preview(event, theme)
 
-    @checkin_themes.command("购买")
+    @checkin_shop.command("主题购买")
     async def cmd_buy_checkin_theme(self, event: AstrMessageEvent, theme: str = ""):
         """购买签到主题，购买成功后自动切换。"""
         event.stop_event()
         yield event.plain_result(await self._handle_buy_checkin_theme(event, theme))
 
-    @checkin_themes.command("切换")
+    @checkin_shop.command("主题切换")
     async def cmd_select_checkin_theme(self, event: AstrMessageEvent, theme: str = ""):
         """切换到默认或已购买的签到主题。"""
         event.stop_event()
@@ -513,27 +521,42 @@ class GetPxPlugin(
             yield result
 
     @filter.permission_type(filter.PermissionType.ADMIN)
-    @checkin_admin.command("事件")
-    async def cmd_checkin_event_admin(
+    @checkin_admin.command("事件查看")
+    async def cmd_checkin_event_list(self, event: AstrMessageEvent):
+        """查看全局签到纪念日。"""
+        event.stop_event()
+        yield event.plain_result(
+            await self._handle_checkin_event_admin(event, "", "", "", "")
+        )
+
+    @filter.permission_type(filter.PermissionType.ADMIN)
+    @checkin_admin.command("事件添加")
+    async def cmd_checkin_event_add(
         self,
         event: AstrMessageEvent,
-        action: str = "",
         event_type: str = "",
         date_value: str = "",
-        name: str = "",
+        name: GreedyStr = GreedyStr,
     ):
-        """管理员维护全局签到纪念日。"""
+        """添加年度或单次全局签到纪念日。"""
         event.stop_event()
-        parts = event.get_message_str().strip().split(maxsplit=6)
-        if parts[:2] == ["签到管理", "事件"]:
-            action = parts[2] if len(parts) > 2 else action
-            event_type = parts[3] if len(parts) > 3 else event_type
-            date_value = parts[4] if len(parts) > 4 else date_value
-            name = parts[5] if len(parts) > 5 else name
+        # 框架无参时传入空字符串；直接调用时则会保留默认哨兵。
+        raw_name = "" if name is GreedyStr else str(name or "")
         yield event.plain_result(
             await self._handle_checkin_event_admin(
-                event, action, event_type, date_value, name
+                event, "添加", event_type, date_value, raw_name
             )
+        )
+
+    @filter.permission_type(filter.PermissionType.ADMIN)
+    @checkin_admin.command("事件删除")
+    async def cmd_checkin_event_delete(
+        self, event: AstrMessageEvent, event_id: str = ""
+    ):
+        """按事件 ID 删除全局签到纪念日。"""
+        event.stop_event()
+        yield event.plain_result(
+            await self._handle_checkin_event_admin(event, "删除", event_id, "", "")
         )
 
     @filter.regex(AUTO_TRIGGER_PATTERN)

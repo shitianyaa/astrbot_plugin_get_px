@@ -26,6 +26,7 @@ class FakeEvent:
         self.bot = SimpleNamespace(call_action=AsyncMock(return_value=payload or {}))
         self._platform = platform
         self.send = AsyncMock()
+        self.stopped = False
 
     def get_sender_id(self):
         return "10001"
@@ -35,6 +36,9 @@ class FakeEvent:
 
     def get_sender_name(self):
         return "测试用户"
+
+    def stop_event(self):
+        self.stopped = True
 
     def chain_result(self, content):
         return content
@@ -85,7 +89,7 @@ def test_shop_catalog_has_stable_ids_and_categories() -> None:
     )
     assert (
         by_id["theme:blue"].render_line()
-        == "签到商店 主题 购买 01 - 浅蓝，1500 金币"
+        == "签到商店 主题购买 01 - 浅蓝，1500 金币"
     )
     assert by_id["theme:default"].price_label == "免费"
 
@@ -102,11 +106,15 @@ async def test_birthday_command_manual_clear_and_direct_fetch() -> None:
         event = FakeEvent(
             {"birthday_year": 2000, "birthday_month": 7, "birthday_day": 11}
         )
-        assert "07-11" in await plugin._handle_checkin_birthday(event, "设置", "07-11")
-        assert "手动" in await plugin._handle_checkin_birthday(event, "", "")
-        assert "07-11" in await plugin._handle_checkin_birthday(event, "查看", "")
-        assert "已清除" in await plugin._handle_checkin_birthday(event, "清除", "")
-        assert "07-11" in await plugin._handle_checkin_birthday(event, "", "")
+        set_result = await _collect(plugin.cmd_checkin_birthday_set(event, "07-11"))
+        assert any("07-11" in str(item) for item in set_result)
+        view_result = await _collect(plugin.cmd_checkin_birthday_view(event))
+        assert any("手动" in str(item) for item in view_result)
+        clear_result = await _collect(plugin.cmd_checkin_birthday_clear(event))
+        assert any("已清除" in str(item) for item in clear_result)
+        fetched_result = await _collect(plugin.cmd_checkin_birthday_view(event))
+        assert any("07-11" in str(item) for item in fetched_result)
+        assert event.stopped
 
 
 @pytest.mark.asyncio
@@ -161,21 +169,29 @@ async def test_temporary_birthday_failure_is_retried() -> None:
         assert event.bot.call_action.await_count == 2
 
 
+async def _collect(async_iterable):
+    return [item async for item in async_iterable]
+
+
 @pytest.mark.asyncio
 async def test_event_admin_and_title_commands() -> None:
     with tempfile.TemporaryDirectory() as tmp:
         plugin = make_plugin(tmp)
         event = FakeEvent()
-        added = await plugin._handle_checkin_event_admin(
-            event, "添加年度", "07-11", "相遇纪念日", ""
+        added = await _collect(
+            plugin.cmd_checkin_event_add(event, "年度", "07-11", "相遇 纪念日")
         )
-        assert "已添加事件" in added
-        assert "相遇纪念日" in await plugin._handle_checkin_event_admin(
-            event, "列表", "", "", ""
+        assert any("已添加事件" in str(item) for item in added)
+        assert any("相遇 纪念日" in str(item) for item in added)
+        listed = await _collect(plugin.cmd_checkin_event_list(event))
+        assert any("相遇 纪念日" in str(item) for item in listed)
+        multiword = await plugin._handle_checkin_event_admin(
+            event, "添加", "单次", "2026-07-11", "白色 情人节"
         )
-        assert "相遇纪念日" in await plugin._handle_checkin_event_admin(
-            event, "查看", "", "", ""
-        )
+        assert "白色 情人节" in multiword
+        event_id = multiword.split("#", 1)[1].split(":", 1)[0].strip()
+        deleted = await _collect(plugin.cmd_checkin_event_delete(event, event_id))
+        assert any("事件已删除" in str(item) for item in deleted)
         profile = await plugin.checkin_store.get_profile("10001")
         await plugin.checkin_store.unlock_achievements(
             profile.__class__(**{**profile.__dict__, "total_days": 1})
@@ -201,7 +217,7 @@ async def test_theme_shop_purchase_and_switch_commands() -> None:
 
         shop = plugin._build_checkin_shop()
         assert "签到商店 刷新背景 - 5 金币" in shop
-        assert "签到商店 主题 购买 01 - 浅蓝，900 金币" in shop
+        assert "签到商店 主题购买 01 - 浅蓝，900 金币" in shop
 
         purchased = await plugin._handle_buy_checkin_theme(event, "01")
         assert "购买成功" in purchased
@@ -299,7 +315,7 @@ async def test_theme_preview_is_available_without_purchase_or_database_write() -
         }
 
         usage = await plugin._handle_checkin_theme_preview(event, "unknown")
-        assert "用法：签到商店 主题 查看 <编号>" in usage
+        assert "用法：签到商店 主题查看 <编号>" in usage
 
 
 @pytest.mark.asyncio

@@ -57,10 +57,12 @@ def test_checkin_commands_are_grouped_under_independent_roots() -> None:
     assert {"p", "签到", "签到我的", "签到排行", "签到商店", "签到管理", "签到帮助"} <= paths
     assert {
         "签到我的 状态",
-        "签到我的 生日",
+        "签到我的 生日查看",
+        "签到我的 生日设置",
+        "签到我的 生日清除",
         "签到我的 成就",
-        "签到我的 称号 查看",
-        "签到我的 称号 佩戴",
+        "签到我的 称号查看",
+        "签到我的 称号佩戴",
         "签到排行 今日",
         "签到排行 月榜",
         "签到排行 连签",
@@ -68,13 +70,15 @@ def test_checkin_commands_are_grouped_under_independent_roots() -> None:
         "签到商店 查看",
         "签到商店 加持",
         "签到商店 刷新背景",
-        "签到商店 主题 列表",
-        "签到商店 主题 查看",
-        "签到商店 主题 购买",
-        "签到商店 主题 切换",
+        "签到商店 主题列表",
+        "签到商店 主题查看",
+        "签到商店 主题购买",
+        "签到商店 主题切换",
         "签到管理 预览",
         "签到管理 导出",
-        "签到管理 事件",
+        "签到管理 事件查看",
+        "签到管理 事件添加",
+        "签到管理 事件删除",
     } <= paths
     assert "签到中心" not in paths
 
@@ -90,6 +94,20 @@ def test_checkin_commands_are_grouped_under_independent_roots() -> None:
         "签到成就",
         "签到称号",
         "佩戴称号",
+        "签到我的 生日",
+        "签到我的 生日 查看",
+        "签到我的 生日 设置",
+        "签到我的 生日 清除",
+        "签到我的 称号 查看",
+        "签到我的 称号 佩戴",
+        "签到商店 主题 列表",
+        "签到商店 主题 查看",
+        "签到商店 主题 购买",
+        "签到商店 主题 切换",
+        "签到管理 事件",
+        "签到管理 事件 查看",
+        "签到管理 事件 添加",
+        "签到管理 事件 删除",
         "签到测试",
         "签到导出",
         "签到事件",
@@ -98,10 +116,26 @@ def test_checkin_commands_are_grouped_under_independent_roots() -> None:
 
 def test_checkin_command_groups_expose_expected_sections() -> None:
     expected = {
-        "checkin_my": ("状态", "生日", "成就", "称号"),
+        "checkin_my": (
+            "状态",
+            "生日查看",
+            "生日设置",
+            "生日清除",
+            "成就",
+            "称号查看",
+            "称号佩戴",
+        ),
         "checkin_ranking": ("今日", "月榜", "连签", "累计"),
-        "checkin_shop": ("查看", "加持", "主题", "刷新背景"),
-        "checkin_admin": ("预览", "导出", "事件"),
+        "checkin_shop": (
+            "查看",
+            "加持",
+            "主题列表",
+            "主题查看",
+            "主题购买",
+            "主题切换",
+            "刷新背景",
+        ),
+        "checkin_admin": ("预览", "导出", "事件查看", "事件添加", "事件删除"),
     }
     handlers = {handler.handler_name: handler for handler in _plugin_command_handlers()}
     for handler_name, sections in expected.items():
@@ -144,7 +178,9 @@ def test_checkin_admin_subcommands_keep_admin_permission() -> None:
     admin_handlers = {
         "cmd_checkin_preview",
         "cmd_checkin_export",
-        "cmd_checkin_event_admin",
+        "cmd_checkin_event_list",
+        "cmd_checkin_event_add",
+        "cmd_checkin_event_delete",
     }
     handlers = {
         handler.handler_name: handler for handler in _plugin_command_handlers()
@@ -178,5 +214,7 @@ def test_checkin_help_image_is_installed_without_legacy_assets() -> None:
     assert hasattr(main.GetPxPlugin, "cmd_checkin_help")
     assert not (root / "assets/checkin_help.png").exists()
     assert not (root / "assets/checkin_help.html").exists()
+    assert not (root / "assets/checkin_center_help.png").exists()
+    assert not (root / "assets/checkin_center_help_v3.png").exists()
     assert main.CHECKIN_HELP_IMAGE == root / "assets/checkin_help_v4.png"
     assert main.CHECKIN_HELP_IMAGE.is_file()
