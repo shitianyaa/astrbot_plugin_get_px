@@ -260,7 +260,7 @@ class PluginWebApi:
             before = result["before"]
             member = result["member"]
             logger.info(
-                f"{self.log_prefix} 管理页调整签到成员数值: user_id={user_id} "
+                f"{self.log_prefix} 管理页调整签到成员数值: "
                 f"coins={before['coins']}->{member['coins']} "
                 f"affection={before['affection']}->{member['affection']} "
                 f"total_days={before['total_days']}->{member['total_days']} "
@@ -573,7 +573,7 @@ class PluginWebApi:
                 }
             )
         except ValueError as exc:
-            logger.warning(
+            logger.info(
                 f"{self.log_prefix} 签到数据导入被拒绝: "
                 f"error_type={type(exc).__name__}"
             )

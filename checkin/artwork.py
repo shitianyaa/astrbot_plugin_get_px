@@ -475,7 +475,7 @@ class CheckinArtworkMixin:
                     mode="custom",
                     source="custom",
                 )
-            logger.warning(f"{LOG_PREFIX} 签到自定义背景不可用\uff0c回退在线图片源背景")
+            logger.info(f"{LOG_PREFIX} 签到自定义背景不可用，回退在线图片源背景")
         elif mode != "pixiv_daily":
             mode = "pixiv_daily"
         preview_nonce = 0

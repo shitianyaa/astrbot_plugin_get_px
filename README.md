@@ -7,7 +7,7 @@
 一个面向 AstrBot 的安全发图与签到插件：Lolicon 优先取图，失败时可用 Pixiv refresh_token 回退，并在 WebUI 管理群排行、成员数值、内容安全和签到数据。
 
 ![AstrBot](https://img.shields.io/badge/AstrBot-plugin-5865f2?style=flat-square)
-![Version](https://img.shields.io/badge/version-3.4.0-22c55e?style=flat-square)
+![Version](https://img.shields.io/badge/version-3.4.1-22c55e?style=flat-square)
 ![Python](https://img.shields.io/badge/Python-3.10%2B-3776ab?style=flat-square)
 ![Platform](https://img.shields.io/badge/platform-OneBot%20%2F%20aiocqhttp-f97316?style=flat-square)
 ![License](https://img.shields.io/badge/license-MIT-3b82f6?style=flat-square)
@@ -39,7 +39,7 @@
 | `02` · 红黑 | `03` · 黄黑 |
 | ![红黑](templates/checkin_themes/red/preview.png) | ![黄黑](templates/checkin_themes/yellow/preview.png) |
 
-签到卡支持 `省流量`（960×540）、`清晰`（1248×702）和 `极致`（1728×972）三档。`/签到商店 主题 查看 <编号>` 可免费看预览（如 `/签到商店 主题 查看 1`），不扣金币、不切换主题。
+签到卡支持 `省流量`（960×540）、`清晰`（1248×702）和 `极致`（1728×972）三档。`/签到商店 主题查看 <编号>` 可免费看预览（如 `/签到商店 主题查看 1`），不扣金币、不切换主题。
 
 ### WebUI 管理中心
 
@@ -106,15 +106,15 @@
 | `/签到我的 状态` | 金币、好感、连签等 | `/签到我的 状态` |
 | `/签到排行 今日\|月榜\|连签\|累计` | 当前群的签到排行 | `/签到排行 月榜` |
 | `/签到商店 查看` | 加持、背景刷新、主题商品 | `/签到商店 查看` |
-| `/签到商店 主题 查看 <编号>` | 免费主题预览 | `/签到商店 主题 查看 1` |
+| `/签到商店 主题查看 <编号>` | 免费主题预览 | `/签到商店 主题查看 1` |
 
 签到功能按四个独立指令组组织：
 
 ```text
-签到我的：状态、生日、成就、称号
+签到我的：状态、生日查看/设置/清除、成就、称号查看、称号佩戴
 签到排行：今日、月榜、连签、累计
-签到商店：加持、主题、刷新背景
-签到管理：预览、导出、全局事件
+签到商店：加持、主题列表/查看/购买/切换、刷新背景
+签到管理：预览、导出、事件查看/添加/删除
 ```
 
 完整指令（含商店购买、生日、成就、管理员事件/导出等）见 [指令参考](docs/user/commands.md)。
