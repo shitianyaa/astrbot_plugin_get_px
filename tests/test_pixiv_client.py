@@ -1,6 +1,5 @@
 import asyncio
 import sys
-import time
 import unittest
 from pathlib import Path
 from unittest.mock import patch
@@ -33,7 +32,8 @@ def _logged_in_client(api) -> PixivClient:
     client = PixivClient("token")
     client._api = api
     client._cached_token = "token"
-    client._expires_at = time.monotonic() + 300
+    # 测试已显式注入已登录状态，不应依赖真实时钟推进。
+    client._expires_at = float("inf")
     return client
 
 
@@ -124,7 +124,8 @@ class PixivClientIllustDetailTest(unittest.IsolatedAsyncioTestCase):
         client = PixivClient("token", request_timeout=0.01)
         client._api = HangingApi()
         client._cached_token = "token"
-        client._expires_at = time.monotonic() + 300
+        # 测试已显式注入已登录状态，不应依赖真实时钟推进。
+        client._expires_at = float("inf")
 
         with self.assertRaisesRegex(TimeoutError, "作品详情请求超时"):
             await client.illust_detail(123)

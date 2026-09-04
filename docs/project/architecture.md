@@ -72,7 +72,7 @@ main.py
 
 ```powershell
 python -m json.tool _conf_schema.json
-python -m compileall -q main.py checkin pixiv plugin_api tests
+python -m compileall -q main.py checkin pixiv plugin_api scripts/ci tests
 node --check pages/pluginCenter/app.js
 python -m pytest -q
 ```

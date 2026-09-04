@@ -255,6 +255,9 @@ class GetPxPlugin(
 
     async def _terminate_resources(self) -> None:
         """执行一次插件资源清理。"""
+        plugin_web_api = getattr(self, "plugin_web_api", None)
+        if plugin_web_api is not None:
+            plugin_web_api.unregister()
         if self._holiday_refresh_task is not None:
             self._holiday_refresh_task.cancel()
             await asyncio.gather(self._holiday_refresh_task, return_exceptions=True)

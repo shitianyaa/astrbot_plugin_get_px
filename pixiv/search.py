@@ -354,10 +354,9 @@ class SearchMixin:
 
             if use_forward:
                 # 合并转发模式：所有图片打包成一条聊天记录
-                try:
-                    self_id = int(event.get_self_id())
-                except (TypeError, ValueError):
-                    self_id = 0
+                raw_self_id = event.get_self_id()
+                # AstrBot 的 Node.uin 是字符串，且部分平台的 self_id 不是数字。
+                self_id = "0" if raw_self_id is None else str(raw_self_id)
                 nodes = Nodes([])
                 for illust, path, _actual_q, _file_size in downloaded:
                     title = illust.get("title", "无标题")

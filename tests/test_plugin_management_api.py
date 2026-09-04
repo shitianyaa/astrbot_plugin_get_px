@@ -286,3 +286,32 @@ async def test_management_api_lists_and_updates_checkin_members() -> None:
             assert missing_response.status_code == 404
         finally:
             plugin.image_index.close()
+
+
+def test_management_api_unregisters_only_owned_routes() -> None:
+    context = SimpleNamespace(registered_web_apis=[])
+
+    def register_web_api(
+        route: str, handler: object, methods: list[str], description: str
+    ) -> None:
+        context.registered_web_apis.append((route, handler, methods, description))
+
+    context.register_web_api = register_web_api
+    plugin = SimpleNamespace(context=context)
+    api = PluginWebApi(
+        plugin,
+        plugin_name="astrbot_plugin_get_px",
+        log_prefix="[GetPx]",
+        internal_error_message="internal",
+    )
+
+    api.register()
+    foreign_handler = object()
+    foreign_registration = ("/foreign", foreign_handler, ["GET"], "foreign")
+    context.registered_web_apis.append(foreign_registration)
+
+    api.unregister()
+
+    assert context.registered_web_apis == [foreign_registration]
+    api.unregister()
+    assert context.registered_web_apis == [foreign_registration]

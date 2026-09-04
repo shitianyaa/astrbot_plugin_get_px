@@ -18,7 +18,7 @@
 
 ## 验证
 
-- [ ] `python -m compileall -q main.py checkin pixiv plugin_api tests`
+- [ ] `python -m compileall -q main.py checkin pixiv plugin_api scripts/ci tests`
 - [ ] `python -m json.tool _conf_schema.json`
 - [ ] `node --check pages/pluginCenter/app.js`
 - [ ] `pytest` 全绿

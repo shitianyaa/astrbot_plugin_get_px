@@ -10,6 +10,9 @@ from unittest.mock import AsyncMock, patch
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 
 from astrbot_plugin_get_px.checkin import background as checkin_background  # noqa: E402
+from astrbot_plugin_get_px.checkin.artwork import (  # noqa: E402
+    CHECKIN_PREVIEW_BACKGROUND_TTL_SECONDS,
+)
 from astrbot_plugin_get_px.checkin.card import CardBackground  # noqa: E402
 from astrbot_plugin_get_px.pixiv.index import ImageIndexStore  # noqa: E402
 from astrbot_plugin_get_px.main import GetPxPlugin  # noqa: E402
@@ -258,12 +261,16 @@ class CheckinBackgroundSelectionTest(unittest.IsolatedAsyncioTestCase):
             return_value=CardBackground(mode="fallback", source="fallback")
         )
 
-        await plugin._prepare_checkin_background(
-            FakeEvent(),
-            SimpleNamespace(date_key="2026-07-12", user_id="10001"),
-            claim_usage=False,
-            refresh_preview=True,
-        )
+        with patch(
+            "astrbot_plugin_get_px.checkin.artwork.time.monotonic",
+            return_value=CHECKIN_PREVIEW_BACKGROUND_TTL_SECONDS + 1.0,
+        ):
+            await plugin._prepare_checkin_background(
+                FakeEvent(),
+                SimpleNamespace(date_key="2026-07-12", user_id="10001"),
+                claim_usage=False,
+                refresh_preview=True,
+            )
 
         self.assertNotIn("expired", plugin._checkin_preview_background_ids)
 

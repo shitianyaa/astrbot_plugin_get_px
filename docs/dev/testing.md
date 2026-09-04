@@ -4,15 +4,42 @@
 
 | 场景 | 工作目录 | 命令 |
 | --- | --- | --- |
-| Python 语法检查 | 插件目录 | `python -m compileall -q main.py checkin pixiv plugin_api tests` |
+| Python 语法检查 | 插件目录 | `python -m compileall -q main.py checkin pixiv plugin_api scripts/ci tests` |
 | JSON schema 检查 | 插件目录 | `python -m json.tool _conf_schema.json` |
 | JavaScript 语法检查 | 插件目录 | `node --check pages/pluginCenter/app.js` |
-| pytest 全部测试 | 插件目录 | `pytest -v` |
-| pytest 快速测试 | 插件目录 | `pytest -q` |
-| pytest 特定模块 | 插件目录 | `pytest tests/test_checkin_*.py -v` |
+| pytest 全部测试 | 插件目录 | `python -m pytest -v` |
+| pytest 快速测试 | 插件目录 | `python -m pytest -q` |
+| pytest 特定模块 | 插件目录 | `python -m pytest tests/test_checkin_*.py -v` |
 
 > [!TIP]
 > 这些是测试与检查命令，不是插件的独立运行命令。实际集成验证入口见 [`setup.md`](./setup.md#本地集成验证)。
+
+## PR 快速 CI
+
+PR 快速 CI（`AstrBot Plugin Quality Gate`，`.github/workflows/plugin-quality-gate.yml`）在 Ubuntu + Python 3.12 下安装最新正式版 AstrBot，通过 `scripts/ci/check_plugin_quality_gate.py` 执行 Python 编译检查、JSON schema 检查、前端 JavaScript 语法检查和全量 `python -m pytest -v`；同一个检查脚本也可以在本地执行。生命周期检查脚本只服务于独立的 `AstrBot Plugin Lifecycle` CI。
+
+本地等价质量门禁（在已安装项目依赖、`pytest`、`pytest-asyncio` 和 Node.js 的环境中执行）：
+
+```bash
+python scripts/ci/check_plugin_quality_gate.py
+```
+
+## PR 生命周期 CI
+
+PR 生命周期 CI（`AstrBot Plugin Lifecycle`，`.github/workflows/plugin-lifecycle.yml`）不运行全量 pytest，也不承担基础静态检查；它只安装官方 AstrBot 和插件依赖，然后通过官方公开 `PluginManager.load()`、`reload()` 和 `uninstall_plugin()` 走完 `load → initialize → terminate → unbind` 路径。harness 只观察本轮新增的 handler、Web API 和后台任务并确认最终清理，不规定插件必须注册哪一类资源。
+
+本地等价生命周期检查需要先准备 AstrBot 源码目录：
+
+```bash
+ASTRBOT_SOURCE="/path/to/AstrBot"
+ASTRBOT_VERSION="$(git -C "$ASTRBOT_SOURCE" describe --tags --always)"
+python scripts/ci/check_plugin_lifecycle.py \
+  --astrbot-source "$ASTRBOT_SOURCE" \
+  --astrbot-version "$ASTRBOT_VERSION" \
+  --plugin-dir . \
+  --astrbot-root /tmp/get-px-astrbot-root \
+  --plugin-name astrbot_plugin_get_px
+```
 
 ## 分层验证矩阵
 
@@ -78,7 +105,7 @@
 ### 下载器改动
 
 ```bash
-pytest tests/test_downloader.py -v
+python -m pytest tests/test_downloader.py -v
 # 手工验证：实际下载一张图片
 # /来点图
 ```
@@ -86,7 +113,7 @@ pytest tests/test_downloader.py -v
 ### 签到改动
 
 ```bash
-pytest tests/test_checkin_*.py -v
+python -m pytest tests/test_checkin_*.py -v
 # 手工验证：
 # /签到
 # /签到日历
@@ -98,7 +125,7 @@ pytest tests/test_checkin_*.py -v
 
 ```bash
 python -m json.tool _conf_schema.json
-pytest tests/test_command_registration.py -v
+python -m pytest tests/test_command_registration.py -v
 # 手工验证：检查新配置是否生效
 ```
 
@@ -115,12 +142,12 @@ node --check pages/pluginCenter/app.js
 
 ```bash
 # 1. 语法检查
-python -m compileall -q main.py checkin pixiv plugin_api tests
+python -m compileall -q main.py checkin pixiv plugin_api scripts/ci tests
 python -m json.tool _conf_schema.json > /dev/null
 node --check pages/pluginCenter/app.js
 
 # 2. 运行全部测试
-pytest -v
+python -m pytest -v
 
 # 3. 检查是否有遗漏的文档更新
 # 手工核对 README.md、docs/project/configuration.md 和 _conf_schema.json

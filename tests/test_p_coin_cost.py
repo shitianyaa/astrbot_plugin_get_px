@@ -338,3 +338,4 @@ async def test_search_forward_branch_settles_downloaded_count() -> None:
     harness.checkin_store.spend_coins.assert_awaited_once()
     args, kwargs = harness.checkin_store.spend_coins.await_args
     assert kwargs["cost"] == 40
+    assert event.sent[0][0].nodes[0].uin == "self-bot"

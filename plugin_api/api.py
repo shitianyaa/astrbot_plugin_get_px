@@ -22,6 +22,7 @@ try:
         normalize_safety_text,
         normalized_builtin_terms,
     )
+    from .web_api_compat import unregister_web_apis
 except ImportError:  # Direct imports used by the test suite.
     from checkin import load_checkin_snapshot_json
     from pixiv.downloader import cleanup, pick_image_url_exact
@@ -32,6 +33,7 @@ except ImportError:  # Direct imports used by the test suite.
         normalize_safety_text,
         normalized_builtin_terms,
     )
+    from plugin_api.web_api_compat import unregister_web_apis
 
 
 class PluginWebApi:
@@ -49,6 +51,7 @@ class PluginWebApi:
         self.plugin_name = plugin_name
         self.log_prefix = log_prefix
         self.internal_error_message = internal_error_message
+        self._registered_routes: list[tuple[str, object, tuple[str, ...]]] = []
 
     def __getattr__(self, name: str) -> Any:
         return getattr(self.plugin, name)
@@ -141,9 +144,22 @@ class PluginWebApi:
             ("config", self.config, ["GET"], "Get management center configuration"),
         )
         for path, handler, methods, description in routes:
-            self.context.register_web_api(
-                f"/{self.plugin_name}/{path}", handler, methods, description
-            )
+            route = f"/{self.plugin_name}/{path}"
+            self.context.register_web_api(route, handler, methods, description)
+            self._registered_routes.append((route, handler, tuple(methods)))
+
+    def unregister(self) -> None:
+        """移除本实例注册的 Web API 路由。
+
+        AstrBot 当前没有公开的 ``unregister_web_api()``；唯一的 registry
+        兼容处理集中在 ``plugin_api.web_api_compat``，避免业务代码散落
+        AstrBot 内部存储格式假设。
+        """
+        if not self._registered_routes:
+            return
+
+        unregister_web_apis(self.context, tuple(self._registered_routes))
+        self._registered_routes.clear()
 
     def internal_error(self, action: str, exc: Exception):
         logger.error(
