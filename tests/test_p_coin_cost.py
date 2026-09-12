@@ -156,13 +156,17 @@ class _SearchFlowHarness(SearchMixin):
     def _forward_threshold(self):
         return 0
 
-    async def _blocked_query_term(self, query):
+    async def _content_safety_policy(self, event):
+        from astrbot_plugin_get_px.pixiv.safety import ContentSafetyPolicy
+        return ContentSafetyPolicy()
+
+    async def _blocked_query_term(self, query, policy=None):
         return ""
 
     def _filter_manga(self, illusts):
         return illusts
 
-    async def _filter_blacklisted_illusts(self, illusts):
+    async def _filter_blacklisted_illusts(self, illusts, policy=None):
         return illusts
 
     async def _pick_illusts(
@@ -171,7 +175,8 @@ class _SearchFlowHarness(SearchMixin):
         return illusts[:pick_count]
 
     async def _fetch_source_candidates(
-        self, event, tag, *, count=20, offset=0, aspect_ratio="", use_page_cursor=True
+        self, event, tag, *, count=20, offset=0, aspect_ratio="", use_page_cursor=True,
+        policy=None,
     ):
         return self.illusts, len(self.illusts), "lolicon:random"
 

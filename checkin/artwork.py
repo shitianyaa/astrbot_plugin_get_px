@@ -104,6 +104,8 @@ class CheckinArtworkMixin:
         self,
         event: AstrMessageEvent,
         record: CheckinRecord,
+        *,
+        policy=None,
     ) -> CardBackground:
         saved = self._checkin_background_from_record(record)
         if record.background_mode == "custom":
@@ -124,6 +126,9 @@ class CheckinArtworkMixin:
                 f"{LOG_PREFIX} 签到背景恢复跳过: reason=no_persisted_illust"
             )
             return replace(saved, mode="fallback")
+
+        if policy is None:
+            policy = await self._content_safety_policy(event)
         source = str(record.background_source or "")
         detail_id_text = str(record.background_illust_id)
         detail_page = 0
@@ -177,7 +182,7 @@ class CheckinArtworkMixin:
                     )
                     return replace(saved, mode="fallback")
             if await self._blacklist_reason_for_illust(
-                illust, record.background_illust_id
+                illust, record.background_illust_id, policy
             ):
                 logger.warning(
                     f"{LOG_PREFIX} 签到背景恢复被内容安全策略拒绝: "
@@ -352,6 +357,7 @@ class CheckinArtworkMixin:
         bot_name: str,
         user_title: str,
         preferred_tier: str,
+        policy,
     ) -> tuple[Path | None, str]:
         for spec in checkin_render_fallbacks(preferred_tier):
             cache_key = await asyncio.to_thread(
@@ -363,6 +369,7 @@ class CheckinArtworkMixin:
                 bot_name=bot_name,
                 user_title=user_title,
                 render_tier=spec.name,
+                policy=policy,
             )
             cached = await asyncio.to_thread(
                 self._cache_get_for_tier,
@@ -394,6 +401,7 @@ class CheckinArtworkMixin:
         user_title: str = "",
         preferred_tier: str,
         cache=None,
+        policy=None,
     ) -> tuple[Path, str]:
         last_error: Exception | None = None
         fallback_specs = checkin_render_fallbacks(preferred_tier)
@@ -438,6 +446,7 @@ class CheckinArtworkMixin:
                         bot_name=bot_name,
                         user_title=user_title,
                         render_tier=spec.name,
+                        policy=policy,
                     )
                     card_path = Path(
                         await self._cache_store_for_tier(
@@ -477,6 +486,7 @@ class CheckinArtworkMixin:
         claim_usage: bool = True,
         refresh_preview: bool = False,
         render_tier: str | None = None,
+        policy=None,
     ) -> CardBackground | None:
         mode = self._cfg_str("checkin_background_mode", "pixiv_daily") or "pixiv_daily"
         if mode == "custom":
@@ -530,6 +540,7 @@ class CheckinArtworkMixin:
             background_quality=get_checkin_render_tier(
                 render_tier or self._configured_checkin_render_tier()
             ).background_quality,
+            _policy=policy,
         )
         if pixiv_bg is not None:
             if refresh_preview and pixiv_bg.illust_id:
@@ -595,7 +606,10 @@ class CheckinArtworkMixin:
         preview_excluded_ids: set[str] | None = None,
         background_quality: str = "medium",
         _selected_tag: str | None = None,
+        _policy=None,
     ) -> CardBackground | None:
+        if _policy is None:
+            _policy = await self._content_safety_policy(event)
         if _selected_tag is None:
             tag_config = self._cfg_str("checkin_background_tag", "")
             for selected_tag in self._checkin_background_tag_candidates(tag_config):
@@ -607,6 +621,7 @@ class CheckinArtworkMixin:
                     preview_excluded_ids=preview_excluded_ids,
                     background_quality=background_quality,
                     _selected_tag=selected_tag,
+                    _policy=_policy,
                 )
                 if background is not None:
                     return background
@@ -630,6 +645,7 @@ class CheckinArtworkMixin:
                     offset=transient_offset if preview_nonce else 0,
                     aspect_ratio=CHECKIN_ARTWORK_ASPECT_PARAM,
                     use_page_cursor=not preview_nonce,
+                    policy=_policy,
                 )
             except Exception as e:
                 logger.warning(
@@ -652,7 +668,7 @@ class CheckinArtworkMixin:
             if self._cfg_bool("filter_manga", True):
                 illusts = self._filter_manga(illusts)
             try:
-                illusts = await self._filter_blacklisted_illusts(illusts)
+                illusts = await self._filter_blacklisted_illusts(illusts, _policy)
             except RuntimeError as exc:
                 logger.warning(
                     f"{LOG_PREFIX} 签到背景安全检查不可用，使用占位图: "
@@ -734,7 +750,9 @@ class CheckinArtworkMixin:
             if not illust_id:
                 continue
             try:
-                reason = await self._blacklist_reason_for_illust(illust, illust_id)
+                reason = await self._blacklist_reason_for_illust(
+                    illust, illust_id, _policy
+                )
             except RuntimeError as exc:
                 # 自定义安全词/黑名单读取失败时 fail-closed：不放过该候选，
                 # 跳过去试下一个；若所有候选都不可用则回退占位图。
@@ -884,15 +902,22 @@ class CheckinArtworkMixin:
         *,
         user_id: str,
         background_quality: str = "medium",
+        policy=None,
     ) -> CardBackground | None:
         """为日历取一张 16:9 邻域横图氛围背景；不占去重池，失败按无图兜底。
 
         ``background_quality`` 跟随签到卡画质档位（省流量=medium、清晰/极致=large）；
         两源在下载器内已归一化到同一质量枚举，无需按来源区分。
         """
+        if policy is None:
+            policy = await self._content_safety_policy(event)
         try:
             illusts, _raw_count, source_key = await self._fetch_source_candidates(
-                event, "", count=20, aspect_ratio=_CALENDAR_BG_ASPECT_PARAM,
+                event,
+                "",
+                count=20,
+                aspect_ratio=_CALENDAR_BG_ASPECT_PARAM,
+                policy=policy,
             )
         except Exception as exc:
             logger.warning(
@@ -903,7 +928,7 @@ class CheckinArtworkMixin:
         if self._cfg_bool("filter_manga", True):
             illusts = self._filter_manga(illusts)
         try:
-            illusts = await self._filter_blacklisted_illusts(illusts)
+            illusts = await self._filter_blacklisted_illusts(illusts, policy)
         except RuntimeError as exc:
             logger.warning(
                 f"{LOG_PREFIX} 日历背景安全检查不可用，使用无图兜底: "
@@ -926,7 +951,9 @@ class CheckinArtworkMixin:
             if not illust_id:
                 continue
             try:
-                reason = await self._blacklist_reason_for_illust(illust, illust_id)
+                reason = await self._blacklist_reason_for_illust(
+                    illust, illust_id, policy
+                )
             except RuntimeError as exc:
                 logger.warning(
                     f"{LOG_PREFIX} 日历背景安全检查不可用，跳过作品: "

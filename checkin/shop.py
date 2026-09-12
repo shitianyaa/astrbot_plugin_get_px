@@ -428,12 +428,14 @@ class CheckinShopMixin:
         cache = getattr(self, "checkin_cache", None)
         card_path: Path | None = None
         refresh_tier = self._configured_checkin_render_tier()
+        policy = await self._content_safety_policy(event)
         try:
             background = await self._prepare_checkin_background(
                 event,
                 record,
                 refresh_preview=True,
                 render_tier=refresh_tier,
+                policy=policy,
             )
             claim_held = bool(
                 background is not None
@@ -475,6 +477,7 @@ class CheckinShopMixin:
                 user_title=user_title,
                 preferred_tier=refresh_tier,
                 cache=cache,
+                policy=policy,
             )
             record = await self._persist_checkin_render_tier(record, actual_tier)
             content = [Plain(purchase.message), Image.fromFileSystem(str(card_path))]

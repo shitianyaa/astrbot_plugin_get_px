@@ -172,6 +172,7 @@ class CheckinBackgroundSelectionTest(unittest.IsolatedAsyncioTestCase):
                 preview_nonce=0,
                 preview_excluded_ids=None,
                 background_quality="medium",
+                _policy=None,
             ):
                 self.assertTrue(claim_usage)
                 return CardBackground(

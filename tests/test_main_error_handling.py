@@ -17,6 +17,7 @@ from PIL import Image as PILImage
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 
 from astrbot_plugin_get_px.main import GetPxPlugin, PLUGIN_VERSION  # noqa: E402
+import astrbot_plugin_get_px.main as main_module  # noqa: E402
 from astrbot_plugin_get_px.pixiv.constants import MAX_IMAGE_COUNT  # noqa: E402
 from astrbot_plugin_get_px.checkin import (  # noqa: E402
     CheckinProfile,
@@ -25,12 +26,14 @@ from astrbot_plugin_get_px.checkin import (  # noqa: E402
     UnversionedCheckinDatabaseError,
 )
 from astrbot_plugin_get_px.checkin.card import CardBackground  # noqa: E402
+from astrbot_plugin_get_px.pixiv.safety import ContentSafetyPolicy  # noqa: E402
 
 
 class _FakeEvent:
-    def __init__(self, order=None, *, fail_send=False):
+    def __init__(self, order=None, *, fail_send=False, group_id=""):
         self.order = order if order is not None else []
         self.fail_send = fail_send
+        self.group_id = group_id
         self.sent = []
         self.unified_msg_origin = "private:10001"
         self.stopped = False
@@ -42,7 +45,7 @@ class _FakeEvent:
         return "Alice"
 
     def get_group_id(self):
-        return ""
+        return self.group_id
 
     def get_platform_name(self):
         return "aiocqhttp"
@@ -211,6 +214,30 @@ class _FakeCache:
         self.cache_path.parent.mkdir(parents=True, exist_ok=True)
         shutil.copyfile(rendered_path, self.cache_path)
         self.hit = True
+        return self.cache_path
+
+
+class _PolicyAwareFakeCache(_FakeCache):
+    def __init__(self, cache_path: Path, order):
+        super().__init__(cache_path, order)
+        self.entries: set[str] = set()
+
+    def cache_key(self, **kwargs):
+        self.key_inputs.append(kwargs)
+        return json.dumps(kwargs, ensure_ascii=False, sort_keys=True, default=str)
+
+    def get(self, date_key, key, *, expected_size=None):
+        self.order.append("cache_get")
+        self.get_calls.append((date_key, key))
+        return self.cache_path if key in self.entries else None
+
+    async def store(self, date_key, key, renderer, *, expected_size=None):
+        self.order.append("cache_store")
+        self.store_calls.append((date_key, key))
+        rendered_path = Path(await renderer())
+        self.cache_path.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copyfile(rendered_path, self.cache_path)
+        self.entries.add(key)
         return self.cache_path
 
 
@@ -454,6 +481,175 @@ class MainErrorHandlingTest(unittest.IsolatedAsyncioTestCase):
         self.assertIn("3.0.0", log_text)
         self.assertIn(PLUGIN_VERSION, log_text)
 
+    async def test_initialize_migrates_policy_before_convergence_and_logs_result(self):
+        plugin = object.__new__(GetPxPlugin)
+        order = []
+        plugin.config = {}
+        plugin.context = SimpleNamespace()
+        plugin._migrate_grouped_config = Mock()
+        plugin._migrate_dedupe_config = Mock(return_value=1)
+        plugin._init_client = Mock()
+        plugin._cfg_bool = Mock(return_value=False)
+
+        class FakeImageIndex:
+            async def cleanup_old_days(self, *, trigger="manual"):
+                return None
+
+        class FakeStore:
+            _db_path = Path("checkin.sqlite3")
+
+            def __init__(self):
+                order.append("store")
+
+            def converge_legacy_group_policy_schema(self):
+                order.append("converge")
+                return {
+                    "from_version": 3,
+                    "to_version": 2,
+                    "backup_path": "backup.sqlite3",
+                    "changed": True,
+                }
+
+        class FakePolicyService:
+            async def initialize(self, store):
+                order.append("policy")
+                return True
+
+        class FakeCache:
+            def __init__(self, *_args):
+                order.append("cache")
+
+            def cleanup_expired(self, **_kwargs):
+                return None
+
+        class FakeHoliday:
+            def __init__(self, *_args, **_kwargs):
+                order.append("holiday")
+
+            async def refresh_if_due(self):
+                return False
+
+        class FakeWebApi:
+            def register(self):
+                order.append("register")
+
+        plugin.group_safety_service = FakePolicyService()
+        plugin.plugin_web_api = FakeWebApi()
+
+        def discard_task(coro):
+            coro.close()
+            return Mock()
+
+        with (
+            tempfile.TemporaryDirectory() as tmp,
+            patch.object(main_module.StarTools, "get_data_dir", return_value=tmp),
+            patch.object(main_module, "ImageIndexStore", return_value=FakeImageIndex()),
+            patch.object(main_module, "CheckinStore", return_value=FakeStore()),
+            patch.object(main_module, "CheckinCardCache", FakeCache),
+            patch.object(main_module, "HolidayCalendar", FakeHoliday),
+            patch.object(main_module.asyncio, "create_task", side_effect=discard_task),
+            patch.object(main_module, "logger") as logger,
+        ):
+            await plugin.initialize()
+
+        self.assertLess(order.index("policy"), order.index("converge"))
+        self.assertLess(order.index("converge"), order.index("cache"))
+        self.assertLess(order.index("cache"), order.index("register"))
+        log_text = "\n".join(str(call.args[0]) for call in logger.info.call_args_list)
+        self.assertIn("from_version=3", log_text)
+        self.assertIn("to_version=2", log_text)
+        self.assertIn("backup_path=backup.sqlite3", log_text)
+
+    async def test_initialize_skips_convergence_when_policy_migration_fails(self):
+        plugin = object.__new__(GetPxPlugin)
+        plugin.config = {}
+        plugin.context = SimpleNamespace()
+        plugin._migrate_grouped_config = Mock()
+        plugin._migrate_dedupe_config = Mock(return_value=1)
+        plugin._init_client = Mock()
+        plugin._cfg_bool = Mock(return_value=False)
+        order = []
+
+        class FakeIndex:
+            async def cleanup_old_days(self, *, trigger="manual"):
+                return None
+
+        class FakeStore:
+            _db_path = Path("checkin.sqlite3")
+
+            def converge_legacy_group_policy_schema(self):
+                order.append("converge")
+                raise AssertionError("convergence must be skipped")
+
+        class FakePolicy:
+            async def initialize(self, _store):
+                return False
+
+        plugin.group_safety_service = FakePolicy()
+        plugin.plugin_web_api = SimpleNamespace(register=Mock())
+        fake_cache = SimpleNamespace(cleanup_expired=Mock())
+        fake_holiday = SimpleNamespace(refresh_if_due=AsyncMock(return_value=False))
+
+        def discard_task(coro):
+            coro.close()
+            return Mock()
+
+        with (
+            tempfile.TemporaryDirectory() as tmp,
+            patch.object(main_module.StarTools, "get_data_dir", return_value=tmp),
+            patch.object(main_module, "ImageIndexStore", return_value=FakeIndex()),
+            patch.object(main_module, "CheckinStore", return_value=FakeStore()),
+            patch.object(main_module, "CheckinCardCache", return_value=fake_cache),
+            patch.object(main_module, "HolidayCalendar", return_value=fake_holiday),
+            patch.object(main_module.asyncio, "create_task", side_effect=discard_task),
+        ):
+            await plugin.initialize()
+        self.assertEqual(order, [])
+
+    async def test_initialize_stops_after_convergence_failure(self):
+        plugin = object.__new__(GetPxPlugin)
+        plugin.config = {}
+        plugin.context = SimpleNamespace()
+        plugin._migrate_grouped_config = Mock()
+        plugin._migrate_dedupe_config = Mock(return_value=1)
+        plugin._init_client = Mock()
+        plugin._cfg_bool = Mock(return_value=False)
+        plugin.plugin_web_api = SimpleNamespace(register=Mock())
+        order = []
+
+        class FakeIndex:
+            async def cleanup_old_days(self, *, trigger="manual"):
+                return None
+
+        class FakeStore:
+            _db_path = Path("checkin.sqlite3")
+
+            def converge_legacy_group_policy_schema(self):
+                order.append("converge")
+                raise RuntimeError("convergence failed")
+
+        class FakePolicy:
+            async def initialize(self, _store):
+                return True
+
+        plugin.group_safety_service = FakePolicy()
+        with (
+            tempfile.TemporaryDirectory() as tmp,
+            patch.object(main_module.StarTools, "get_data_dir", return_value=tmp),
+            patch.object(main_module, "ImageIndexStore", return_value=FakeIndex()),
+            patch.object(main_module, "CheckinStore", return_value=FakeStore()),
+            patch.object(main_module, "logger") as logger,
+        ):
+            with self.assertRaisesRegex(RuntimeError, "convergence failed"):
+                await plugin.initialize()
+        self.assertEqual(order, ["converge"])
+        plugin.plugin_web_api.register.assert_not_called()
+        error_text = "\n".join(
+            str(call.args[0]) for call in logger.error.call_args_list
+        )
+        self.assertIn("会话策略数据库收敛失败", error_text)
+        self.assertIn("error_type=RuntimeError", error_text)
+
     async def test_auto_trigger_stops_event_before_search(self):
         plugin = object.__new__(GetPxPlugin)
         plugin.config = {"auto_trigger_enabled": True}
@@ -588,6 +784,100 @@ class MainErrorHandlingTest(unittest.IsolatedAsyncioTestCase):
             self.assertLess(order.index("cache_get"), order.index("render"))
             self.assertLess(order.index("render"), order.index("send"))
 
+    async def _assert_duplicate_cache_policy_transition(
+        self,
+        *,
+        first_event: _FakeEvent,
+        first_policy: ContentSafetyPolicy,
+        second_event: _FakeEvent,
+        second_policy: ContentSafetyPolicy,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            order = []
+            record = _record()
+            result = CheckinResult(_profile(), record, duplicate=True)
+            plugin = _plugin_for_checkin(tmp, result, order)
+            plugin.checkin_cache = _PolicyAwareFakeCache(
+                Path(tmp) / "cache" / "card.jpg", order
+            )
+            plugin._content_safety_policy = AsyncMock(
+                side_effect=[first_policy, second_policy]
+            )
+            restored = CardBackground(
+                mode="fallback",
+                source="fallback",
+            )
+            plugin._restore_checkin_background.return_value = restored
+            rendered = Path(tmp) / "rendered.jpg"
+
+            async def render(*_args, **_kwargs):
+                order.append("render")
+                return _make_card(rendered)
+
+            plugin._render_checkin_card.side_effect = render
+            first_event.order = order
+            second_event.order = order
+
+            self.assertEqual(await _collect(plugin._handle_checkin(first_event)), [])
+            self.assertEqual(await _collect(plugin._handle_checkin(second_event)), [])
+
+            self.assertEqual(plugin._render_checkin_card.await_count, 2)
+            self.assertEqual(plugin._restore_checkin_background.await_count, 2)
+            restore_policies = [
+                call.kwargs["policy"]
+                for call in plugin._restore_checkin_background.await_args_list
+            ]
+            self.assertIs(restore_policies[0], first_policy)
+            self.assertIs(restore_policies[1], second_policy)
+            cache_identities = {
+                json.dumps(
+                    item["view_model"]["content_safety_policy"],
+                    ensure_ascii=False,
+                    sort_keys=True,
+                )
+                for item in plugin.checkin_cache.key_inputs
+            }
+            self.assertEqual(
+                cache_identities,
+                {
+                    json.dumps(
+                        first_policy.cache_identity(),
+                        ensure_ascii=False,
+                        sort_keys=True,
+                    ),
+                    json.dumps(
+                        second_policy.cache_identity(),
+                        ensure_ascii=False,
+                        sort_keys=True,
+                    ),
+                },
+            )
+            self.assertEqual(len(plugin.checkin_cache.entries), 2)
+
+    async def test_checkin_cache_separates_relaxed_group_from_strict_group(self):
+        await self._assert_duplicate_cache_policy_transition(
+            first_event=_FakeEvent(group_id="group-a"),
+            first_policy=ContentSafetyPolicy(False, False, "group-a"),
+            second_event=_FakeEvent(group_id="group-b"),
+            second_policy=ContentSafetyPolicy(True, True, "group-b"),
+        )
+
+    async def test_checkin_cache_invalidates_when_same_group_reenables_safety(self):
+        await self._assert_duplicate_cache_policy_transition(
+            first_event=_FakeEvent(group_id="group-a"),
+            first_policy=ContentSafetyPolicy(False, False, "group-a"),
+            second_event=_FakeEvent(group_id="group-a"),
+            second_policy=ContentSafetyPolicy(True, True, "group-a"),
+        )
+
+    async def test_checkin_cache_separates_relaxed_group_from_private_chat(self):
+        await self._assert_duplicate_cache_policy_transition(
+            first_event=_FakeEvent(group_id="group-a"),
+            first_policy=ContentSafetyPolicy(False, False, "group-a"),
+            second_event=_FakeEvent(),
+            second_policy=ContentSafetyPolicy(),
+        )
+
     async def test_duplicate_restore_failure_reselects_and_persists_new_artwork(
         self,
     ):
@@ -596,6 +886,8 @@ class MainErrorHandlingTest(unittest.IsolatedAsyncioTestCase):
             record = _record()
             result = CheckinResult(_profile(), record, duplicate=True)
             plugin = _plugin_for_checkin(tmp, result, order)
+            policy = ContentSafetyPolicy(False, False, "group-a")
+            plugin._content_safety_policy = AsyncMock(return_value=policy)
             plugin._restore_checkin_background.return_value = CardBackground(
                 mode="fallback", source="fallback"
             )
@@ -629,6 +921,14 @@ class MainErrorHandlingTest(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(output, [])
             plugin._restore_checkin_background.assert_awaited_once()
             plugin._prepare_checkin_background.assert_awaited_once()
+            self.assertIs(
+                plugin._prepare_checkin_background.await_args.kwargs["policy"],
+                policy,
+            )
+            self.assertEqual(
+                plugin.checkin_cache.key_inputs[0]["view_model"]["content_safety_policy"],
+                policy.cache_identity(),
+            )
             self.assertEqual(len(plugin.checkin_store.background_updates), 1)
             update = plugin.checkin_store.background_updates[0]
             self.assertEqual(update["illust_id"], "778899:0")
@@ -741,6 +1041,7 @@ class MainErrorHandlingTest(unittest.IsolatedAsyncioTestCase):
             plugin._restore_checkin_background.assert_awaited_once()
             plugin._prepare_checkin_background.assert_not_awaited()
             self.assertEqual(plugin.checkin_store.background_updates, [])
+
 
     async def test_first_checkin_persists_content_then_rendered_artwork_and_usage_after_send(
         self,

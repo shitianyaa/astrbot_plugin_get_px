@@ -8,6 +8,7 @@ from astrbot.api.message_components import Node, Nodes
 
 from .constants import AIOCQHTTP_PLATFORM, MAX_IMAGE_COUNT
 from .downloader import cleanup
+from .safety import ContentSafetyPolicy, STRICT_CONTENT_SAFETY_POLICY
 
 
 LOG_PREFIX = "[GetPx]"
@@ -105,6 +106,7 @@ class SearchMixin:
         offset: int = 0,
         aspect_ratio: str = "",
         use_page_cursor: bool = True,
+        policy: ContentSafetyPolicy = STRICT_CONTENT_SAFETY_POLICY,
     ) -> tuple[list[dict], int, str]:
         """优先请求 Lolicon，失败后按有无标签回退 Pixiv。"""
         lolicon_client = getattr(self, "lolicon_client", None)
@@ -112,12 +114,17 @@ class SearchMixin:
             try:
                 if tag:
                     illusts = await lolicon_client.search(
-                        tag, count=count, aspect_ratio=aspect_ratio
+                        tag,
+                        count=count,
+                        aspect_ratio=aspect_ratio,
+                        r18=0 if policy.general_only_enabled else 2,
                     )
                     source_key = self._source_key(tag, "lolicon")
                 else:
                     illusts = await lolicon_client.random(
-                        count=count, aspect_ratio=aspect_ratio
+                        count=count,
+                        aspect_ratio=aspect_ratio,
+                        r18=0 if policy.general_only_enabled else 2,
                     )
                     source_key = "lolicon:random"
                 if illusts:
@@ -218,8 +225,9 @@ class SearchMixin:
                 yield event.plain_result(balance_error)
                 return
 
+        policy = await self._content_safety_policy(event)
         try:
-            if tag and await self._blocked_query_term(tag):
+            if tag and await self._blocked_query_term(tag, policy):
                 yield event.plain_result("🚫 搜索词不符合内容安全要求")
                 return
         except RuntimeError:
@@ -238,7 +246,7 @@ class SearchMixin:
 
         # 获取作品列表：Lolicon 主源，Pixiv 搜索/推荐回退。
         illusts, raw_count, source_key = await self._fetch_source_candidates(
-            event, tag, count=max_count
+            event, tag, count=max_count, policy=policy
         )
         logger.info(
             f"{LOG_PREFIX} 搜索候选获取完成: "
@@ -261,7 +269,7 @@ class SearchMixin:
                 return
 
         try:
-            illusts = await self._filter_blacklisted_illusts(illusts)
+            illusts = await self._filter_blacklisted_illusts(illusts, policy)
         except RuntimeError:
             yield event.plain_result("🚫 内容安全服务暂不可用，本次请求已拒绝")
             return

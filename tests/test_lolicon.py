@@ -7,6 +7,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 from astrbot_plugin_get_px.pixiv.lolicon import LoliconClient
 from astrbot_plugin_get_px.pixiv.constants import AIOCQHTTP_PLATFORM
 from astrbot_plugin_get_px.pixiv.search import SearchMixin
+from astrbot_plugin_get_px.pixiv.safety import ContentSafetyPolicy
 
 
 class _FakeResponse:
@@ -156,6 +157,15 @@ class LoliconClientTest(unittest.IsolatedAsyncioTestCase):
             "original", "regular", "small", "thumb", "mini"
         ])
 
+    async def test_r18_mode_accepts_only_strict_or_mixed(self):
+        client = LoliconClient()
+        session = _FakeSession()
+        client._session = session
+        await client.random(r18=2)
+        self.assertIn(("r18", "2"), session.calls[0][1]["params"])
+        with self.assertRaises(ValueError):
+            await client.random(r18=1)
+
     async def test_tagged_lolicon_success_does_not_call_pixiv(self):
         lolicon = _SourceLolicon()
         pixiv = _SourcePixiv()
@@ -169,6 +179,16 @@ class LoliconClientTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(source, "lolicon:search:初音ミク")
         self.assertEqual(pixiv.search_calls, [])
         self.assertEqual(pixiv.recommended_calls, [])
+
+    async def test_group_policy_disables_upstream_general_only_filter(self):
+        lolicon = _SourceLolicon()
+        plugin = _SourceHarness(lolicon)
+        await plugin._fetch_source_candidates(
+            _SourceEvent(),
+            "",
+            policy=ContentSafetyPolicy(general_only_enabled=False),
+        )
+        self.assertEqual(lolicon.calls[0][1]["r18"], 2)
 
     async def test_untagged_lolicon_failure_uses_pixiv_recommended(self):
         pixiv = _SourcePixiv()

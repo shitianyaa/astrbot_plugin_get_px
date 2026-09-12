@@ -2,6 +2,7 @@
 
 import asyncio
 from dataclasses import replace
+import json
 from pathlib import Path
 import sys
 from unittest.mock import AsyncMock
@@ -21,6 +22,7 @@ from astrbot_plugin_get_px.checkin.calendar import (  # noqa: E402
 from astrbot_plugin_get_px.checkin.models import CheckinRecord  # noqa: E402
 from astrbot_plugin_get_px.checkin.quality import CHECKIN_JPEG_QUALITY  # noqa: E402
 from astrbot_plugin_get_px.main import GetPxPlugin  # noqa: E402
+from astrbot_plugin_get_px.pixiv.safety import ContentSafetyPolicy  # noqa: E402
 
 
 _BASE_RECORD = CheckinRecord(
@@ -49,6 +51,15 @@ _BASE_RECORD = CheckinRecord(
     created_at="",
     updated_at="",
 )
+
+def test_cache_identity_contains_independent_safety_lists():
+    base = ContentSafetyPolicy(group_id="g1", builtin_terms_enabled=False, custom_terms=["Alpha"], blacklisted_illust_ids=["1"]).cache_identity()
+    terms = ContentSafetyPolicy(group_id="g1", builtin_terms_enabled=False, custom_terms=["Beta"], blacklisted_illust_ids=["1"]).cache_identity()
+    ids = ContentSafetyPolicy(group_id="g1", builtin_terms_enabled=False, custom_terms=["Alpha"], blacklisted_illust_ids=["2"]).cache_identity()
+    assert base["custom_terms"] == ["Alpha"] and base["blacklisted_illust_ids"] == ["1"]
+    assert base != terms and base != ids
+    equivalent = ContentSafetyPolicy(group_id="g1", builtin_terms_enabled=False, custom_terms=[" Alpha ", "alpha"], blacklisted_illust_ids=["001", "1"]).cache_identity()
+    assert equivalent == base
 
 
 def _record(date_key: str, coins_reward: int) -> CheckinRecord:
@@ -219,8 +230,9 @@ def _make_jpeg(path: Path, size: tuple[int, int]) -> None:
 
 
 class _FakeEvent:
-    def __init__(self, *, fail_send: bool = False):
+    def __init__(self, *, fail_send: bool = False, group_id: str = ""):
         self.fail_send = fail_send
+        self.group_id = group_id
         self.sent = []
         self.stopped = False
 
@@ -229,6 +241,9 @@ class _FakeEvent:
 
     def get_platform_name(self):
         return "aiocqhttp"
+
+    def get_group_id(self):
+        return self.group_id
 
     def plain_result(self, text: str):
         return text
@@ -301,6 +316,39 @@ class _KeyCapturingCache(_CalendarCache):
     async def store(self, date_key, key, renderer, *, expected_size):
         self.sizes.append(tuple(expected_size))
         return await super().store(date_key, key, renderer, expected_size=expected_size)
+
+
+class _PolicyAwareCalendarCache(_KeyCapturingCache):
+    def __init__(self, published: Path, trace: list[str]):
+        super().__init__(published=published)
+        self.trace = trace
+        self.entries: dict[str, Path] = {}
+
+    def cache_key(self, *, date_key, user_id, template_version, view_model) -> str:
+        self.view_models.append(dict(view_model))
+        return json.dumps(
+            {
+                "date_key": date_key,
+                "user_id": user_id,
+                "template_version": template_version,
+                "view_model": view_model,
+            },
+            ensure_ascii=False,
+            sort_keys=True,
+        )
+
+    def get(self, date_key, key, *, expected_size):
+        self.trace.append("cache_get")
+        self.sizes.append(tuple(expected_size))
+        return self.entries.get(key)
+
+    async def store(self, date_key, key, renderer, *, expected_size):
+        self.sizes.append(tuple(expected_size))
+        result = renderer()
+        if asyncio.iscoroutine(result):
+            await result
+        self.entries[key] = self.published
+        return self.published
 
 
 class _StoreWithoutEventSource(_CalendarStore):
@@ -570,6 +618,7 @@ def test_calendar_cache_key_reflects_custom_event_fingerprint(tmp_path) -> None:
             "records": "",
             "background_quality": "medium",
             "output_size": "1600x900",
+            "content_safety_policy": ContentSafetyPolicy().cache_identity(),
         }
     ]
     assert len(event.sent) == 1
@@ -599,6 +648,7 @@ def test_calendar_cache_key_fingerprint_blank_without_event_source(tmp_path) -> 
             "records": "",
             "background_quality": "medium",
             "output_size": "1600x900",
+            "content_safety_policy": ContentSafetyPolicy().cache_identity(),
         }
     ]
 
@@ -628,6 +678,7 @@ def test_calendar_background_quality_follows_render_tier(tmp_path) -> None:
             "records": "",
             "background_quality": "large",
             "output_size": "2080x1170",
+            "content_safety_policy": ContentSafetyPolicy().cache_identity(),
         }
     ]
     assert plugin._prepare_checkin_calendar_background.await_args.kwargs[
@@ -674,7 +725,7 @@ def test_prepare_calendar_background_downloads_requested_quality(
         return_value=([illust], 1, "lolicon:test")
     )
     plugin._filter_blacklisted_illusts = AsyncMock(
-        side_effect=lambda illusts: list(illusts)
+        side_effect=lambda illusts, policy=None: list(illusts)
     )
     plugin._blacklist_reason_for_illust = AsyncMock(return_value="")
     monkeypatch.setattr(
@@ -719,8 +770,104 @@ def test_calendar_cache_key_reflects_month_record_state(tmp_path) -> None:
             "records": "2026-08-02:60",
             "background_quality": "medium",
             "output_size": "1600x900",
+            "content_safety_policy": ContentSafetyPolicy().cache_identity(),
         }
     ]
+
+
+def _assert_calendar_policy_transition_invalidates_cache(
+    tmp_path: Path,
+    first_event: _FakeEvent,
+    first_policy: ContentSafetyPolicy,
+    second_event: _FakeEvent,
+    second_policy: ContentSafetyPolicy,
+) -> None:
+    rendered = tmp_path / "rendered.jpg"
+    _make_jpeg(rendered, size=(1600, 900))
+    trace: list[str] = []
+    plugin = object.__new__(GetPxPlugin)
+    plugin.config = {"checkin_enabled": True}
+    plugin.checkin_store = _CalendarStore(records=[])
+    cache = _PolicyAwareCalendarCache(rendered, trace)
+    plugin.checkin_cache = cache
+    policies = iter((first_policy, second_policy))
+
+    async def resolve_policy(event):
+        trace.append(f"policy:{event.get_group_id() or 'private'}")
+        return next(policies)
+
+    plugin._content_safety_policy = AsyncMock(side_effect=resolve_policy)
+    plugin._prepare_checkin_calendar_background = AsyncMock(
+        return_value=CardBackground(mode="fallback", source="fallback")
+    )
+    plugin._render_checkin_calendar = AsyncMock(return_value=str(rendered))
+
+    first_output = asyncio.run(
+        _collect(plugin._handle_checkin_calendar(first_event, "2026-08"))
+    )
+    second_output = asyncio.run(
+        _collect(plugin._handle_checkin_calendar(second_event, "2026-08"))
+    )
+
+    assert first_output == second_output == []
+    assert trace == [
+        f"policy:{first_event.get_group_id() or 'private'}",
+        "cache_get",
+        f"policy:{second_event.get_group_id() or 'private'}",
+        "cache_get",
+    ]
+    assert plugin._render_checkin_calendar.await_count == 2
+    assert plugin._prepare_checkin_calendar_background.await_count == 2
+    assert [
+        call.kwargs["policy"]
+        for call in plugin._prepare_checkin_calendar_background.await_args_list
+    ] == [first_policy, second_policy]
+    assert [model["content_safety_policy"] for model in cache.view_models] == [
+        first_policy.cache_identity(),
+        second_policy.cache_identity(),
+    ]
+
+
+def test_calendar_cache_separates_relaxed_group_from_strict_group(tmp_path) -> None:
+    _assert_calendar_policy_transition_invalidates_cache(
+        tmp_path,
+        _FakeEvent(group_id="group-a"),
+        ContentSafetyPolicy(False, False, "group-a"),
+        _FakeEvent(group_id="group-b"),
+        ContentSafetyPolicy(True, True, "group-b"),
+    )
+
+
+def test_calendar_cache_invalidates_when_same_group_reenables_safety(tmp_path) -> None:
+    _assert_calendar_policy_transition_invalidates_cache(
+        tmp_path,
+        _FakeEvent(group_id="group-a"),
+        ContentSafetyPolicy(False, False, "group-a"),
+        _FakeEvent(group_id="group-a"),
+        ContentSafetyPolicy(True, True, "group-a"),
+    )
+
+
+def test_calendar_cache_separates_relaxed_group_from_private_chat(tmp_path) -> None:
+    _assert_calendar_policy_transition_invalidates_cache(
+        tmp_path,
+        _FakeEvent(group_id="group-a"),
+        ContentSafetyPolicy(False, False, "group-a"),
+        _FakeEvent(),
+        ContentSafetyPolicy(),
+    )
+
+def test_calendar_cache_misses_when_only_custom_terms_change(tmp_path) -> None:
+    first = ContentSafetyPolicy(False, False, "group-a", custom_terms=("alpha",), blacklisted_illust_ids=("1",))
+    second = ContentSafetyPolicy(False, False, "group-a", custom_terms=("beta",), blacklisted_illust_ids=("1",))
+    _assert_calendar_policy_transition_invalidates_cache(tmp_path, _FakeEvent(group_id="group-a"), first, _FakeEvent(group_id="group-a"), second)
+    assert first.cache_identity()["custom_terms"] != second.cache_identity()["custom_terms"]
+
+def test_calendar_cache_misses_when_only_blacklisted_ids_change(tmp_path) -> None:
+    first = ContentSafetyPolicy(False, False, "group-a", custom_terms=("alpha",), blacklisted_illust_ids=("1",))
+    second = ContentSafetyPolicy(False, False, "group-a", custom_terms=("alpha",), blacklisted_illust_ids=("2",))
+    _assert_calendar_policy_transition_invalidates_cache(tmp_path, _FakeEvent(group_id="group-a"), first, _FakeEvent(group_id="group-a"), second)
+    assert first.cache_identity()["blacklisted_illust_ids"] != second.cache_identity()["blacklisted_illust_ids"]
 
 
 class _FailingEventStore(_CalendarStore):
@@ -751,3 +898,7 @@ def test_calendar_data_escapes_background_credit_markup() -> None:
     assert data["background_credit"] == (
         "&lt;b&gt;画师&lt;/b&gt; &amp; &quot;夜樱&quot;"
     )
+
+def test_checkin_calendar_module_retains_default_safety_independence():
+    from pixiv.safety import STRICT_CONTENT_SAFETY_POLICY
+    assert STRICT_CONTENT_SAFETY_POLICY.general_only_enabled is True

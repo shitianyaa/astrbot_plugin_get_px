@@ -1,8 +1,8 @@
 name: astrbot_plugin_get_px
 display_name: 画境拾珍
-short_desc: 每日签到、金币商店与安全发图，含主题与万象画卷生图联动
-desc: 签到刷金币攒好感度，连签、主题、群排行与自动生成的卡片/日历一应俱全；商店可购双倍加持与背景，接入万象画卷后还能用金币买卖每日生图额度。另有 Lolicon 优先的安全插画发图，兼作签到背景来源。
-version: v3.7.0
+short_desc: Lolicon 优先、Pixiv 可选回退的分群安全发图与签到插件
+desc: 通过 Lolicon 标签搜索或随机获取插画，失败时可用 Pixiv refresh_token 回退到搜索或推荐作品。内容安全支持全局规则与群/用户独立规则互斥，以及按字段批量应用现有策略；同时提供每日签到、群签到排行、主题商店、万象画卷联动与 WebUI 管理中心。
+version: v3.8.0
 author: Sham1k0
 repo: https://github.com/shitianyaa/astrbot_plugin_get_px
 astrbot_version: ">=4.16"

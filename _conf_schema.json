@@ -20,7 +20,7 @@
         "description": "Lolicon 排除 AI 作品",
         "type": "bool",
         "default": true,
-        "hint": "开启后向 Lolicon API 传递 excludeAI=true。R18 始终固定为关闭。"
+        "hint": "仅控制 Lolicon 的 AI 作品筛选（excludeAI=true/false）；R18 与普通作品混合由当前会话的“强制普通分级”策略决定。"
       },
       "lolicon_image_proxy_origins": {
         "description": "Lolicon 图片反代地址",
@@ -123,6 +123,118 @@
       "dedupe_days_migrated": {
         "description": "去重配置迁移标记",
         "type": "bool",
+        "default": false,
+        "invisible": true
+      },
+      "group_content_safety_policies": {
+        "type": "template_list",
+        "description": "群聊内容安全策略",
+        "hint": "按群独立管理普通分级和内置安全词；删除条目后恢复默认严格策略。",
+        "default": [],
+        "templates": {
+          "group_policy": {
+            "name": "群策略",
+            "display_item": "group_id",
+            "hide_hint_in_list": true,
+            "items": {
+              "group_id": {
+                "description": "群 ID",
+                "type": "string",
+                "default": ""
+              },
+              "general_only_enabled": {
+                "description": "强制普通分级",
+                "type": "bool",
+                "default": true
+              },
+              "builtin_terms_enabled": {
+                "description": "启用内置安全词",
+                "type": "bool",
+                "default": true,
+                "hint": "开启：使用内置安全词、全局自定义屏蔽词与全局作品黑名单；关闭：以上全局规则对本会话停用，仅使用本会话独立列表。"
+              },
+              "custom_terms": {
+                "description": "群聊策略独立自定义屏蔽词（独立规则模式生效）",
+                "type": "list",
+                "default": []
+              },
+              "blacklisted_illust_ids": {
+                "description": "群聊策略独立作品 ID 黑名单（独立规则模式生效）",
+                "type": "list",
+                "default": []
+              },
+              "updated_at": {
+                "description": "保存时间",
+                "type": "string",
+                "default": "",
+                "invisible": true
+              },
+              "updated_by": {
+                "description": "保存来源",
+                "type": "string",
+                "default": "",
+                "invisible": true
+              }
+            }
+          }
+        }
+      },
+      "private_content_safety_policies": {
+        "type": "template_list",
+        "description": "私聊内容安全策略",
+        "hint": "按用户 ID 独立管理私聊普通分级和内置安全词；删除条目后恢复默认严格策略。",
+        "default": [],
+        "templates": {
+          "private_policy": {
+            "name": "私聊策略",
+            "display_item": "user_id",
+            "hide_hint_in_list": true,
+            "items": {
+              "user_id": {
+                "description": "用户 ID",
+                "type": "string",
+                "default": ""
+              },
+              "general_only_enabled": {
+                "description": "强制普通分级",
+                "type": "bool",
+                "default": true
+              },
+              "builtin_terms_enabled": {
+                "description": "启用内置安全词",
+                "type": "bool",
+                "default": true,
+                "hint": "开启：使用内置安全词、全局自定义屏蔽词与全局作品黑名单；关闭：以上全局规则对本会话停用，仅使用本会话独立列表。"
+              },
+              "custom_terms": {
+                "description": "私聊策略独立自定义屏蔽词（独立规则模式生效）",
+                "type": "list",
+                "default": []
+              },
+              "blacklisted_illust_ids": {
+                "description": "私聊策略独立作品 ID 黑名单（独立规则模式生效）",
+                "type": "list",
+                "default": []
+              },
+              "updated_at": {
+                "description": "保存时间",
+                "type": "string",
+                "default": "",
+                "invisible": true
+              },
+              "updated_by": {
+                "description": "保存来源",
+                "type": "string",
+                "default": "",
+                "invisible": true
+              }
+            }
+          }
+        }
+      },
+      "group_content_safety_policies_migrated": {
+        "type": "bool",
+        "description": "旧扁平键（兼容迁移）",
         "default": false,
         "invisible": true
       }
@@ -598,6 +710,118 @@
     "description": "旧扁平键（过渡版，迁移后移除）",
     "type": "string",
     "default": "mirror",
+    "invisible": true
+  },
+  "group_content_safety_policies": {
+    "type": "template_list",
+    "description": "旧扁平键（兼容迁移）",
+    "hint": "按群独立管理普通分级和内置安全词；删除条目后恢复默认严格策略。",
+    "default": [],
+    "templates": {
+      "group_policy": {
+        "name": "群策略",
+        "display_item": "group_id",
+        "hide_hint_in_list": true,
+        "items": {
+          "group_id": {
+            "description": "群 ID",
+            "type": "string",
+            "default": ""
+          },
+          "general_only_enabled": {
+            "description": "强制普通分级",
+            "type": "bool",
+            "default": true
+          },
+          "builtin_terms_enabled": {
+            "description": "启用内置安全词",
+            "type": "bool",
+            "default": true
+          },
+          "custom_terms": {
+            "description": "群聊策略独立自定义屏蔽词（独立规则模式生效）",
+            "type": "list",
+            "default": []
+          },
+          "blacklisted_illust_ids": {
+            "description": "群聊策略独立作品 ID 黑名单（独立规则模式生效）",
+            "type": "list",
+            "default": []
+          },
+          "updated_at": {
+            "description": "保存时间",
+            "type": "string",
+            "default": "",
+            "invisible": true
+          },
+          "updated_by": {
+            "description": "保存来源",
+            "type": "string",
+            "default": "",
+            "invisible": true
+          }
+        }
+      }
+    },
+    "invisible": true
+  },
+  "private_content_safety_policies": {
+    "type": "template_list",
+    "description": "旧扁平键（兼容迁移）",
+    "hint": "按用户 ID 独立管理私聊普通分级和内置安全词；删除条目后恢复默认严格策略。",
+    "default": [],
+    "templates": {
+      "private_policy": {
+        "name": "私聊策略",
+        "display_item": "user_id",
+        "hide_hint_in_list": true,
+        "items": {
+          "user_id": {
+            "description": "用户 ID",
+            "type": "string",
+            "default": ""
+          },
+          "general_only_enabled": {
+            "description": "强制普通分级",
+            "type": "bool",
+            "default": true
+          },
+          "builtin_terms_enabled": {
+            "description": "启用内置安全词",
+            "type": "bool",
+            "default": true
+          },
+          "custom_terms": {
+            "description": "私聊策略独立自定义屏蔽词（独立规则模式生效）",
+            "type": "list",
+            "default": []
+          },
+          "blacklisted_illust_ids": {
+            "description": "私聊策略独立作品 ID 黑名单（独立规则模式生效）",
+            "type": "list",
+            "default": []
+          },
+          "updated_at": {
+            "description": "保存时间",
+            "type": "string",
+            "default": "",
+            "invisible": true
+          },
+          "updated_by": {
+            "description": "保存来源",
+            "type": "string",
+            "default": "",
+            "invisible": true
+          }
+        }
+      }
+    },
+    "invisible": true
+  },
+  "group_content_safety_policies_migrated": {
+    "type": "bool",
+    "description": "旧扁平键（兼容迁移）",
+    "default": false,
     "invisible": true
   }
 }

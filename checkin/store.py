@@ -6,6 +6,7 @@ from pathlib import Path
 
 from .backup_store import BackupStoreMixin
 from .feature_store import FeatureStoreMixin
+from .group_safety_store import GroupSafetyStoreMixin
 from .models import SHANGHAI_TZ
 from .record_store import RecordStoreMixin
 from .ranking_store import RankingStoreMixin
@@ -17,6 +18,7 @@ class CheckinStore(
     RankingStoreMixin,
     FeatureStoreMixin,
     BackupStoreMixin,
+    GroupSafetyStoreMixin,
     SchemaMixin,
 ):
     def __init__(self, data_dir: Path | str):

@@ -649,6 +649,62 @@ h1 {
   gap: 20px;
 }
 
+.group-policy-panel {
+  margin-bottom: 20px;
+}
+
+.group-policy-form {
+  display: grid;
+  grid-template-columns: minmax(190px, 1fr) repeat(2, minmax(210px, 1fr)) auto;
+  gap: 14px;
+  align-items: end;
+}
+
+.group-policy-picker label {
+  display: block;
+  margin-bottom: 6px;
+  font-weight: 700;
+}
+
+.group-policy-picker input {
+  width: 100%;
+}
+
+.policy-toggle {
+  display: flex;
+  gap: 10px;
+  align-items: flex-start;
+  min-height: 44px;
+  cursor: pointer;
+}
+
+.policy-toggle input {
+  width: 20px;
+  height: 20px;
+  margin-top: 2px;
+  accent-color: var(--primary);
+}
+
+.policy-toggle span,
+.policy-toggle small {
+  display: block;
+}
+
+.policy-toggle small,
+.policy-boundary {
+  color: var(--muted);
+  font-size: 12px;
+  line-height: 1.5;
+}
+
+.policy-boundary {
+  margin: 12px 0 0;
+}
+
+.group-policy-form .form-error {
+  grid-column: 1 / -1;
+}
+
 .panel {
   background: var(--surface);
   border: 1px solid var(--border);
@@ -1402,7 +1458,7 @@ dialog p.member-history-note {
   .group-rail { padding: 16px; }
   .group-list { display: flex; overflow-x: auto; padding-bottom: 8px; scrollbar-width: thin; }
   .group-button { min-width: 180px; flex-shrink: 0; }
-  .safety-columns, .data-grid { grid-template-columns: 1fr; }
+  .safety-columns, .data-grid, .group-policy-form { grid-template-columns: 1fr; }
   .member-boost-section { grid-template-columns: 1fr; }
   .member-row { grid-template-columns: repeat(4, minmax(0, 1fr)); }
   .member-identity { grid-column: 1 / -1; }
@@ -1444,5 +1500,278 @@ dialog p.member-history-note {
     scroll-behavior: auto !important;
     transition: none !important;
     animation: none !important;
+  }
+}
+.policy-heading {
+  align-items: flex-start;
+}
+
+.policy-scope-switch {
+  display: inline-flex;
+  gap: 4px;
+  padding: 4px;
+  margin: 10px 0 4px;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  background: var(--surface-hover);
+}
+
+.policy-scope-switch button {
+  border: 1px solid transparent;
+  border-radius: 999px;
+  background: transparent;
+  color: var(--muted);
+  padding: 8px 16px;
+  cursor: pointer;
+}
+
+.policy-scope-switch button[aria-pressed="true"] {
+  border-color: var(--border);
+  background: var(--surface);
+  color: var(--primary);
+  box-shadow: var(--shadow);
+  font-weight: 700;
+}
+
+.policies-layout {
+  display: grid;
+  grid-template-columns: minmax(260px, .8fr) minmax(380px, 1.2fr);
+  gap: 20px;
+}
+
+#policyList {
+  display: grid;
+  gap: 8px;
+  margin-top: 12px;
+}
+
+.policy-list-item {
+  display: grid;
+  gap: 8px;
+  width: 100%;
+  padding: 14px 16px;
+  border: 1px solid var(--border-soft);
+  border-radius: var(--radius-sm);
+  background: var(--surface);
+  color: var(--text);
+  text-align: left;
+}
+
+.policy-list-item.active {
+  border-color: var(--primary);
+  background: var(--primary-soft);
+  color: var(--primary-hover);
+  box-shadow: var(--shadow);
+}
+
+.policy-list-item small {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+#policySearch,
+#policyGroupId,
+#policyAddInput {
+  width: 100%;
+  min-width: 0;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--surface);
+  color: var(--text);
+  padding: 10px 14px;
+  transition: border-color 0.2s, box-shadow 0.2s;
+}
+
+#policySearch:focus,
+#policyAddInput:focus {
+  border-color: var(--border-focus);
+  box-shadow: 0 0 0 3px var(--primary-soft);
+}
+
+#policyAddBtn,
+#policyAddSubmit,
+#policySaveBtn,
+#policyDeleteBtn,
+#policyList .empty-action,
+#policyEditorForm button,
+#policyAddForm button {
+  border: 1px solid transparent;
+  border-radius: var(--radius-sm);
+  background: var(--primary);
+  color: #ffffff;
+  cursor: pointer;
+  font-size: 14px;
+  font-weight: 700;
+  line-height: 1.2;
+  padding: 9px 15px;
+}
+
+#policyAddBtn:hover,
+#policyAddSubmit:hover,
+#policySaveBtn:hover,
+#policyDeleteBtn:hover,
+#policyList .empty-action:hover {
+  background: var(--primary-hover);
+}
+
+.policy-toggle-card input[type="checkbox"] {
+  border-radius: 4px;
+}
+
+.policy-toggle-card input[type="checkbox"]:focus-visible {
+  outline: 3px solid var(--border-focus);
+  outline-offset: 2px;
+  box-shadow: 0 0 0 3px var(--primary-soft);
+}
+
+.policy-list-editor { margin-top: 14px; padding: 16px; border: 1px solid var(--border); border-radius: var(--radius-sm); background: var(--surface-soft); }
+.policy-rule-mode-group { margin-top: 14px; border: 1px solid var(--border); border-radius: var(--radius-sm); background: var(--surface-soft); overflow: hidden; }
+.policy-rule-mode-group .policy-mode-status { margin: 0; border-radius: 0; border-bottom: 1px solid var(--border); }
+.policy-rule-mode-group .policy-list-editor { margin: 0; border: 0; border-radius: 0; background: transparent; }
+.policy-list-editor h4 { margin: 0 0 10px; color: var(--text); }
+.policy-list-add { display: flex; gap: 8px; }
+.policy-list-add input { flex: 1; min-width: 0; border: 1px solid var(--border); border-radius: var(--radius-sm); padding: 8px 10px; background: var(--surface); color: var(--text); }
+.policy-list-add button, .policy-bulk-actions button { border: 1px solid var(--primary); border-radius: var(--radius-sm); background: var(--primary); color: white; padding: 8px 12px; }
+.policy-chip-list { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 10px; }
+.policy-chip { display: inline-flex; align-items: center; gap: 6px; padding: 5px 9px; border-radius: var(--radius-sm); background: var(--primary-soft); color: var(--text); }
+.policy-chip button { border: 0; background: transparent; color: inherit; cursor: pointer; }
+.policy-bulk-actions { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 12px; }
+.policy-mode-status { padding: 10px 12px; border-radius: var(--radius-sm); background: var(--primary-soft); color: var(--text-muted); }
+.policy-batch-status { margin: 0; }
+@media (max-width: 620px) { .policy-list-add, .policy-bulk-actions { flex-direction: column; } .policy-list-add button, .policy-bulk-actions button { width: 100%; } }
+
+.policy-badge {
+  display: inline-flex;
+  padding: 3px 8px;
+  border-radius: 999px;
+  background: var(--secondary-soft);
+  color: var(--secondary);
+  font-size: .78rem;
+}
+
+.policy-editor-status {
+  color: var(--muted);
+  font-size: .86rem;
+}
+
+.editor-empty,
+.policy-empty {
+  padding: 24px;
+  border: 1px dashed var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--primary-soft);
+  color: var(--muted);
+  text-align: center;
+}
+
+.empty-action {
+  display: block;
+  width: 100%;
+  margin-top: 12px;
+}
+
+#policyEditorForm {
+  display: grid;
+  gap: 14px;
+}
+
+#policyEditorForm[hidden] {
+  display: none;
+}
+
+.policy-meta {
+  display: grid;
+  gap: 6px;
+}
+
+.policy-meta small {
+  color: var(--muted);
+}
+
+.policy-toggle-card {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  gap: 12px;
+  align-items: center;
+  padding: 14px;
+  border: 1px solid var(--border-soft);
+  border-radius: var(--radius-sm);
+  background: var(--surface-hover);
+}
+
+.policy-toggle-card span,
+.policy-toggle-card small {
+  display: block;
+}
+
+.policy-toggle-card small {
+  margin-top: 3px;
+  color: var(--muted);
+}
+
+.policy-actions {
+  display: flex;
+  gap: 10px;
+  justify-content: flex-end;
+}
+
+#policyEditorForm[aria-busy="true"] {
+  opacity: .72;
+}
+
+.policy-list-item:focus-visible,
+.policy-scope-switch button:focus-visible,
+#policyAddBtn:focus-visible,
+#policyEditorForm button:focus-visible,
+#policyEditorForm input:focus-visible,
+#policySearch:focus-visible {
+  outline: 3px solid var(--border-focus);
+  outline-offset: 2px;
+}
+
+.policy-list-item:disabled,
+#policyEditorForm button:disabled,
+#policyEditorForm input:disabled,
+#policySearch:disabled,
+#policyAddBtn:disabled {
+  cursor: not-allowed;
+  opacity: .55;
+}
+
+@media (max-width: 900px) {
+  .policies-layout {
+    grid-template-columns: 1fr;
+  }
+}
+
+@media (max-width: 620px) {
+  .workspace-nav {
+    flex-wrap: wrap;
+  }
+
+  .policy-scope-switch {
+    display: flex;
+    width: 100%;
+  }
+
+  .policy-scope-switch button {
+    flex: 1;
+  }
+
+  .policies-layout {
+    gap: 12px;
+  }
+
+  .policy-actions {
+    display: grid;
+    grid-template-columns: 1fr;
+    justify-content: stretch;
+  }
+
+  #policySaveBtn,
+  #policyDeleteBtn {
+    width: 100%;
+    justify-self: stretch;
   }
 }

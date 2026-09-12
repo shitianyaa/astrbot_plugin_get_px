@@ -1,5 +1,16 @@
 # 更新日志
 
+## v3.8.0 (2026-09-12)
+
+### 新增
+- 会话策略新增独立自定义屏蔽词和作品 ID 黑名单，并支持按字段批量应用到现有群聊/私聊策略。
+- 新增统一“会话策略配置”界面：AstrBot 插件配置页和管理中心均可持久化添加、编辑、删除群/私聊策略；删除后恢复默认严格策略，升级时一次性导入旧 SQLite 策略。
+- 会话策略迁移兼容旧 schema v3：配置保存成功后备份并将数据库版本收敛回 v2，永久保留 SQLite 群策略表与历史行；迁移失败保留 v3 数据。
+
+### 变更
+- 内置安全词开启时使用内置词与全局列表，关闭时仅使用当前会话独立列表。
+- 管理 API 保留既有内容安全字段，并新增群策略查询和原子更新端点。
+
 ## v3.7.0 (2026-09-06)
 
 ### 新增
@@ -12,7 +23,7 @@
 
 ### 变更
 - 配置 schema 从扁平结构改为 6 个 object 分组（Pixiv 图源、图片去重、万象联动、签到基础、签到商店、运行参数）。WebUI 配置页按分组折叠展示。`main.py` 配置读取层先遍历分组取值、找不到再回退扁平 key。
-- schema 顶层保留 37 个 `invisible` 旧扁平键作为过渡兼容。AstrBot 4.27+ 加载插件配置时会删除 schema 之外的键，这些 invisible 键让旧扁平值在框架裁剪前存活，`_migrate_grouped_config` 随后搬到对应分组。迁移完成后下一版本将删除这些顶层键。
+- schema 顶层保留 `invisible` 旧扁平键作为过渡兼容。AstrBot 4.27+ 加载插件配置时会删除 schema 之外的键，这些 invisible 键让旧扁平值在框架裁剪前存活，`_migrate_grouped_config` 随后搬到对应分组。迁移完成后下一版本将删除这些顶层键。
 - 收紧 5 项定价/阈值配置的 slider 上限，代码侧读取范围同步对齐：`p_coin_cost` 500→200、`auto_downgrade_original_mb` 100→25、`checkin_omnidraw_quota_cost` 1000→300、`checkin_omnidraw_quota_daily_max` 100→30、`checkin_background_refresh_cost` 500→300。
 - 签到备份快照新增 `omnidraw_quota_purchases` 表导出/导入，每日购买计数不再因恢复而丢失。旧快照缺该字段时兼容导入。
 

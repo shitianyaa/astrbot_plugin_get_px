@@ -4,9 +4,10 @@ import sys
 import tempfile
 import threading
 import unittest
-from datetime import date, timedelta
+from datetime import date, datetime, timedelta
 from pathlib import Path
 from unittest.mock import patch
+from zoneinfo import ZoneInfo
 
 from PIL import Image
 
@@ -14,6 +15,8 @@ from PIL import Image
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 
 from astrbot_plugin_get_px.checkin.cache import CheckinCardCache  # noqa: E402
+
+SHANGHAI_TZ = ZoneInfo("Asia/Shanghai")
 
 
 def _write_jpeg(path: Path, *, size: tuple[int, int] = (960, 540)) -> None:
@@ -26,7 +29,7 @@ class CheckinCardCacheTest(unittest.IsolatedAsyncioTestCase):
         self._tmp = tempfile.TemporaryDirectory()
         self.root = Path(self._tmp.name) / "checkin_card_cache"
         self.cache = CheckinCardCache(self.root)
-        self.date_key = date.today().isoformat()
+        self.date_key = datetime.now(SHANGHAI_TZ).date().isoformat()
         self.next_day = date.fromisoformat(self.date_key) + timedelta(days=1)
         self.key = self.cache.cache_key(
             date_key=self.date_key,

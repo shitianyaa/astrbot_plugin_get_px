@@ -241,6 +241,7 @@ class CheckinCommandMixin:
         background: CardBackground | None = None
         card_path = ""
         preview_tier = self._configured_checkin_render_tier()
+        policy = await self._content_safety_policy(event)
         try:
             background = await self._prepare_checkin_background(
                 event,
@@ -248,6 +249,7 @@ class CheckinCommandMixin:
                 claim_usage=False,
                 refresh_preview=True,
                 render_tier=preview_tier,
+                policy=policy,
             )
             rendered_path, _actual_tier = await self._render_checkin_card_with_fallback(
                 event,
@@ -257,6 +259,7 @@ class CheckinCommandMixin:
                 bot_name=bot_name,
                 user_title=user_title,
                 preferred_tier=preview_tier,
+                policy=policy,
             )
             card_path = str(rendered_path)
         except Exception as e:
@@ -683,6 +686,7 @@ class CheckinCommandMixin:
         render_spec = get_checkin_render_tier(self._configured_checkin_render_tier())
         background_quality = render_spec.background_quality
         output_width, output_height = calendar_output_size(render_spec.name)
+        policy = await self._content_safety_policy(event)
         try:
             if cache is not None:
                 key = cache.cache_key(
@@ -695,6 +699,7 @@ class CheckinCommandMixin:
                         "records": self._calendar_records_fingerprint(records),
                         "background_quality": background_quality,
                         "output_size": f"{output_width}x{output_height}",
+                        "content_safety_policy": policy.cache_identity(),
                     },
                 )
                 calendar_path = str(
@@ -712,6 +717,7 @@ class CheckinCommandMixin:
                         event,
                         user_id=user_id,
                         background_quality=background_quality,
+                        policy=policy,
                     )
                 except Exception as exc:
                     logger.warning(

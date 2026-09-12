@@ -40,11 +40,14 @@ class LoliconClient:
         tag: str = "",
         count: int = 20,
         aspect_ratio: str = "",
+        r18: int = 0,
     ) -> list[dict[str, Any]]:
         if not self.available:
             raise RuntimeError("Lolicon API 未配置")
+        if type(r18) is not int or r18 not in (0, 2):
+            raise ValueError("r18 must be 0 or 2")
         params: list[tuple[str, str]] = [
-            ("r18", "0"),
+            ("r18", str(r18)),
             ("num", str(max(1, min(int(count), 20)))),
             ("excludeAI", "true" if self.exclude_ai else "false"),
         ]
@@ -67,14 +70,21 @@ class LoliconClient:
         return [self._normalize(item) for item in payload.get("data") or []]
 
     async def search(
-        self, tag: str, *, count: int = 20, aspect_ratio: str = ""
+        self,
+        tag: str,
+        *,
+        count: int = 20,
+        aspect_ratio: str = "",
+        r18: int = 0,
     ) -> list[dict[str, Any]]:
-        return await self.fetch(tag=tag, count=count, aspect_ratio=aspect_ratio)
+        return await self.fetch(
+            tag=tag, count=count, aspect_ratio=aspect_ratio, r18=r18
+        )
 
     async def random(
-        self, *, count: int = 20, aspect_ratio: str = ""
+        self, *, count: int = 20, aspect_ratio: str = "", r18: int = 0
     ) -> list[dict[str, Any]]:
-        return await self.fetch(count=count, aspect_ratio=aspect_ratio)
+        return await self.fetch(count=count, aspect_ratio=aspect_ratio, r18=r18)
 
     @staticmethod
     def _normalize(item: dict[str, Any]) -> dict[str, Any]:

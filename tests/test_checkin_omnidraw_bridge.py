@@ -342,4 +342,3 @@ async def test_grant_daily_checkin_bonus_without_plugin_fails():
     bridge = OmnidrawBridge(SimpleNamespace(get_registered_star=lambda name: None))
     status = await bridge.grant_daily_checkin_bonus("10001")
     assert not status.granted
-

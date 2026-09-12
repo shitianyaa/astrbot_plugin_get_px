@@ -20,7 +20,7 @@
         </div>
         <div class="safety-lock" role="status" aria-label="内容安全状态">
           <span class="pulse" aria-hidden="true"></span>
-          <span><strong>安全策略已锁定</strong>仅允许普通分级 (x_restrict = 0) 作品</span>
+          <span><strong>会话策略可配置</strong><span id="safetyStatusSummary">群聊与私聊用户均可分别设置分级与内置词</span></span>
         </div>
       </header>
 
@@ -35,6 +35,7 @@
         <button class="active" data-view="ranking" type="button">群排行</button>
         <button data-view="members" type="button">成员数值</button>
         <button data-view="safety" type="button">内容安全</button>
+        <button data-view="policies" type="button">会话策略</button>
         <button data-view="data" type="button">数据管理</button>
         <button id="refreshBtn" class="refresh" type="button">刷新数据</button>
       </nav>
@@ -120,11 +121,13 @@
           <div class="section-heading wide">
             <p>CONTENT GUARD</p>
             <h2 id="safetyTitle">内容安全策略</h2>
-            <span>安全策略已强制开启。系统屏蔽词在搜索前拦截，黑名单作品在返回后自动阻断。</span>
+            <span>群聊与私聊用户均可单独设置普通分级限制和内置安全词。</span>
           </div>
 
+          <p>策略已移至独立的“会话策略”页面。</p>
+
           <div class="policy-strip">
-            <div><b>1</b><span>分级限制<strong>仅 x_restrict = 0</strong></span></div>
+            <div><b>1</b><span>分级限制<strong>按会话设置</strong></span></div>
             <div><b>2</b><span>文本检查<strong>标题 / 简介 / 标签 / 翻译标签</strong></span></div>
             <div><b>3</b><span>ID 拦截<strong>Pixiv 作品黑名单</strong></span></div>
           </div>
@@ -186,6 +189,84 @@
             </form>
             <div id="blacklistContent" class="blacklist-list"></div>
           </section>
+        </section>
+
+        <section id="policiesView" class="workspace" aria-labelledby="policiesTitle">
+          <div class="section-heading wide policy-heading">
+            <p>CONTENT GUARD</p>
+            <h2 id="policiesTitle">会话策略配置</h2>
+            <div class="policy-scope-switch" role="group" aria-label="会话策略类型">
+              <button id="policyGroupScopeBtn" type="button" aria-pressed="true">群聊策略</button>
+              <button id="policyPrivateScopeBtn" type="button" aria-pressed="false">私聊策略</button>
+            </div>
+            <span id="policyScopeHint">按群 ID 独立保存；删除后恢复严格策略。</span>
+          </div>
+          <div class="policies-layout">
+            <section class="panel policy-catalog" aria-labelledby="policyCatalogTitle">
+              <div class="panel-title">
+                <h3 id="policyCatalogTitle">已配置会话 <span id="policyCount" class="count" aria-live="polite">0</span></h3>
+                <button id="policyAddBtn" type="button">添加会话</button>
+              </div>
+              <label for="policySearch">搜索会话 ID</label>
+              <input id="policySearch" type="search" autocomplete="off" placeholder="输入 ID 筛选">
+              <div id="policyList" aria-live="polite" aria-label="已配置会话列表"></div>
+            </section>
+            <section class="panel policy-editor" aria-labelledby="policyEditorTitle">
+              <div class="panel-title">
+                <h3 id="policyEditorTitle">策略编辑</h3>
+                <span id="policyEditorStatus" class="policy-editor-status" aria-live="polite">未选择</span>
+              </div>
+              <p id="policyEditorEmpty" class="empty editor-empty">从左侧选择会话，或添加第一条策略。</p>
+              <form id="policyEditorForm" hidden>
+                <div class="policy-meta">
+                  <label id="policyIdLabel" for="policyGroupId">群 ID</label>
+                  <input id="policyGroupId" maxlength="128" required readonly>
+                  <small id="policySavedAt">尚无保存记录</small>
+                </div>
+                  <label class="policy-toggle-card">
+                  <input id="policyGeneralToggle" type="checkbox">
+                  <span><strong>强制普通分级</strong><small>开启后仅允许普通分级作品。</small></span>
+                  </label>
+                <label class="policy-toggle-card">
+                  <input id="policyBuiltinToggle" type="checkbox">
+                  <span><strong>启用内置安全词</strong><small>开启使用内置词与全局列表并忽略独立列表；关闭仅使用当前会话独立列表。</small></span>
+                </label>
+                <div class="policy-rule-mode-group">
+                  <p id="policyRuleModeStatus" class="policy-mode-status" aria-live="polite"></p>
+                  <section class="policy-list-editor" aria-labelledby="policyCustomTermTitle">
+                    <h4 id="policyCustomTermTitle">独立自定义屏蔽词</h4>
+                    <div class="policy-list-add"><input id="policyCustomTermInput" type="text"><button id="policyCustomTermAddBtn" type="button">添加</button></div>
+                    <p id="policyCustomTermError" class="form-error" aria-live="polite"></p><div id="policyCustomTermList" class="policy-chip-list" aria-live="polite"></div>
+                    <div class="policy-bulk-actions"><button type="button" data-policy-field="custom_terms" data-policy-target="group">应用到全部群聊策略</button><button type="button" data-policy-field="custom_terms" data-policy-target="private">应用到全部私聊策略</button><button type="button" data-policy-field="custom_terms" data-policy-target="all">应用到全部策略</button></div>
+                  </section>
+                </div>
+                <section class="policy-list-editor" aria-labelledby="policyIllustIdTitle">
+                    <h4 id="policyIllustIdTitle">独立作品 ID 黑名单</h4>
+                    <div class="policy-list-add"><input id="policyIllustIdInput" type="text" inputmode="numeric"><button id="policyIllustIdAddBtn" type="button">添加</button></div>
+                    <p id="policyIllustIdError" class="form-error" aria-live="polite"></p><div id="policyIllustIdList" class="policy-chip-list" aria-live="polite"></div>
+                    <div class="policy-bulk-actions"><button type="button" data-policy-field="blacklisted_illust_ids" data-policy-target="group">应用到全部群聊策略</button><button type="button" data-policy-field="blacklisted_illust_ids" data-policy-target="private">应用到全部私聊策略</button><button type="button" data-policy-field="blacklisted_illust_ids" data-policy-target="all">应用到全部策略</button></div>
+                </section>
+                <p id="policyError" class="form-error" aria-live="polite"></p>
+                <p id="policyBatchStatus" class="policy-mode-status policy-batch-status" aria-live="polite" hidden></p>
+                <div class="policy-actions">
+                  <button id="policySaveBtn" type="submit">保存修改</button>
+                  <button id="policyDeleteBtn" type="button">删除会话</button>
+                </div>
+              </form>
+            </section>
+          </div>
+          <dialog id="policyAddDialog">
+            <form id="policyAddForm">
+              <h3 id="policyAddTitle">添加群策略</h3>
+              <label id="policyAddLabel" for="policyAddInput">群 ID</label>
+              <input id="policyAddInput" maxlength="128" required>
+              <p id="policyAddError" class="form-error" aria-live="polite"></p>
+              <div class="dialog-actions">
+                <button value="cancel" type="button" id="policyAddCancel">取消</button>
+                <button type="submit" id="policyAddSubmit">添加</button>
+              </div>
+            </form>
+          </dialog>
         </section>
 
         <!-- 数据管理模块 -->

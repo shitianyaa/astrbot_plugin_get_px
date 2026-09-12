@@ -36,6 +36,7 @@ from pathlib import Path
 import re
 import time
 import weakref
+from copy import deepcopy
 
 from astrbot.api.all import AstrBotConfig, Image, logger
 from astrbot.api.event import AstrMessageEvent, filter
@@ -43,6 +44,7 @@ from astrbot.api.star import Context, Star
 from astrbot.core.star.filter.command import GreedyStr
 from astrbot.core.star.star_tools import StarTools
 from .checkin import CheckinStore, UnversionedCheckinDatabaseError
+from .group_safety import GroupSafetyService
 from .checkin.application import CheckinApplicationMixin
 from .checkin.artwork import CheckinArtworkMixin
 from .checkin.cache import CheckinCardCache
@@ -65,7 +67,7 @@ from .plugin_api import PluginWebApi
 
 LOG_PREFIX = "[GetPx]"
 PLUGIN_NAME = "astrbot_plugin_get_px"
-PLUGIN_VERSION = "v3.7.0"
+PLUGIN_VERSION = "v3.8.0"
 WEB_INTERNAL_ERROR_MESSAGE = "服务内部错误，请稍后重试"
 
 AUTO_TRIGGER_PATTERN = r"^/?(来\s*(.*?)(份|个|张|点))(.*?)(福利|色|瑟|涩|塞)?图$"
@@ -107,6 +109,7 @@ class GetPxPlugin(
     def __init__(self, context: Context, config: AstrBotConfig):
         super().__init__(context, config)
         self.config = config
+        self.group_safety_service = GroupSafetyService(config, log_prefix=LOG_PREFIX)
         self.client: PixivClient | None = None
         self.lolicon_client: LoliconClient | None = None
         self.downloader = ImageDownloader(
@@ -165,6 +168,26 @@ class GetPxPlugin(
             f"{LOG_PREFIX} 签到数据库{database_action}: "
             f"version={PLUGIN_VERSION}, path={self.checkin_store._db_path}"
         )
+        policy_migration_succeeded = await self.group_safety_service.initialize(
+            self.checkin_store
+        )
+        if policy_migration_succeeded:
+            try:
+                convergence = await asyncio.to_thread(
+                    self.checkin_store.converge_legacy_group_policy_schema
+                )
+                logger.info(
+                    f"{LOG_PREFIX} 会话策略数据库收敛完成: "
+                    f"from_version={convergence['from_version']} "
+                    f"to_version={convergence['to_version']} "
+                    f"backup_path={convergence['backup_path'] or '-'}"
+                )
+            except Exception as exc:
+                logger.error(
+                    f"{LOG_PREFIX} 会话策略数据库收敛失败，终止插件加载: "
+                    f"error_type={type(exc).__name__}"
+                )
+                raise
         self.checkin_cache = CheckinCardCache(self.data_dir / "checkin_card_cache")
         self._omnidraw_hint_logged = False
         if self._cfg_bool("checkin_omnidraw_link_enabled", False):
@@ -715,6 +738,9 @@ class GetPxPlugin(
         "dedupe_days": "content_dedupe",
         "dedupe_ttl_hours": "content_dedupe",
         "dedupe_days_migrated": "content_dedupe",
+        "group_content_safety_policies": "content_dedupe",
+        "private_content_safety_policies": "content_dedupe",
+        "group_content_safety_policies_migrated": "content_dedupe",
         "checkin_omnidraw_link_enabled": "checkin_omnidraw",
         "checkin_omnidraw_quota_cost": "checkin_omnidraw",
         "checkin_omnidraw_quota_default": "checkin_omnidraw",
@@ -805,7 +831,80 @@ class GetPxPlugin(
         config = getattr(self, "config", None)
         if config is None:
             return
+        policy_keys = {"group_content_safety_policies",
+                       "private_content_safety_policies",
+                       "group_content_safety_policies_migrated"}
         if self._cfg_bool("_grouped_config_migrated", False):
+            # Repair old invisible policy templates transactionally. AstrBot may
+            # pre-materialize schema defaults, or omit the three keys entirely.
+            group_present = isinstance(config.get("content_dedupe"), dict)
+            group = config.get("content_dedupe") if group_present else None
+            nested_snapshot = {}
+            if group_present:
+                for key in policy_keys:
+                    present = key in group
+                    value = group.get(key)
+                    nested_snapshot[key] = (present, value, deepcopy(value))
+            runtime = config.get("runtime")
+            runtime_marker_present = isinstance(runtime, dict) and "_grouped_config_migrated" in runtime
+            runtime_marker = (runtime.get("_grouped_config_migrated") if runtime_marker_present else None)
+            tracked = (*policy_keys, "_grouped_config_migrated")
+            root_snapshot = {
+                key: (key in config, config.get(key), deepcopy(config.get(key)))
+                for key in tracked
+            }
+            moved = []
+            try:
+                if not group_present:
+                    group = {}
+                    config["content_dedupe"] = group
+                for key in policy_keys:
+                    legacy = config.get(key)
+                    nested = group.get(key)
+                    if key == "group_content_safety_policies_migrated":
+                        if bool(legacy) and not bool(nested):
+                            group[key] = True
+                            moved.append(key)
+                    elif (not nested and isinstance(legacy, list) and
+                          any(isinstance(item, dict) and item.get("__template_key")
+                              for item in legacy)):
+                        group[key] = deepcopy(legacy)
+                        moved.append(key)
+                if moved:
+                    saver = getattr(config, "save_config", None)
+                    if not callable(saver):
+                        raise RuntimeError("config.save_config is required")
+                    saver()
+            except Exception as exc:
+                if group_present:
+                    for key, (present, value, value_copy) in nested_snapshot.items():
+                        if present:
+                            current = group.get(key)
+                            if isinstance(value, list):
+                                value[:] = deepcopy(value_copy)
+                                group[key] = value
+                            else:
+                                group[key] = deepcopy(value_copy)
+                        else:
+                            group.pop(key, None)
+                else:
+                    config.pop("content_dedupe", None)
+                if isinstance(runtime, dict):
+                    if runtime_marker_present:
+                        runtime["_grouped_config_migrated"] = runtime_marker
+                    else:
+                        runtime.pop("_grouped_config_migrated", None)
+                for key, (present, value, value_copy) in root_snapshot.items():
+                    if present:
+                        current = config.get(key)
+                        if isinstance(current, list) and isinstance(value, list):
+                            current[:] = deepcopy(value_copy)
+                            config[key] = current
+                        else:
+                            config[key] = deepcopy(value_copy)
+                    else:
+                        config.pop(key, None)
+                logger.warning(f"{LOG_PREFIX} 会话策略兼容迁移保存失败: error_type={type(exc).__name__}")
             return
         moved = []
         for key, group_key in self._CONFIG_KEY_TO_GROUP.items():
@@ -821,7 +920,11 @@ class GetPxPlugin(
             if not isinstance(group, dict):
                 group = {}
                 config[group_key] = group
-            # 扁平值优先，覆盖组里已有的 schema 默认值
+            # 策略模板同时有 invisible 扁平兼容键；仅在嵌套值为空时
+            # 迁移非空旧值，避免框架默认的 [] 覆盖现有分组策略。
+            if key in policy_keys:
+                if group.get(key) and not flat_val:
+                    continue
             group[key] = flat_val
             moved.append(key)
         self._cfg_set("_grouped_config_migrated", True)

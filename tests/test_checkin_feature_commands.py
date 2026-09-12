@@ -574,6 +574,8 @@ async def test_preview_uses_real_data_and_remote_greeting_without_writes(
 
         after_snapshot = await plugin.checkin_store.export_snapshot()
         assert outputs == []
+        before_snapshot.pop("exported_at")
+        after_snapshot.pop("exported_at")
         assert before_snapshot == after_snapshot
         event.send.assert_awaited_once()
         render_kwargs = plugin._render_checkin_card_with_fallback.await_args.kwargs
@@ -583,6 +585,7 @@ async def test_preview_uses_real_data_and_remote_greeting_without_writes(
             claim_usage=False,
             refresh_preview=True,
             render_tier="省流量",
+            policy=render_kwargs["policy"],
         )
         assert render_kwargs["profile"].coins == result.profile.coins
         assert render_kwargs["record"].total_days_after == result.profile.total_days

@@ -8,7 +8,7 @@
 | --- | --- | --- | --- |
 | `pixiv_refresh_token` | `string` | 空 | Lolicon 主源失败时用于 Pixiv 搜索或推荐作品回退；留空不影响 Lolicon 发图 |
 | `lolicon_api_url` | `string` | `https://api.lolicon.app/setu/v2` | 首选图片源地址；留空停用 Lolicon，仅 Pixiv 回退 |
-| `lolicon_exclude_ai` | `bool` | `true` | 向 Lolicon API 传 excludeAI=true；R18 始终关闭 |
+| `lolicon_exclude_ai` | `bool` | `true` | 仅向 Lolicon API 传递 excludeAI=true/false；R18 与普通混合由当前会话强制普通分级决定 |
 | `lolicon_image_proxy_origins` | `text` | 空 | 每行一个 http(s) origin，最多 5 个按序尝试；仅改写允许列表内 Pixiv 图片主机 |
 | `max_count` | `int` | `5` | 单次指令最多发送张数，范围 1–20 |
 | `p_coin_cost` | `int` | `20` | `/p` 成功发图每张金币，范围 0–200；0 免费 |
@@ -25,6 +25,9 @@
 | `dedupe_days` | `int` | `1` | 按北京时间自然日去重，0–7；0 关闭并清空记录。同群共享，缩短天数会在重载时清理超期记录 |
 | `dedupe_ttl_hours` | `float` | `24.0` | 旧版去重配置（迁移用，隐藏） |
 | `dedupe_days_migrated` | `bool` | `false` | 去重配置迁移标记（隐藏） |
+| `group_content_safety_policies` | `template_list` | `[]` | 群聊内容安全策略：强制普通分级、内置安全词开关、独立自定义屏蔽词与独立作品 ID 黑名单，按群 ID 生效；建议在管理中心维护 |
+| `private_content_safety_policies` | `template_list` | `[]` | 私聊内容安全策略：字段同群聊策略，按用户 ID 独立生效；建议在管理中心维护 |
+| `group_content_safety_policies_migrated` | `bool` | `false` | 会话策略迁移标记（隐藏） |
 
 ## 3. 万象画卷联动（`checkin_omnidraw`）
 
@@ -72,6 +75,18 @@
 | `rate_limit_seconds` | `int` | `3` | 同一用户两次请求最小间隔，0 禁用，0–60 秒 |
 | `webui_font_source` | `enum` | `mirror` | 插件管理中心 Google Fonts 加载方式：`mirror`(国内镜像)/`official`/`none` |
 
+## 会话内容安全策略
+
+群聊和私聊策略均为配置文件中的模板列表，可在插件配置页或管理中心按群 ID / 用户 ID 独立添加、编辑、删除。每条策略包含普通分级、内置安全词、独立自定义屏蔽词和独立作品 ID 黑名单。
+独立屏蔽词按保留标点的词条分别保存，例如 `r18g` 与 `r-18g` 是两个词条；全角/半角及大小写等价项会判重，过滤匹配仍忽略常见分隔符。
+
+| 启用内置安全词 | 生效规则 |
+| --- | --- |
+| 开启 | 内置安全词 + 内容安全页全局自定义屏蔽词/作品黑名单；忽略当前会话的两份独立列表。 |
+| 关闭 | 停止以上三类全局约束；仅使用当前会话独立自定义屏蔽词和独立作品 ID 黑名单。 |
+
+独立列表支持分别应用到所有群聊策略、所有私聊策略或全部策略；批量操作只覆盖对应字段，并在一次保存中完成，失败时回滚。缺少会话上下文、策略不存在或读取异常时严格启用普通分级和内置安全词。
+
 ## 配置维护规则
 
 - README 配置表必须和 `_conf_schema.json` 保持一致。
@@ -82,4 +97,4 @@
 - `dedupe_days` 缩短天数会在重载时清理超期记录，增加天数无法恢复已清理历史。
 - `image_quality` 不影响签到背景，签到卡/日历背景画质由 `checkin_card_quality_tier` 独立控制。
 - `pixiv_refresh_token` 留空时 Lolicon 失败直接报错，不进行 Pixiv 回退。
-- schema 顶层保留 37 个 `invisible` 旧扁平键（过渡版）。AstrBot 4.27+ 在加载插件配置时会删除 schema 之外的键，这些 invisible 键让旧扁平值在框架裁剪前存活，`_migrate_grouped_config` 随后搬到对应分组。迁移完成后下一版本可删除这些顶层键。
+- schema 顶层保留兼容迁移用的 `invisible` 旧扁平键。AstrBot 4.27+ 在加载插件配置时会删除 schema 之外的键，这些 invisible 键让旧扁平值在框架裁剪前存活，`_migrate_grouped_config` 随后搬到对应分组。迁移完成后下一版本可删除这些顶层键。
