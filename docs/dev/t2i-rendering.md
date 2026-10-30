@@ -24,6 +24,8 @@ Star.html_render(tmpl, data, return_url=False, options)
 
 约定：内容型海报（帮助图）高度自适应，新增指令图自动变高，不会被裁切；固定版式（日历、卡片）用 `clip` 钉死尺寸，尺寸约定由测试断言守护（`tests/test_checkin_help_asset.py`、`test_checkin_calendar.py`）。
 
+签到卡背景图以 base64 内联进模板后随模板 POST 给端点；原图过大时请求体可达 10MB 以上，远端网关会直接返回 504 HTML，渲染结果不是 JPEG，签到卡三个档位会连续降档失败并最终退回文字。为避免该问题，超过 1920px 或 1.5MB 的背景图会先等比缩放并重编码为 JPEG（质量 88）再内联，小图保持原始字节不变。
+
 所有模板必须自包含：CSS 内联、字体 base64 内联，严禁外部网络 URL。
 
 ## 本地重渲帮助图

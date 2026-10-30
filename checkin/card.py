@@ -33,6 +33,12 @@ _FONT_PATH = (
 )
 _SEASON_SHARED_DIR = _PLUGIN_ROOT / "templates" / "checkin_themes" / "_shared"
 _SEASON_ART_MARKER = "<!--__CHECKIN_CARD_ARTWORK__-->"
+# 背景图以 base64 内联进模板后整体 POST 给 T2I 端点；原图过大时请求体可达
+# 10MB 以上，远端网关会直接 504，签到卡随后因拿不到 JPEG 而全部降档失败。
+# 因此超过阈值（边长或字节数）的艺术图先等比压缩再内联。
+_DATA_URL_MAX_EDGE = 1920
+_DATA_URL_MAX_SOURCE_BYTES = 1_500_000
+_DATA_URL_JPEG_QUALITY = 88
 
 
 @lru_cache(maxsize=16)
@@ -364,11 +370,55 @@ def _file_to_data_url(path: str) -> str:
             if width <= 0 or height <= 0 or not mime_type.startswith("image/"):
                 return ""
             img.verify()
-        data = base64.b64encode(source_bytes).decode("ascii")
-        return f"data:{mime_type};base64,{data}"
+        if (
+            len(source_bytes) <= _DATA_URL_MAX_SOURCE_BYTES
+            and max(width, height) <= _DATA_URL_MAX_EDGE
+        ):
+            data = base64.b64encode(source_bytes).decode("ascii")
+            return f"data:{mime_type};base64,{data}"
+        data, compressed_bytes = _compress_artwork_for_card(source_bytes)
+        logger.debug(
+            f"{LOG_PREFIX} 签到背景图片已压缩: "
+            f"original_bytes={len(source_bytes)} "
+            f"compressed_bytes={compressed_bytes} "
+            f"max_edge={_DATA_URL_MAX_EDGE}"
+        )
+        return data
     except Exception as e:
         logger.warning(
             f"{LOG_PREFIX} 签到背景图片处理失败: "
             f"error_type={type(e).__name__}"
         )
         return ""
+
+
+def _compress_artwork_for_card(source_bytes: bytes) -> tuple[str, int]:
+    """将过大的背景图等比缩放并重编码为 JPEG，返回 data URL 与字节数。"""
+    from io import BytesIO
+
+    from PIL import Image as PILImage
+
+    with PILImage.open(BytesIO(source_bytes)) as img:
+        img.load()
+        if img.mode in ("RGBA", "LA") or (
+            img.mode == "P" and "transparency" in img.info
+        ):
+            rgba = img.convert("RGBA")
+            flattened = PILImage.new("RGB", rgba.size, (255, 255, 255))
+            flattened.paste(rgba, mask=rgba.split()[-1])
+            prepared = flattened
+        else:
+            prepared = img.convert("RGB")
+        prepared.thumbnail(
+            (_DATA_URL_MAX_EDGE, _DATA_URL_MAX_EDGE), PILImage.LANCZOS
+        )
+        buffer = BytesIO()
+        prepared.save(
+            buffer,
+            format="JPEG",
+            quality=_DATA_URL_JPEG_QUALITY,
+            optimize=True,
+        )
+    payload = buffer.getvalue()
+    encoded = base64.b64encode(payload).decode("ascii")
+    return f"data:image/jpeg;base64,{encoded}", len(payload)

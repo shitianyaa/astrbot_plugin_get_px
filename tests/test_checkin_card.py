@@ -176,6 +176,25 @@ class FileToDataUrlTest(unittest.TestCase):
             broken.write_bytes(b"not an image")
             self.assertEqual(_file_to_data_url(str(broken)), "")
 
+    def test_oversized_artwork_is_downscaled_and_reencoded(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            source = Path(tmp) / "large.png"
+            Image.new("RGBA", (2400, 3200), (20, 90, 180, 160)).save(
+                source, format="PNG"
+            )
+
+            data_url = _file_to_data_url(str(source))
+            header, encoded = data_url.split(",", 1)
+            decoded = base64.b64decode(encoded)
+
+            self.assertEqual(header, "data:image/jpeg;base64")
+            with Image.open(BytesIO(decoded)) as image:
+                self.assertEqual(image.format, "JPEG")
+                self.assertLessEqual(max(image.size), 1920)
+                self.assertGreaterEqual(max(image.size), 1900)
+                ratio = image.size[0] / image.size[1]
+                self.assertAlmostEqual(ratio, 2400 / 3200, places=2)
+
 
 class CheckinCardRenderQualityTest(unittest.IsolatedAsyncioTestCase):
     async def test_configured_jpeg_quality_is_passed_to_renderer(self):
