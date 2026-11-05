@@ -36,9 +36,12 @@ _SEASON_ART_MARKER = "<!--__CHECKIN_CARD_ARTWORK__-->"
 # 背景图以 base64 内联进模板后整体 POST 给 T2I 端点；原图过大时请求体可达
 # 10MB 以上，远端网关会直接 504，签到卡随后因拿不到 JPEG 而全部降档失败。
 # 因此超过阈值（边长或字节数）的艺术图先等比压缩再内联。
+# 卡片与日历的输出分辨率不同，调用方各自传入 max_edge。
 _DATA_URL_MAX_EDGE = 1920
 _DATA_URL_MAX_SOURCE_BYTES = 1_500_000
 _DATA_URL_JPEG_QUALITY = 88
+# 解码前的像素预算：超过后放弃该背景（回退占位图），避免原图解码撑爆内存。
+_DATA_URL_MAX_PIXELS = 40_000_000
 
 
 @lru_cache(maxsize=16)
@@ -352,7 +355,7 @@ def _artwork_credit(view_model: CheckinCardViewModel) -> str:
     return f"今日作品：{title}{author}{pixiv}"
 
 
-def _file_to_data_url(path: str) -> str:
+def _file_to_data_url(path: str, *, max_edge: int = _DATA_URL_MAX_EDGE) -> str:
     if not path:
         return ""
     file_path = Path(path)
@@ -372,16 +375,18 @@ def _file_to_data_url(path: str) -> str:
             img.verify()
         if (
             len(source_bytes) <= _DATA_URL_MAX_SOURCE_BYTES
-            and max(width, height) <= _DATA_URL_MAX_EDGE
+            and max(width, height) <= max_edge
         ):
             data = base64.b64encode(source_bytes).decode("ascii")
             return f"data:{mime_type};base64,{data}"
-        data, compressed_bytes = _compress_artwork_for_card(source_bytes)
+        data, compressed_bytes = _compress_artwork_for_card(
+            source_bytes, max_edge=max_edge
+        )
         logger.debug(
             f"{LOG_PREFIX} 签到背景图片已压缩: "
             f"original_bytes={len(source_bytes)} "
             f"compressed_bytes={compressed_bytes} "
-            f"max_edge={_DATA_URL_MAX_EDGE}"
+            f"max_edge={max_edge}"
         )
         return data
     except Exception as e:
@@ -392,33 +397,52 @@ def _file_to_data_url(path: str) -> str:
         return ""
 
 
-def _compress_artwork_for_card(source_bytes: bytes) -> tuple[str, int]:
-    """将过大的背景图等比缩放并重编码为 JPEG，返回 data URL 与字节数。"""
+def _artwork_keeps_alpha(img) -> bool:
+    """透明图（RGBA/LA/PA，或带 transparency 信息的 P/RGB/L）保留透明通道。"""
+    if img.mode in ("RGBA", "LA", "PA"):
+        return True
+    return "transparency" in img.info
+
+
+def _compress_artwork_for_card(
+    source_bytes: bytes, *, max_edge: int = _DATA_URL_MAX_EDGE
+) -> tuple[str, int]:
+    """按目标边长等比缩放并重编码背景图，返回 data URL 与字节数。
+
+    - JPEG 先 draft 到目标尺寸再解码，避免解出整张原图；
+    - 先缩放、后应用 EXIF 方向并转换色彩，尽量少创建原尺寸副本；
+    - 有透明通道的图输出 PNG 保留 alpha，其余输出 JPEG。
+    """
     from io import BytesIO
 
     from PIL import Image as PILImage
+    from PIL import ImageOps
 
     with PILImage.open(BytesIO(source_bytes)) as img:
-        img.load()
-        if img.mode in ("RGBA", "LA") or (
-            img.mode == "P" and "transparency" in img.info
-        ):
-            rgba = img.convert("RGBA")
-            flattened = PILImage.new("RGB", rgba.size, (255, 255, 255))
-            flattened.paste(rgba, mask=rgba.split()[-1])
-            prepared = flattened
+        width, height = img.size
+        if width * height > _DATA_URL_MAX_PIXELS:
+            raise ValueError(f"artwork too large: {width}x{height}")
+        if str(img.format or "").upper() == "JPEG":
+            img.draft("RGB", (max_edge, max_edge))
+        keeps_alpha = _artwork_keeps_alpha(img)
+        img.thumbnail((max_edge, max_edge), PILImage.LANCZOS)
+        transposed = ImageOps.exif_transpose(img)
+        if transposed is not None:
+            img = transposed
+        buffer = BytesIO()
+        if keeps_alpha:
+            prepared = img.convert("RGBA")
+            prepared.save(buffer, format="PNG", optimize=True)
+            mime = "png"
         else:
             prepared = img.convert("RGB")
-        prepared.thumbnail(
-            (_DATA_URL_MAX_EDGE, _DATA_URL_MAX_EDGE), PILImage.LANCZOS
-        )
-        buffer = BytesIO()
-        prepared.save(
-            buffer,
-            format="JPEG",
-            quality=_DATA_URL_JPEG_QUALITY,
-            optimize=True,
-        )
+            prepared.save(
+                buffer,
+                format="JPEG",
+                quality=_DATA_URL_JPEG_QUALITY,
+                optimize=True,
+            )
+            mime = "jpeg"
     payload = buffer.getvalue()
     encoded = base64.b64encode(payload).decode("ascii")
-    return f"data:image/jpeg;base64,{encoded}", len(payload)
+    return f"data:image/{mime};base64,{encoded}", len(payload)

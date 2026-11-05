@@ -1,4 +1,5 @@
 import base64
+import os
 from dataclasses import FrozenInstanceError, replace
 import sys
 import tempfile
@@ -179,7 +180,7 @@ class FileToDataUrlTest(unittest.TestCase):
     def test_oversized_artwork_is_downscaled_and_reencoded(self):
         with tempfile.TemporaryDirectory() as tmp:
             source = Path(tmp) / "large.png"
-            Image.new("RGBA", (2400, 3200), (20, 90, 180, 160)).save(
+            Image.new("RGB", (2400, 3200), (20, 90, 180)).save(
                 source, format="PNG"
             )
 
@@ -194,6 +195,90 @@ class FileToDataUrlTest(unittest.TestCase):
                 self.assertGreaterEqual(max(image.size), 1900)
                 ratio = image.size[0] / image.size[1]
                 self.assertAlmostEqual(ratio, 2400 / 3200, places=2)
+
+    def test_heavy_artwork_within_edge_limit_is_recompressed(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            source = Path(tmp) / "heavy.png"
+            payload = os.urandom(1600 * 1200 * 3)
+            Image.frombytes("RGB", (1600, 1200), payload).save(source, format="PNG")
+            self.assertGreater(source.stat().st_size, 1_500_000)
+
+            data_url = _file_to_data_url(str(source))
+            header, encoded = data_url.split(",", 1)
+            decoded = base64.b64decode(encoded)
+
+            self.assertEqual(header, "data:image/jpeg;base64")
+            with Image.open(BytesIO(decoded)) as image:
+                self.assertEqual(image.format, "JPEG")
+                self.assertEqual(image.size, (1600, 1200))
+
+    def test_exif_orientation_is_applied_when_reencoding(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            source = Path(tmp) / "rotated.jpg"
+            exif = Image.Exif()
+            exif[0x0112] = 6  # 顺时针 90°，显示时宽高互换
+            Image.new("RGB", (2400, 1200), (30, 60, 90)).save(
+                source, format="JPEG", exif=exif
+            )
+
+            data_url = _file_to_data_url(str(source))
+            _, encoded = data_url.split(",", 1)
+            with Image.open(BytesIO(base64.b64decode(encoded))) as image:
+                self.assertEqual(image.size, (960, 1920))
+
+    def test_rgba_artwork_keeps_alpha_channel(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            source = Path(tmp) / "alpha.png"
+            image = Image.new("RGBA", (2400, 1600), (0, 0, 0, 0))
+            image.paste((200, 40, 40, 255), (200, 200, 2200, 1400))
+            image.save(source, format="PNG")
+
+            header, encoded = _file_to_data_url(str(source)).split(",", 1)
+            self.assertEqual(header, "data:image/png;base64")
+            with Image.open(BytesIO(base64.b64decode(encoded))) as decoded:
+                self.assertEqual(decoded.format, "PNG")
+                self.assertEqual(decoded.mode, "RGBA")
+                self.assertEqual(decoded.getpixel((0, 0))[3], 0)
+                self.assertEqual(decoded.getpixel((1200, 800))[3], 255)
+
+    def test_rgb_transparency_is_preserved(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            source = Path(tmp) / "rgb-transparent.png"
+            Image.new("RGB", (2400, 1600), (255, 0, 0)).save(
+                source, format="PNG", transparency=(255, 0, 0)
+            )
+
+            header, encoded = _file_to_data_url(str(source)).split(",", 1)
+            self.assertEqual(header, "data:image/png;base64")
+            with Image.open(BytesIO(base64.b64decode(encoded))) as decoded:
+                self.assertEqual(decoded.mode, "RGBA")
+                self.assertEqual(decoded.getpixel((0, 0))[3], 0)
+
+    def test_grayscale_transparency_is_preserved(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            source = Path(tmp) / "gray-transparent.png"
+            Image.new("L", (2400, 1600), 0).save(
+                source, format="PNG", transparency=0
+            )
+
+            header, encoded = _file_to_data_url(str(source)).split(",", 1)
+            self.assertEqual(header, "data:image/png;base64")
+            with Image.open(BytesIO(base64.b64decode(encoded))) as decoded:
+                self.assertEqual(decoded.mode, "RGBA")
+                self.assertEqual(decoded.getpixel((0, 0))[3], 0)
+
+    def test_calendar_background_keeps_ultra_edge(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            source = Path(tmp) / "calendar.png"
+            Image.new("RGB", (4000, 2250), (10, 20, 30)).save(
+                source, format="PNG"
+            )
+
+            _, encoded = _file_to_data_url(
+                str(source), max_edge=2880
+            ).split(",", 1)
+            with Image.open(BytesIO(base64.b64decode(encoded))) as image:
+                self.assertEqual(image.size, (2880, 1620))
 
 
 class CheckinCardRenderQualityTest(unittest.IsolatedAsyncioTestCase):

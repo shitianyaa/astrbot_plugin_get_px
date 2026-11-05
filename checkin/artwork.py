@@ -49,6 +49,13 @@ _CHECKIN_BACKGROUND_MODE_LABELS = {
     "fallback": "占位图",
 }
 
+# 日历极致档输出 2880×1620，背景按同一上限压缩，避免先缩到卡片尺寸再放大。
+_CALENDAR_ARTWORK_MAX_EDGE = 2880
+
+
+def _calendar_background_data_url(path: str) -> str:
+    return _file_to_data_url(path, max_edge=_CALENDAR_ARTWORK_MAX_EDGE)
+
 
 def _checkin_background_mode_label(background: CardBackground | None) -> str:
     mode = getattr(background, "mode", "") or "none"
@@ -1008,7 +1015,7 @@ class CheckinArtworkMixin:
             background_credit = getattr(background, "pixiv_caption", "") or ""
         # 读文件 + PIL 校验 + base64 可达数 MB，与视图组装一并放进线程池
         background_url = await asyncio.to_thread(
-            _file_to_data_url,
+            _calendar_background_data_url,
             str(getattr(background, "image_path", "") or ""),
         )
         data = await asyncio.to_thread(
