@@ -100,3 +100,7 @@ python -m pytest -q
 ## OneBot 直调实验
 
 `send_once()` 在 aiocqhttp 且存在事件 `bot` 时，根据 `onebot_image_transport` 选择直接调用事件已有客户端的 `call_action()`，不另建连接。单图调用 send_group_msg/send_private_msg，合并转发调用 send_group_forward_msg/send_private_forward_msg，保留 self_id 路由。file 模式显式转换图片为本地 URI，base64 模式沿用图片组件编码；两者均直接组装文本、图片和转发节点。astrbot 模式或其他平台继续走原框架链路。该实验保留未知状态不重发、不计费规则，未引入参考插件的超时判成功、路径到编码自动补发或 NapCat 分块上传兜底。
+
+## 下载临时目录
+
+initialize 获取插件数据目录后，将 `data_dir / "temp"` 注入共享 ImageDownloader。下载器直接在该目录创建 `get_px_*` 文件，未初始化时明确报错，不回退系统临时目录。/p、背景、头像与黑名单缩略图共用该下载器；卡片缓存继续使用 checkin_card_cache，框架 T2I 自行产生的临时文件不在此变更范围。Pages 仅统计和清理插件 temp 内的 get_px_*，沿用最近10分钟文件保护。现有发送结束清理和错误/取消清理不变，不迁移或扫描旧全局临时目录。

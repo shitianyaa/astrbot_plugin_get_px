@@ -211,3 +211,7 @@ async def test_something_async():
 ## OneBot 直调实验验证
 
 运行 `python -m pytest -q tests/test_delivery.py tests/test_p_coin_cost.py`，验证群聊/私聊、单图/合并转发三种传输模式的 API 名称、路由、文件 URI 和 base64 原始字节，以及异常时无自动补发。真实部署请分别选择 file、base64、astrbot 重载后发送同一作品，对比 transport、耗时和错误回包；路径模式要求协议端可访问同一文件。自动化测试只使用 Mock OneBot 客户端，不向群聊发消息。
+
+## 插件下载临时目录回归
+
+`python -m pytest -q tests/test_downloader.py tests/test_plugin_api_cache.py` 验证指定目录落盘、未初始化不回退系统 tmp、错误时清理半成品，以及 Pages 不调用系统临时目录、只删除过期下载、保留活跃文件与无关文件。部署检查需确认日志中的 file URI 对协议端可见，共享 data 目录不等于两端绝对路径自动相同。

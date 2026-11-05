@@ -449,6 +449,7 @@ class MainErrorHandlingTest(unittest.IsolatedAsyncioTestCase):
 
     async def test_initialize_logs_v3_migration_guidance_for_old_database(self):
         plugin = object.__new__(GetPxPlugin)
+        plugin.downloader = SimpleNamespace(temp_dir=None)
         plugin._init_client = lambda: None
 
         class FakeImageIndex:
@@ -483,6 +484,7 @@ class MainErrorHandlingTest(unittest.IsolatedAsyncioTestCase):
 
     async def test_initialize_migrates_policy_before_convergence_and_logs_result(self):
         plugin = object.__new__(GetPxPlugin)
+        plugin.downloader = SimpleNamespace(temp_dir=None)
         order = []
         plugin.config = {}
         plugin.context = SimpleNamespace()
@@ -562,6 +564,7 @@ class MainErrorHandlingTest(unittest.IsolatedAsyncioTestCase):
 
     async def test_initialize_skips_convergence_when_policy_migration_fails(self):
         plugin = object.__new__(GetPxPlugin)
+        plugin.downloader = SimpleNamespace(temp_dir=None)
         plugin.config = {}
         plugin.context = SimpleNamespace()
         plugin._migrate_grouped_config = Mock()
@@ -608,6 +611,7 @@ class MainErrorHandlingTest(unittest.IsolatedAsyncioTestCase):
 
     async def test_initialize_stops_after_convergence_failure(self):
         plugin = object.__new__(GetPxPlugin)
+        plugin.downloader = SimpleNamespace(temp_dir=None)
         plugin.config = {}
         plugin.context = SimpleNamespace()
         plugin._migrate_grouped_config = Mock()

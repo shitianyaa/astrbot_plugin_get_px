@@ -181,6 +181,8 @@ AstrBot WebUI 插件页的「pluginCenter」可：
 
 发图接口正常返回才确认为成功并计费；接口报错或超时时，送达状态记为未知，不自动重发，也不将合并转发改为逐条补发。请先查看聊天记录，未确认部分不扣费；这样可以减少接口误报导致的重复图片，但真实未送达时也需手动重新请求。
 
+图片下载临时文件统一放在插件专属数据目录 `data/plugin_data/astrbot_plugin_get_px/temp/`，由 AstrBot 的 `StarTools.get_data_dir()` 确定，不使用系统或 AstrBot 全局 tmp。Pages 的临时缓存统计和清理对应此目录，仅清理 `get_px_*`，跳过最近 10 分钟修改的文件；正常请求结束仍自动删除下载文件。共享 `data` 时也须确保协议端看到的绝对路径与传入路径一致。
+
 ## OneBot 直调实验分支
 
 本实验仅影响 `/p` 和自然语言发图。重载插件后，在“Pixiv 图源与下载”设置 `onebot_image_transport`：

@@ -142,6 +142,7 @@ class GetPxPlugin(
         """插件加载时初始化 Pixiv 客户端。"""
         data_dir = StarTools.get_data_dir(PLUGIN_NAME)
         self.data_dir = Path(data_dir)
+        self.downloader.temp_dir = self.data_dir / "temp"
         self._migrate_grouped_config()
         dedupe_days = self._migrate_dedupe_config()
         self._init_client()
