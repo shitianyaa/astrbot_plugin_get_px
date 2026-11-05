@@ -12,6 +12,8 @@
 ![Platform](https://img.shields.io/badge/platform-OneBot%20%2F%20aiocqhttp-f97316?style=flat-square)
 ![License](https://img.shields.io/badge/license-MIT-3b82f6?style=flat-square)
 
+> 欢迎来 QQ 群 **209949919** 交流、讨论，一起玩耍！
+
 <br>
 <img src="logo.png" alt="画境拾珍 Logo" width="180">
 
