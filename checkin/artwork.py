@@ -266,6 +266,52 @@ class CheckinArtworkMixin:
         selected["meta_pages"] = [page_data]
         return selected
 
+    async def _prepare_checkin_card_data(
+        self,
+        event: AstrMessageEvent,
+        *,
+        profile,
+        record,
+        background,
+        bot_name,
+        user_title: str = "",
+    ) -> dict[str, object]:
+        """下载并内联单次渲染资源，供画质降级复用。"""
+        avatar_url = ""
+        source = (
+            self._checkin_avatar_url(event)
+            if self._cfg_bool("checkin_avatar_enabled", True)
+            else ""
+        )
+        if source:
+            path = ""
+            try:
+                path, _size = await self.downloader.download(
+                    source, timeout=self._cfg_float("request_timeout", 30.0, 5.0, 120.0)
+                )
+                avatar_url = await asyncio.to_thread(_file_to_data_url, path)
+                if not avatar_url:
+                    raise ValueError("invalid avatar image")
+            except Exception as exc:
+                logger.warning(
+                    f"{LOG_PREFIX} 签到头像获取失败，使用昵称占位: "
+                    f"error_type={type(exc).__name__}"
+                )
+            finally:
+                cleanup(path)
+        return await asyncio.to_thread(
+            build_checkin_card_data,
+            profile=profile,
+            record=record,
+            bot_name=bot_name,
+            avatar_url=avatar_url,
+            background=background,
+            user_title=user_title,
+            background_refresh_cost=self._cfg_int(
+                "checkin_background_refresh_cost", 100, 0, 500
+            ),
+        )
+
     async def _render_checkin_card(
         self,
         event: AstrMessageEvent,
@@ -276,31 +322,24 @@ class CheckinArtworkMixin:
         bot_name: str,
         user_title: str = "",
         render_tier: str | None = None,
+        prepared_data: dict[str, object] | None = None,
     ) -> str:
-        avatar_url = (
-            self._checkin_avatar_url(event)
-            if self._cfg_bool("checkin_avatar_enabled", True)
-            else ""
-        )
         width = CHECKIN_CARD_WIDTH
         height = CHECKIN_CARD_HEIGHT
         render_spec = get_checkin_render_tier(
             render_tier or self._configured_checkin_render_tier()
         )
-        # 视图模型构建含背景图 Data URL 编码（读文件 + base64），放入线程池
-        data = await asyncio.to_thread(
-            build_checkin_card_data,
-            profile=profile,
-            record=record,
-            bot_name=bot_name,
-            avatar_url=avatar_url,
-            background=background,
-            user_title=user_title,
-            width=width,
-            height=height,
-            background_refresh_cost=self._cfg_int(
-                "checkin_background_refresh_cost", 100, 0, 500
-            ),
+        data = (
+            prepared_data
+            if prepared_data is not None
+            else await self._prepare_checkin_card_data(
+                event,
+                profile=profile,
+                record=record,
+                bot_name=bot_name,
+                background=background,
+                user_title=user_title,
+            )
         )
         options = {
             "full_page": False,
@@ -412,13 +451,23 @@ class CheckinArtworkMixin:
     ) -> tuple[Path, str]:
         last_error: Exception | None = None
         fallback_specs = checkin_render_fallbacks(preferred_tier)
+        prepared_data = None
         for tier_index, spec in enumerate(fallback_specs):
             renderer_source_path = ""
             render_succeeded = False
             started_at = time.monotonic()
 
             async def render_card() -> str:
-                nonlocal renderer_source_path
+                nonlocal renderer_source_path, prepared_data
+                if prepared_data is None:
+                    prepared_data = await self._prepare_checkin_card_data(
+                        event,
+                        profile=profile,
+                        record=record,
+                        background=background,
+                        bot_name=bot_name,
+                        user_title=user_title,
+                    )
                 renderer_source_path = await self._render_checkin_card(
                     event,
                     profile=profile,
@@ -427,6 +476,7 @@ class CheckinArtworkMixin:
                     bot_name=bot_name,
                     user_title=user_title,
                     render_tier=spec.name,
+                    prepared_data=prepared_data,
                 )
                 return renderer_source_path
 

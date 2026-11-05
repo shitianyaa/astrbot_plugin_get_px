@@ -468,6 +468,147 @@ class CheckinCardRenderQualityTest(unittest.IsolatedAsyncioTestCase):
             plugin.checkin_cache.cache_key.call_args.kwargs["template_version"],
             "yellow:1",
         )
+        self.assertEqual(
+            plugin.checkin_cache.cache_key.call_args.kwargs["view_model"]["resource_version"],
+            2,
+        )
+
+
+class CheckinInlineResourcesTest(unittest.IsolatedAsyncioTestCase):
+    def plugin(self):
+        plugin = object.__new__(GetPxPlugin)
+        plugin.config = {"checkin_avatar_enabled": True}
+        plugin.downloader = SimpleNamespace(download=AsyncMock())
+        plugin.html_render = AsyncMock(return_value="unused.jpg")
+        return plugin
+
+    def event(self, platform="aiocqhttp"):
+        return SimpleNamespace(
+            get_sender_id=lambda: "10001",
+            get_platform_name=lambda: platform,
+        )
+
+    def arguments(self):
+        return dict(
+            profile=_profile(), record=_record(), background=None, bot_name="neko"
+        )
+
+    async def test_avatar_is_inlined_in_every_theme_and_temp_file_removed(self):
+        from html.parser import HTMLParser
+        from jinja2 import Template
+        from astrbot_plugin_get_px.checkin.themes import CHECKIN_THEMES
+
+        class Resources(HTMLParser):
+            def handle_starttag(self, tag, attrs):
+                for key, value in attrs:
+                    if key in ("src", "href") and value:
+                        if value.startswith(("http://", "https://", "//")):
+                            raise AssertionError(f"external resource in {tag}")
+
+        plugin = self.plugin()
+        with tempfile.TemporaryDirectory() as tmp:
+            source = Path(tmp) / "avatar.png"
+            Image.new("RGB", (64, 64), "red").save(source)
+            plugin.downloader.download.return_value = (
+                str(source),
+                source.stat().st_size,
+            )
+            await plugin._render_checkin_card(self.event(), **self.arguments())
+            self.assertFalse(source.exists())
+        data = plugin.html_render.await_args.args[1]
+        self.assertTrue(data["avatar_url"].startswith("data:image/png;base64,"))
+        for theme_id in CHECKIN_THEMES:
+            html = Template(checkin_card.get_checkin_card_template(theme_id)).render(
+                **data
+            )
+            Resources().feed(html)
+            self.assertNotRegex(html, r"url\([\s\"\x27]*(?:https?:)?//")
+
+    async def test_avatar_failure_uses_placeholder_and_cleans_invalid_file(self):
+        plugin = self.plugin()
+        with tempfile.TemporaryDirectory() as tmp:
+            source = Path(tmp) / "invalid.jpg"
+            source.write_bytes(b"not an image")
+            plugin.downloader.download.return_value = (
+                str(source),
+                source.stat().st_size,
+            )
+            await plugin._render_checkin_card(self.event(), **self.arguments())
+            self.assertFalse(source.exists())
+        self.assertEqual(plugin.html_render.await_args.args[1]["avatar_url"], "")
+        plugin.downloader.download.side_effect = TimeoutError()
+        await plugin._render_checkin_card(self.event(), **self.arguments())
+        self.assertEqual(plugin.html_render.await_args.args[1]["avatar_url"], "")
+
+    async def test_disabled_and_other_platform_do_not_download(self):
+        plugin = self.plugin()
+        await plugin._render_checkin_card(self.event("other"), **self.arguments())
+        plugin.config["checkin_avatar_enabled"] = False
+        await plugin._render_checkin_card(self.event(), **self.arguments())
+        plugin.downloader.download.assert_not_awaited()
+
+    async def test_cancel_during_avatar_encoding_cleans_file(self):
+        import asyncio
+        from astrbot_plugin_get_px.checkin import artwork
+
+        plugin = self.plugin()
+        with tempfile.TemporaryDirectory() as tmp:
+            source = Path(tmp) / "avatar.png"
+            Image.new("RGB", (64, 64)).save(source)
+            plugin.downloader.download.return_value = (
+                str(source),
+                source.stat().st_size,
+            )
+            with patch.object(
+                artwork.asyncio,
+                "to_thread",
+                new=AsyncMock(side_effect=asyncio.CancelledError),
+            ):
+                with self.assertRaises(asyncio.CancelledError):
+                    await plugin._render_checkin_card(self.event(), **self.arguments())
+            self.assertFalse(source.exists())
+        plugin.html_render.assert_not_awaited()
+
+    async def test_fallback_prepares_resources_once(self):
+        from astrbot_plugin_get_px.checkin import artwork
+
+        plugin = self.plugin()
+        plugin.html_render.side_effect = RuntimeError("T2I unavailable")
+        with tempfile.TemporaryDirectory() as tmp:
+            source = Path(tmp) / "avatar.png"
+            Image.new("RGB", (64, 64)).save(source)
+            plugin.downloader.download.return_value = (
+                str(source),
+                source.stat().st_size,
+            )
+            with patch.object(
+                artwork,
+                "build_checkin_card_data",
+                wraps=artwork.build_checkin_card_data,
+            ) as build:
+                with self.assertRaisesRegex(RuntimeError, "all check-in"):
+                    await plugin._render_checkin_card_with_fallback(
+                        self.event(),
+                        preferred_tier="极致",
+                        **self.arguments(),
+                    )
+                self.assertEqual(build.call_count, 1)
+        plugin.downloader.download.assert_awaited_once()
+        self.assertEqual(plugin.html_render.await_count, 3)
+
+    async def test_cache_hit_skips_resource_preparation(self):
+        plugin = self.plugin()
+        plugin._checkin_card_cache_key = Mock(return_value="key")
+        cache = SimpleNamespace(store=AsyncMock(return_value="cached.jpg"))
+        result, _tier = await plugin._render_checkin_card_with_fallback(
+            self.event(),
+            preferred_tier="极致",
+            cache=cache,
+            **self.arguments(),
+        )
+        self.assertEqual(result, Path("cached.jpg"))
+        plugin.downloader.download.assert_not_awaited()
+        plugin.html_render.assert_not_awaited()
 
 
 if __name__ == "__main__":

@@ -34,6 +34,12 @@ Star.html_render(tmpl, data, return_url=False, options)
 
 所有模板必须自包含：CSS 内联、字体 base64 内联，严禁外部网络 URL。
 
+## 头像与单次渲染资源
+
+QQ 头像复用异步图片下载器及 `request_timeout` 配置，校验后以 data URL 内联，避免远端浏览器访问头像外链。失败时记录错误类型并使用昵称首字占位；下载文件在处理完成、失败或取消时清理。每次卡片降级流程延迟到实际渲染时准备资源，三档复用同一份头像与背景；缓存命中不下载头像。缓存键保留稳定源标识，并以 `resource_version` 区分处理规则，不包含临时路径或下载内容。
+
+画质探针必须显式传入 `--output-dir`，例如 Windows 使用 `python scripts/probe_checkin_t2i_quality.py --output-dir D:/tmp/codex/t2i-quality-probe`，避免在插件目录创建运行态 `data/`。
+
 ## 本地重渲帮助图
 
 ```bash

@@ -77,6 +77,8 @@ python scripts/ci/check_plugin_lifecycle.py \
 
 背景编码回归运行 `python -m pytest -q tests/test_checkin_card.py tests/test_checkin_calendar.py`，覆盖输出 1.5MB 预算、透明色重采样、透明 WebP、ICC 到 sRGB、无效 ICC 回退、40MP 解码前拦截和真实日历调用的 2880px 上限。上线前另用 `/签到`、`/签到日历` 验证三档真实 T2I 输出；本地编码测试不代表远端渲染成功。
 
+头像与资源复用回归包含：QQ 头像内联、关闭头像及非 QQ 平台不下载、超时和无效响应使用昵称占位、取消时清理下载文件、三档仅准备一次资源、缓存命中不准备资源，以及所有主题注入动态数据后的外链检查。
+
 ## 测试覆盖建议
 
 当前测试覆盖主要业务流程和边界情况：

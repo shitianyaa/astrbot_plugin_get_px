@@ -795,6 +795,7 @@ class CheckinApplicationMixin:
             render_tier or self._record_checkin_render_tier(record)
         )
         view_model["render_tier"] = render_spec.name
+        view_model["resource_version"] = 2
         view_model["render_quality"] = CHECKIN_JPEG_QUALITY
         view_model["background_quality"] = str(
             background.quality or render_spec.background_quality
