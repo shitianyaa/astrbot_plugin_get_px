@@ -75,6 +75,8 @@ python scripts/ci/check_plugin_lifecycle.py \
 
 渲染链路、各资产画布约定与自建端点本地重渲方法见 [`t2i-rendering.md`](./t2i-rendering.md)。
 
+背景编码回归运行 `python -m pytest -q tests/test_checkin_card.py tests/test_checkin_calendar.py`，覆盖输出 1.5MB 预算、透明色重采样、透明 WebP、ICC 到 sRGB、无效 ICC 回退、40MP 解码前拦截和真实日历调用的 2880px 上限。上线前另用 `/签到`、`/签到日历` 验证三档真实 T2I 输出；本地编码测试不代表远端渲染成功。
+
 ## 测试覆盖建议
 
 当前测试覆盖主要业务流程和边界情况：

@@ -38,6 +38,7 @@ _SEASON_ART_MARKER = "<!--__CHECKIN_CARD_ARTWORK__-->"
 # 因此超过阈值（边长或字节数）的艺术图先等比压缩再内联。
 # 卡片与日历的输出分辨率不同，调用方各自传入 max_edge。
 _DATA_URL_MAX_EDGE = 1920
+# 输入直传与重编码输出共用 1.5MB 背景预算，base64 部分最多约 2MB；非网关上限。
 _DATA_URL_MAX_SOURCE_BYTES = 1_500_000
 _DATA_URL_JPEG_QUALITY = 88
 # 解码前的像素预算：超过后放弃该背景（回退占位图），避免原图解码撑爆内存。
@@ -356,6 +357,7 @@ def _artwork_credit(view_model: CheckinCardViewModel) -> str:
 
 
 def _file_to_data_url(path: str, *, max_edge: int = _DATA_URL_MAX_EDGE) -> str:
+    """验证背景并限制内联体积；处理失败时返回空背景。"""
     if not path:
         return ""
     file_path = Path(path)
@@ -404,15 +406,37 @@ def _artwork_keeps_alpha(img) -> bool:
     return "transparency" in img.info
 
 
+def _artwork_to_srgb(img, keeps_alpha: bool):
+    """重编码时应用 ICC 色彩配置，并保留已有 alpha。"""
+    output_mode = "RGBA" if keeps_alpha else "RGB"
+    profile = img.info.get("icc_profile")
+    if not profile:
+        return img.convert(output_mode)
+
+    from io import BytesIO
+
+    from PIL import ImageCms
+
+    alpha = img.getchannel("A") if keeps_alpha else None
+    if keeps_alpha:
+        color = img.convert("L" if img.mode == "LA" else "RGB")
+    else:
+        color = img.convert("RGB") if img.mode == "P" else img
+    prepared = ImageCms.profileToProfile(
+        color,
+        ImageCms.ImageCmsProfile(BytesIO(profile)),
+        ImageCms.createProfile("sRGB"),
+        outputMode="RGB",
+    )
+    if alpha is not None:
+        prepared.putalpha(alpha)
+    return prepared
+
+
 def _compress_artwork_for_card(
     source_bytes: bytes, *, max_edge: int = _DATA_URL_MAX_EDGE
 ) -> tuple[str, int]:
-    """按目标边长等比缩放并重编码背景图，返回 data URL 与字节数。
-
-    - JPEG 先 draft 到目标尺寸再解码，避免解出整张原图；
-    - 先缩放、后应用 EXIF 方向并转换色彩，尽量少创建原尺寸副本；
-    - 有透明通道的图输出 PNG 保留 alpha，其余输出 JPEG。
-    """
+    """按目标边长和字节预算重编码背景，保留透明度、方向和 ICC 颜色。"""
     from io import BytesIO
 
     from PIL import Image as PILImage
@@ -423,26 +447,38 @@ def _compress_artwork_for_card(
         if width * height > _DATA_URL_MAX_PIXELS:
             raise ValueError(f"artwork too large: {width}x{height}")
         if str(img.format or "").upper() == "JPEG":
-            img.draft("RGB", (max_edge, max_edge))
+            img.draft(img.mode, (max_edge, max_edge))
         keeps_alpha = _artwork_keeps_alpha(img)
+        # 透明色必须先生成 alpha，否则重采样混色后不再匹配透明色。
+        if keeps_alpha and img.mode not in ("RGBA", "LA"):
+            img = img.convert("LA" if img.mode == "L" else "RGBA")
         img.thumbnail((max_edge, max_edge), PILImage.LANCZOS)
-        transposed = ImageOps.exif_transpose(img)
-        if transposed is not None:
-            img = transposed
-        buffer = BytesIO()
-        if keeps_alpha:
-            prepared = img.convert("RGBA")
-            prepared.save(buffer, format="PNG", optimize=True)
-            mime = "png"
-        else:
-            prepared = img.convert("RGB")
-            prepared.save(
-                buffer,
-                format="JPEG",
-                quality=_DATA_URL_JPEG_QUALITY,
-                optimize=True,
+        img = ImageOps.exif_transpose(img)
+        prepared = _artwork_to_srgb(img, keeps_alpha)
+        mime = "png" if keeps_alpha else "jpeg"
+        while True:
+            buffer = BytesIO()
+            if keeps_alpha:
+                prepared.save(buffer, format="PNG", optimize=True)
+            else:
+                prepared.save(
+                    buffer,
+                    format="JPEG",
+                    quality=_DATA_URL_JPEG_QUALITY,
+                    optimize=True,
+                )
+            payload = buffer.getvalue()
+            if len(payload) <= _DATA_URL_MAX_SOURCE_BYTES:
+                break
+            if prepared.size == (1, 1):
+                raise ValueError("artwork cannot fit inline byte budget")
+            scale = (_DATA_URL_MAX_SOURCE_BYTES / len(payload)) ** 0.5
+            next_size = tuple(max(1, int(edge * scale)) for edge in prepared.size)
+            logger.debug(
+                f"{LOG_PREFIX} 签到背景图片超过编码预算，继续缩小: "
+                f"encoded_bytes={len(payload)} byte_budget={_DATA_URL_MAX_SOURCE_BYTES} "
+                f"target_width={next_size[0]} target_height={next_size[1]}"
             )
-            mime = "jpeg"
-    payload = buffer.getvalue()
+            prepared = prepared.resize(next_size, PILImage.LANCZOS)
     encoded = base64.b64encode(payload).decode("ascii")
     return f"data:image/{mime};base64,{encoded}", len(payload)

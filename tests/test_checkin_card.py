@@ -1,15 +1,17 @@
 import base64
 import os
 from dataclasses import FrozenInstanceError, replace
+import random
+import struct
 import sys
 import tempfile
 import unittest
 from io import BytesIO
 from pathlib import Path
 from types import SimpleNamespace
-from unittest.mock import AsyncMock, Mock
+from unittest.mock import AsyncMock, Mock, patch
 
-from PIL import Image
+from PIL import Image, ImageCms
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 
@@ -279,6 +281,117 @@ class FileToDataUrlTest(unittest.TestCase):
             ).split(",", 1)
             with Image.open(BytesIO(base64.b64decode(encoded))) as image:
                 self.assertEqual(image.size, (2880, 1620))
+
+    def test_color_key_transparency_survives_resampling(self):
+        for mode, row, key in (
+            ("RGB", b"\xff\x00\x00\x00\x00\xff" * 32, (255, 0, 0)),
+            ("L", b"\x00\xff" * 32, 0),
+        ):
+            with self.subTest(mode=mode), tempfile.TemporaryDirectory() as tmp:
+                source = Path(tmp) / "color-key.png"
+                Image.frombytes(mode, (64, 64), row * 64).save(
+                    source, transparency=key
+                )
+                _, encoded = _file_to_data_url(str(source), max_edge=32).split(",", 1)
+                with Image.open(BytesIO(base64.b64decode(encoded))) as decoded:
+                    alpha_min, alpha_max = decoded.getchannel("A").getextrema()
+                    self.assertGreater(alpha_min, 0)
+                    self.assertLess(alpha_max, 255)
+
+    def test_reencoded_artwork_fits_byte_budget(self):
+        rng = random.Random(22)
+        for mode, size, max_edge in (
+            ("RGB", (1920, 1920), 1920),
+            ("RGBA", (1920, 1280), 1920),
+            ("RGBA", (2880, 1620), 2880),
+        ):
+            with self.subTest(mode=mode, size=size), tempfile.TemporaryDirectory() as tmp:
+                source = Path(tmp) / "detailed.png"
+                Image.frombytes(
+                    mode, size, rng.randbytes(size[0] * size[1] * len(mode))
+                ).save(source)
+                original = source.read_bytes()
+                _, encoded = _file_to_data_url(
+                    str(source), max_edge=max_edge
+                ).split(",", 1)
+                payload = base64.b64decode(encoded)
+                self.assertLessEqual(len(payload), 1_500_000)
+                self.assertLessEqual(len(encoded), 2_000_000)
+                with Image.open(BytesIO(payload)) as decoded:
+                    self.assertLess(max(decoded.size), max_edge)
+                    self.assertAlmostEqual(
+                        decoded.width / decoded.height, size[0] / size[1], places=2
+                    )
+                    if mode == "RGBA":
+                        self.assertEqual(decoded.mode, "RGBA")
+                        self.assertLess(decoded.getchannel("A").getextrema()[1], 255)
+                self.assertEqual(source.read_bytes(), original)
+
+    def test_transparent_webp_does_not_expand_past_byte_budget(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            source = Path(tmp) / "compact.webp"
+            size = (2400, 1600)
+            image = Image.frombytes(
+                "RGB", size, random.Random(22).randbytes(size[0] * size[1] * 3)
+            )
+            image.putalpha(128)
+            image.save(source, format="WEBP", quality=10, method=2)
+            _, encoded = _file_to_data_url(str(source)).split(",", 1)
+            payload = base64.b64decode(encoded)
+            self.assertLessEqual(len(payload), 1_500_000)
+            with Image.open(BytesIO(payload)) as decoded:
+                self.assertEqual(decoded.format, "PNG")
+                self.assertEqual(decoded.getchannel("A").getextrema(), (128, 128))
+
+    def test_pixel_budget_rejects_artwork_before_decoding(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            source = Path(tmp) / "over-budget.png"
+            Image.new("1", (8000, 5001), 1).save(source)
+            with patch.object(
+                Image.Image, "load", side_effect=AssertionError("unexpected decode")
+            ) as load:
+                self.assertEqual(_file_to_data_url(str(source)), "")
+                load.assert_not_called()
+
+    def test_icc_colors_are_converted_to_srgb_with_alpha_preserved(self):
+        # 将 sRGB 的传递曲线改成线性，构造像素值相同但显示颜色不同的有效 RGB 配置。
+        profile = bytearray(
+            ImageCms.ImageCmsProfile(ImageCms.createProfile("sRGB")).tobytes()
+        )
+        for index in range(struct.unpack_from(">I", profile, 128)[0]):
+            signature, offset, _size = struct.unpack_from(">4sII", profile, 132 + index * 12)
+            if signature in (b"rTRC", b"gTRC", b"bTRC"):
+                self.assertEqual(profile[offset : offset + 4], b"para")
+                struct.pack_into(">H", profile, offset + 8, 0)
+                struct.pack_into(">i", profile, offset + 12, 65536)
+        profile[84:100] = bytes(16)
+        source_profile = ImageCms.ImageCmsProfile(BytesIO(bytes(profile)))
+        srgb = ImageCms.createProfile("sRGB")
+        reference = ImageCms.profileToProfile(
+            Image.new("RGB", (1, 1), (64, 128, 192)),
+            source_profile,
+            srgb,
+            outputMode="RGB",
+        ).getpixel((0, 0))
+        self.assertGreater(reference[0], 100)
+        for mode in ("RGB", "RGBA"):
+            with self.subTest(mode=mode), tempfile.TemporaryDirectory() as tmp:
+                source = Path(tmp) / "profiled.png"
+                color = (64, 128, 192, 100) if mode == "RGBA" else (64, 128, 192)
+                Image.new(mode, (64, 64), color).save(source, icc_profile=bytes(profile))
+                _, encoded = _file_to_data_url(str(source), max_edge=32).split(",", 1)
+                with Image.open(BytesIO(base64.b64decode(encoded))) as decoded:
+                    actual = decoded.convert("RGB").getpixel((0, 0))
+                    for channel, expected in zip(actual, reference):
+                        self.assertLessEqual(abs(channel - expected), 2)
+                    if mode == "RGBA":
+                        self.assertEqual(decoded.getchannel("A").getextrema(), (100, 100))
+
+    def test_invalid_icc_uses_existing_background_fallback(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            source = Path(tmp) / "invalid-profile.png"
+            Image.new("RGB", (64, 64)).save(source, icc_profile=b"invalid ICC profile")
+            self.assertEqual(_file_to_data_url(str(source), max_edge=32), "")
 
 
 class CheckinCardRenderQualityTest(unittest.IsolatedAsyncioTestCase):
