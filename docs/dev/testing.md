@@ -203,3 +203,7 @@ async def test_something_async():
     result = await async_function()
     assert result is not None
 ```
+
+## 发送状态与异常日志回归
+
+运行 `python -m pytest -q tests/test_delivery.py tests/test_p_coin_cost.py`，验证模拟送达后报错不重发、普通图片与合并转发不重复补发、未知状态不扣费、正常状态照常结算、构建异常不调用发送、取消继续传播、提示失败记录日志，以及错误回包脱敏。真实 OneBot 回包需在部署端触发问题后结合 `retcode` 和脱敏错误详情确认；自动化测试不向真实会话发消息。

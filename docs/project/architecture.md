@@ -90,3 +90,9 @@ python -m pytest -q
 `SessionSafetyService` 持久化策略列表并生成不可变 `ContentSafetyPolicy` 快照；快照缓存身份包含两份独立列表。`FiltersMixin` 根据 `builtin_terms_enabled` 在全局规则源与会话独立规则源之间互斥选择。
 
 调用链为 `SessionSafetyService → ContentSafetyPolicy → FiltersMixin → cache key`；批量操作先构造双 scope 候选，单次保存成功后安装运行时，异常时回滚配置列表、迁移标记和两份运行时快照。
+
+## 发图送达状态
+
+`pixiv/delivery.py` 的 `send_once()` 统一处理普通图片和合并转发：消息链构建异常标记 `failed`；发送调用正常返回标记 `confirmed`；发送调用抛异常标记 `unknown`，停止自动重发及合并转发到逐条发送的补发。仅确认成功的作品进入使用记录与金币结算；未知部分不计费。此策略没有查询 QQ 实际送达状态，用户需先检查聊天记录再决定是否手动重新请求。
+
+异常日志只提取 `error_type`、`retcode`、`status`、脱敏 `message/wording`，并包含 `send_mode`、可用的作品 ID、`phase`、`delivery_status` 和 `duration_ms`。错误文本最多 512 字符，避免异常回包撑大日志；地址、路径、凭据和长数字标识会被遮蔽，不输出完整请求与回包。错误提示、使用记录、去重占位释放失败分别记录，不重发已确认图片。

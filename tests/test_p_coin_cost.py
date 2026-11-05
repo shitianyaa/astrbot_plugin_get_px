@@ -344,3 +344,40 @@ async def test_search_forward_branch_settles_downloaded_count() -> None:
     args, kwargs = harness.checkin_store.spend_coins.await_args
     assert kwargs["cost"] == 40
     assert event.sent[0][0].nodes[0].uin == "self-bot"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("forward", [False, True])
+async def test_uncertain_send_does_not_retry_fallback_or_charge(forward):
+    from aiocqhttp.exceptions import ActionFailed
+    harness = _SearchFlowHarness(illusts=[_illust(1), _illust(2)])
+    harness.checkin_store, _ = _settle_store()
+    harness._should_use_forward = lambda **kwargs: forward
+    harness.downloader = AsyncMock()
+    harness.downloader.download_for_send.return_value = ("unused.jpg", "original", 1024)
+    event = _FlowEvent(platform="aiocqhttp")
+    delivered = []
+    async def send(chain):
+        if isinstance(chain, list):
+            delivered.append(chain)
+            raise ActionFailed({"status": "failed", "retcode": 1200, "message": "ambiguous"})
+        event.sent.append(chain)
+    event.send = send
+    await _run_search(harness, event, "2")
+    assert len(delivered) == (1 if forward else 2)
+    harness.checkin_store.spend_coins.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_record_usage_error_does_not_repeat_confirmed_delivery():
+    harness = _SearchFlowHarness(illusts=[_illust(1)])
+    harness.checkin_store, _ = _settle_store()
+    harness.downloader = AsyncMock()
+    harness.downloader.download_for_send.return_value = ("unused.jpg", "original", 1024)
+    harness.image_index = AsyncMock()
+    harness.image_index.retention_days = 0
+    harness.image_index.record_usage.side_effect = RuntimeError("database unavailable")
+    event = _FlowEvent()
+    await _run_search(harness, event, "1")
+    assert len([chain for chain in event.sent if isinstance(chain, list)]) == 1
+    harness.checkin_store.spend_coins.assert_awaited_once()
