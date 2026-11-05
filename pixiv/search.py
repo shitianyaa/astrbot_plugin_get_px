@@ -405,6 +405,7 @@ class SearchMixin:
                     )
                 confirmed = await send_once(
                     event, [nodes], context="send_mode=forward",
+                    onebot_transport=self._cfg_str("onebot_image_transport", "file"),
                 )
                 if confirmed:
                     sent_illust_ids.update(
@@ -424,6 +425,7 @@ class SearchMixin:
                     ]
                     confirmed = await send_once(
                         event, content, context=f"send_mode=single illust_id={illust_id}",
+                        onebot_transport=self._cfg_str("onebot_image_transport", "file"),
                     )
                     if confirmed:
                         if illust.get("id"):

@@ -13,6 +13,60 @@ from astrbot_plugin_get_px.pixiv.delivery import send_once, log_delivery_error  
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("group", [True, False])
+@pytest.mark.parametrize("forward", [True, False])
+@pytest.mark.parametrize("transport", ["file", "base64", "astrbot"])
+async def test_direct_onebot_transport(tmp_path, group, forward, transport):
+    import base64
+    from PIL import Image as PILImage
+    from astrbot.api.message_components import Image, Plain, Node, Nodes
+
+    path = tmp_path / "fixture.png"
+    PILImage.new("RGB", (32, 32), "blue").save(path)
+    content = [Plain("fixture"), Image.fromFileSystem(str(path))]
+    if forward:
+        content = [Nodes([Node(uin="123", name="fixture", content=content)])]
+    event = SimpleNamespace(
+        get_platform_name=lambda: "aiocqhttp", get_group_id=lambda: "456" if group else "",
+        get_sender_id=lambda: "789", get_self_id=lambda: "123",
+        bot=SimpleNamespace(call_action=AsyncMock(return_value={"message_id": 1})),
+        send=AsyncMock(), chain_result=lambda items: items,
+    )
+    assert await send_once(event, content, context="test", onebot_transport=transport)
+    if transport == "astrbot":
+        event.bot.call_action.assert_not_awaited()
+        event.send.assert_awaited_once()
+        return
+    event.send.assert_not_awaited()
+    action = ("send_group" if group else "send_private") + ("_forward_msg" if forward else "_msg")
+    args, params = event.bot.call_action.await_args
+    assert args == (action,)
+    assert params["group_id" if group else "user_id"] == (456 if group else 789)
+    assert params["self_id"] == "123"
+    segments = params["messages" if forward else "message"]
+    if forward:
+        segments = segments[0]["data"]["content"]
+    file = segments[1]["data"]["file"]
+    assert (file == path.resolve().as_uri()) if transport == "file" else (base64.b64decode(file[9:]) == path.read_bytes())
+
+
+@pytest.mark.asyncio
+async def test_direct_onebot_timeout_never_falls_back(tmp_path):
+    from PIL import Image as PILImage
+    from astrbot.api.message_components import Image
+    path = tmp_path / "fixture.png"
+    PILImage.new("RGB", (8, 8)).save(path)
+    event = SimpleNamespace(
+        get_platform_name=lambda: "aiocqhttp", get_group_id=lambda: "456",
+        get_sender_id=lambda: "789", bot=SimpleNamespace(call_action=AsyncMock(side_effect=TimeoutError())),
+        send=AsyncMock(), plain_result=lambda text: text,
+    )
+    assert not await send_once(event, [Image.fromFileSystem(str(path))], context="test")
+    event.bot.call_action.assert_awaited_once()
+    assert event.send.await_count == 1  # 仅状态提示，不补发图片。
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize(
     "error",
     [

@@ -4,8 +4,61 @@ import asyncio
 import json
 import re
 import time
+from pathlib import Path
 
 from astrbot.api import logger
+from astrbot.api.message_components import Image, Plain, Node, Nodes
+
+
+async def _onebot_segments(content: list, transport: str) -> list[dict]:
+    """仅转换发图链路使用的组件，路径模式不经过框架的 base64 转换。"""
+    segments = []
+    for component in content:
+        if isinstance(component, Plain):
+            segments.append({"type": "text", "data": {"text": component.text}})
+        elif isinstance(component, Image):
+            if transport == "base64":
+                file = "base64://" + await component.convert_to_base64()
+            else:
+                path = Path(component.path)
+                if not component.path or not path.is_file():
+                    raise ValueError("OneBot 本地图片文件不存在")
+                file = path.resolve().as_uri()
+            segments.append({"type": "image", "data": {"file": file}})
+        elif isinstance(component, Node):
+            segments.append(
+                {
+                    "type": "node",
+                    "data": {
+                        "name": component.name,
+                        "uin": str(component.uin),
+                        "content": await _onebot_segments(component.content, transport),
+                    },
+                }
+            )
+        elif isinstance(component, Nodes):
+            segments.extend(await _onebot_segments(component.nodes, transport))
+        else:
+            raise ValueError("OneBot 发图组件不受支持")
+    return segments
+
+
+async def _onebot_request(event, content: list, transport: str) -> tuple[str, dict]:
+    group_id = str(event.get_group_id() or "")
+    target = group_id or str(event.get_sender_id() or "")
+    if not target.isdigit():
+        raise ValueError("OneBot 会话标识无效")
+    forward = any(isinstance(item, (Node, Nodes)) for item in content)
+    action = "send_group" if group_id else "send_private"
+    action += "_forward_msg" if forward else "_msg"
+    params = {"group_id" if group_id else "user_id": int(target)}
+    params["messages" if forward else "message"] = await _onebot_segments(
+        content, transport
+    )
+    self_id = getattr(event, "get_self_id", lambda: None)()
+    if self_id:
+        params["self_id"] = str(self_id)
+    return action, params
 
 
 def _safe_error_text(value: object) -> str:
@@ -16,7 +69,7 @@ def _safe_error_text(value: object) -> str:
     text = re.sub(r"https?://\S+|\[CQ:[^\]]*\]", "[redacted]", text)
     text = re.sub(r"(?i)(?:[a-z]:[\\/]|/)[^\s\"']+", "[path]", text)
     text = re.sub(
-        r'''(?i)((?:token|secret|password|authorization|api[_-]?key)["']?\s*[=:]\s*)(?:"[^"]*"|'[^']*'|[^\s,;]+)''',
+        r"""(?i)((?:token|secret|password|authorization|api[_-]?key)["']?\s*[=:]\s*)(?:"[^"]*"|'[^']*'|[^\s,;]+)""",
         r"\1[redacted]",
         text,
     )
@@ -58,18 +111,32 @@ def log_delivery_error(
     )
 
 
-async def send_once(event, content: list, *, context: str) -> bool:
+async def send_once(
+    event, content: list, *, context: str, onebot_transport: str = "file"
+) -> bool:
     """发送接口无幂等保证；异常时保留未知状态，不自动重发图片。"""
     started = time.monotonic()
+    direct = (
+        onebot_transport in ("file", "base64")
+        and getattr(event, "get_platform_name", lambda: "")() == "aiocqhttp"
+        and getattr(event, "bot", None) is not None
+    )
+    context += f" transport={onebot_transport if direct else 'astrbot'}"
     try:
-        message = event.chain_result(content)
+        if direct:
+            action, params = await _onebot_request(event, content, onebot_transport)
+        else:
+            message = event.chain_result(content)
     except Exception as exc:
         log_delivery_error(
             exc, context=context, phase="build", delivery_status="failed"
         )
         return False
     try:
-        await event.send(message)
+        if direct:
+            await event.bot.call_action(action, **params)
+        else:
+            await event.send(message)
     except Exception as exc:
         log_delivery_error(
             exc,

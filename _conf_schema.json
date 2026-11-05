@@ -51,6 +51,13 @@
         },
         "hint": "使用 /p（或自然语言触发）成功发送每张图所消耗的金币；设为 0 表示免费。金币不足时仅提醒，图片下载或发送失败不扣币。"
       },
+      "onebot_image_transport": {
+        "description": "OneBot 图片传输方式（实验）",
+        "type": "string",
+        "default": "file",
+        "options": ["file", "base64", "astrbot"],
+        "hint": "仅影响 /p 和自然语言发图。file 直接调用 OneBot 并传本地 file URI，要求协议端可见相同路径；base64 直调并传图片编码，适合跨容器或跨机器；astrbot 使用原框架链路。发送异常不自动切换模式或重发。"
+      },
       "image_quality": {
         "description": "图片质量",
         "type": "string",

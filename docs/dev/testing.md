@@ -207,3 +207,7 @@ async def test_something_async():
 ## 发送状态与异常日志回归
 
 运行 `python -m pytest -q tests/test_delivery.py tests/test_p_coin_cost.py`，验证模拟送达后报错不重发、普通图片与合并转发不重复补发、未知状态不扣费、正常状态照常结算、构建异常不调用发送、取消继续传播、提示失败记录日志，以及错误回包脱敏。真实 OneBot 回包需在部署端触发问题后结合 `retcode` 和脱敏错误详情确认；自动化测试不向真实会话发消息。
+
+## OneBot 直调实验验证
+
+运行 `python -m pytest -q tests/test_delivery.py tests/test_p_coin_cost.py`，验证群聊/私聊、单图/合并转发三种传输模式的 API 名称、路由、文件 URI 和 base64 原始字节，以及异常时无自动补发。真实部署请分别选择 file、base64、astrbot 重载后发送同一作品，对比 transport、耗时和错误回包；路径模式要求协议端可访问同一文件。自动化测试只使用 Mock OneBot 客户端，不向群聊发消息。

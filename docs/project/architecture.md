@@ -96,3 +96,7 @@ python -m pytest -q
 `pixiv/delivery.py` 的 `send_once()` 统一处理普通图片和合并转发：消息链构建异常标记 `failed`；发送调用正常返回标记 `confirmed`；发送调用抛异常标记 `unknown`，停止自动重发及合并转发到逐条发送的补发。仅确认成功的作品进入使用记录与金币结算；未知部分不计费。此策略没有查询 QQ 实际送达状态，用户需先检查聊天记录再决定是否手动重新请求。
 
 异常日志只提取 `error_type`、`retcode`、`status`、脱敏 `message/wording`，并包含 `send_mode`、可用的作品 ID、`phase`、`delivery_status` 和 `duration_ms`。错误文本最多 512 字符，避免异常回包撑大日志；地址、路径、凭据和长数字标识会被遮蔽，不输出完整请求与回包。错误提示、使用记录、去重占位释放失败分别记录，不重发已确认图片。
+
+## OneBot 直调实验
+
+`send_once()` 在 aiocqhttp 且存在事件 `bot` 时，根据 `onebot_image_transport` 选择直接调用事件已有客户端的 `call_action()`，不另建连接。单图调用 send_group_msg/send_private_msg，合并转发调用 send_group_forward_msg/send_private_forward_msg，保留 self_id 路由。file 模式显式转换图片为本地 URI，base64 模式沿用图片组件编码；两者均直接组装文本、图片和转发节点。astrbot 模式或其他平台继续走原框架链路。该实验保留未知状态不重发、不计费规则，未引入参考插件的超时判成功、路径到编码自动补发或 NapCat 分块上传兜底。

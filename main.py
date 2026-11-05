@@ -731,6 +731,7 @@ class GetPxPlugin(
         "max_count": "pixiv_source",
         "p_coin_cost": "pixiv_source",
         "image_quality": "pixiv_source",
+        "onebot_image_transport": "pixiv_source",
         "auto_downgrade_original_mb": "pixiv_source",
         "forward_threshold": "pixiv_source",
         "auto_trigger_enabled": "pixiv_source",
