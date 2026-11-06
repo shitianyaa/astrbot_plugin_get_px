@@ -17,6 +17,14 @@ from astrbot_plugin_get_px.pixiv.delivery import DeliveryStatus, send_once, log_
     r"C:\private\image.jpg",
     "/private/image.jpg",
     r"\\fixturehost\private folder\image.jpg",
+    r"C:\private folder\image.jpg",
+    "/private folder/image.jpg",
+    "file:///private/image.jpg",
+    "file://fixturehost/private/image.jpg",
+    "private/image.jpg",
+    r"private\image.jpg",
+    "./private/image.jpg",
+    "../private/image.jpg",
 ])
 def test_exception_paths_are_redacted(path):
     from astrbot_plugin_get_px.pixiv.delivery import _safe_error_text
@@ -27,6 +35,37 @@ def test_exception_paths_are_redacted(path):
     assert "image.jpg" not in text
     assert "Permission denied" in text
     assert "[path]" in text
+
+
+@pytest.mark.parametrize("text", [
+    "path=/private folder/image 01.jpg status=failed",
+    '''file="/home/O'Brien/private file"''',
+    '''file='/home/a"b/private file' ''',
+    "file=[private/image.jpg]",
+    r"file=\/private\/image.jpg",
+])
+def test_protocol_path_boundaries(text):
+    from astrbot_plugin_get_px.pixiv.delivery import _safe_error_text
+
+    result = _safe_error_text(text)
+    assert "[path]" in result
+    assert not any(part in result for part in ("private", "folder", "image", "Brien", 'b/'))
+    if "status=failed" in text:
+        assert "status=failed" in result
+
+
+def test_oversized_error_is_bounded_before_regex_processing():
+    import re
+    from astrbot_plugin_get_px.pixiv.delivery import _safe_error_text
+
+    substitute = re.sub
+
+    def bounded_sub(pattern, replacement, text):
+        assert len(text) <= 2048
+        return substitute(pattern, replacement, text)
+
+    with patch("astrbot_plugin_get_px.pixiv.delivery.re.sub", side_effect=bounded_sub):
+        assert len(_safe_error_text("." * 100_000)) <= 512
 
 
 @pytest.mark.asyncio
@@ -256,11 +295,18 @@ async def test_build_failure_notice_error_is_logged_without_image_submission():
 
 
 def test_protocol_error_details_are_allowlisted_and_redacted():
+    from astrbot_plugin_get_px.pixiv.delivery import _safe_error_text
+
+    diagnostic = (
+        "Timeout: NTEvent serviceAndMethod:NodeIKernelMsgService/sendMsg "
+        "ListenerName:NodeIKernelMsgListener/onMsgInfoListUpdate EventRet:\n{}"
+    )
+    assert _safe_error_text(diagnostic) == diagnostic
     error = ActionFailed(
         {
             "status": "failed",
             "retcode": 1200,
-            "message": 'upload failed token=secret-value "api_key": "json secret" https://example.com/private?key=hidden',
+            "message": diagnostic + ' upload failed token=secret-value "api_key": "json secret" https://example.com/private?key=hidden',
             "wording": "user 123456789 C:\\private\\image.jpg\nfailed",
             "params": {"message": "PRIVATE CONTENT"},
         }
@@ -271,6 +317,8 @@ def test_protocol_error_details_are_allowlisted_and_redacted():
         )
     text = logger.warning.call_args.args[0]
     assert "1200" in text and "upload failed" in text
+    assert "NodeIKernelMsgService/sendMsg" in text
+    assert "NodeIKernelMsgListener/onMsgInfoListUpdate" in text
     for secret in (
         "secret-value",
         "json secret",

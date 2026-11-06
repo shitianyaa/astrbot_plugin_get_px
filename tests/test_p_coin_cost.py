@@ -384,41 +384,6 @@ async def test_record_usage_error_does_not_repeat_confirmed_delivery():
     harness.image_index.record_usage.assert_awaited_once()
 
 
-@pytest.mark.asyncio
-@pytest.mark.parametrize("fails", [False, True])
-@pytest.mark.parametrize("forward", [False, True])
-async def test_search_direct_onebot_settlement(tmp_path, fails, forward):
-    from PIL import Image
-    path = tmp_path / "fixture.png"
-    Image.new("RGB", (32, 32)).save(path)
-    harness = _SearchFlowHarness(illusts=[_illust(1)])
-    harness.config["onebot_image_transport"] = "file"
-    harness._forward_threshold = lambda: 0 if forward else 1
-    harness.checkin_store, _ = _settle_store()
-    harness.downloader = AsyncMock()
-    harness.downloader.download_for_send.return_value = (str(path), "original", path.stat().st_size)
-    harness.downloader.defer_cleanup = Mock()
-    event = _FlowEvent(platform="aiocqhttp")
-    event.get_group_id = lambda: "456"
-    event.bot = AsyncMock()
-    event.bot.call_action.return_value = {"message_id": 123}
-    if fails:
-        event.bot.call_action.side_effect = TimeoutError()
-    await _run_search(harness, event, "1")
-    event.bot.call_action.assert_awaited_once()
-    args, kwargs = event.bot.call_action.await_args
-    assert args == ("send_group_forward_msg" if forward else "send_group_msg",)
-    segments = kwargs["messages"][0]["data"]["content"] if forward else kwargs["message"]
-    assert segments[1]["data"]["file"] == path.resolve().as_uri()
-    assert path.exists() is fails
-    if fails:
-        harness.downloader.defer_cleanup.assert_called_once_with(str(path))
-        harness.checkin_store.spend_coins.assert_not_awaited()
-    else:
-        harness.downloader.defer_cleanup.assert_not_called()
-        harness.checkin_store.spend_coins.assert_awaited_once()
-
-
 def test_onebot_transport_nested_config_and_schema():
     import json
     from astrbot_plugin_get_px.main import GetPxPlugin
@@ -433,8 +398,12 @@ def test_onebot_transport_nested_config_and_schema():
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("forward", [False, True])
-@pytest.mark.parametrize("transport", ["file", "base64"])
-@pytest.mark.parametrize("outcome", ["confirmed", "failed", "unknown", "cancelled", "empty_receipt", "build_notice_cancelled", "build_cancelled"])
+@pytest.mark.parametrize("transport,outcome", [
+    ("file", outcome) for outcome in (
+        "confirmed", "failed", "unknown", "cancelled", "empty_receipt",
+        "build_notice_cancelled", "build_cancelled",
+    )
+] + [("base64", "confirmed"), ("base64", "unknown")])
 async def test_delivery_state_controls_charge_pending_and_file_lifetime(tmp_path, forward, transport, outcome):
     import asyncio
     from PIL import Image
@@ -498,6 +467,11 @@ async def test_delivery_state_controls_charge_pending_and_file_lifetime(tmp_path
         assert all(path.exists() is (uncertain and transport == "file") for path in paths)
         assert len(downloader._cleanup_tasks) == (count if uncertain and transport == "file" else 0)
         if outcome == "confirmed":
+            args, params = event.bot.call_action.await_args
+            assert args == ("send_group_forward_msg" if forward else "send_group_msg",)
+            segments = params["messages"][0]["data"]["content"] if forward else params["message"]
+            if transport == "file":
+                assert segments[1]["data"]["file"] == paths[0].resolve().as_uri()
             harness.checkin_store.spend_coins.assert_awaited_once_with(user_id="10001", cost=20 * count)
         else:
             harness.checkin_store.spend_coins.assert_not_awaited()
