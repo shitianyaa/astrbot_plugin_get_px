@@ -208,11 +208,9 @@ async def test_something_async():
 
 ## 发送状态与异常日志回归
 
-运行 `python -m pytest -q tests/test_delivery.py tests/test_p_coin_cost.py`，验证发送三态、aiocqhttp 真实结果解析契约、消息 ID 回执确认、空/异步回执不扣费、协议异常不误判确定未送达、普通图片与合并转发不重复补发、未知/取消保留 pending 占用、确认成功正常结算、构建失败只发送通知、取消继续传播、提示失败记录日志，以及错误回包脱敏。file/base64 的文件保留与清理分别断言，合并转发覆盖批量图片。自动化测试不向真实会话发消息。
+运行 `python -m pytest -q tests/test_delivery.py tests/test_p_coin_cost.py`，验证三态计费与去重、SDK 回执、取消、错误脱敏，以及群聊/私聊、单图/合并转发的 file/base64/astrbot 路由和图片内容。状态用例覆盖共享逻辑，额外验证 base64 的文件清理差异，不展开所有维度的笛卡尔积。
 
-## OneBot 图片发送验证
-
-运行 `python -m pytest -q tests/test_delivery.py tests/test_p_coin_cost.py`，验证群聊/私聊、单图/合并转发三种传输模式的 API 名称、路由、文件 URI 和 base64 原始字节，以及异常时无自动补发。真实部署请分别选择 file、base64、astrbot 重载后发送同一作品，对比 transport、耗时和错误回包；路径模式要求协议端可访问同一文件。自动化测试只使用 Mock OneBot 客户端，不向群聊发消息。
+真实部署按三种传输方式发送同一作品，对比 transport、耗时和回包；file 模式检查协议端的路径可见性。
 
 ## 插件下载临时目录回归
 

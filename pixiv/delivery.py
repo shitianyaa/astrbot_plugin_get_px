@@ -80,14 +80,24 @@ def _safe_error_text(value: object) -> str:
     """保留诊断文本，移除地址、标识和凭据；限制异常回包撑大日志。"""
     if not isinstance(value, str):
         return ""
-    text = value
+    # 输出仅保留 512 字符；先限制输入，避免异常长回包拖慢事件循环。
+    text = value[:2048].replace(r"\/", "/")
     text = re.sub(r"https?://\S+|\[CQ:[^\]]*\]", "[redacted]", text)
     path_start = r"(?:file://|\\{2,}|[a-z]:[\\/]|/|\.\.?[\\/])"
-    text = re.sub(rf'''(?i)(["']){path_start}[^"'\r\n]*\1''', "[path]", text)
+    text = re.sub(
+        rf"""(?i)"{path_start}[^"\r\n]*"|'{path_start}[^'\r\n]*'""",
+        "[path]",
+        text,
+    )
+    text = re.sub(
+        rf'''(?i)\b((?:file|path|filename)\s*=\s*){path_start}[^"'\r\n,;]+?(?=\s+\w+\s*[:=]|["'\r\n,;]|$)''',
+        r"\1[path]",
+        text,
+    )
     # 斜杠须位于路径起点，保留 NodeIKernelMsgService/sendMsg 等诊断标识。
     text = re.sub(rf'''(?i)(?<![\w/\\]){path_start}[^\s"']+''', "[path]", text)
     text = re.sub(
-        r'''(?i)(?<![\w/\\])(?:[\w.-]+[\\/]+)+[\w.-]+\.[a-z0-9]+(?=$|[\s"',;:)])''',
+        r'''(?i)(?<![\w/\\])(?:[\w.-]+[\\/]+)+[\w.-]+\.[a-z0-9]+(?=$|[\s"',;:)\]])''',
         "[path]",
         text,
     )

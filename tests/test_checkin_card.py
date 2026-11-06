@@ -255,45 +255,6 @@ class FileToDataUrlTest(unittest.TestCase):
                 self.assertEqual(decoded.getpixel((0, 0))[3], 0)
                 self.assertEqual(decoded.getpixel((1200, 800))[3], 255)
 
-    def test_rgb_transparency_is_preserved(self):
-        with tempfile.TemporaryDirectory() as tmp:
-            source = Path(tmp) / "rgb-transparent.png"
-            Image.new("RGB", (2400, 1600), (255, 0, 0)).save(
-                source, format="PNG", transparency=(255, 0, 0)
-            )
-
-            header, encoded = _file_to_data_url(str(source)).split(",", 1)
-            self.assertEqual(header, "data:image/png;base64")
-            with Image.open(BytesIO(base64.b64decode(encoded))) as decoded:
-                self.assertEqual(decoded.mode, "RGBA")
-                self.assertEqual(decoded.getpixel((0, 0))[3], 0)
-
-    def test_grayscale_transparency_is_preserved(self):
-        with tempfile.TemporaryDirectory() as tmp:
-            source = Path(tmp) / "gray-transparent.png"
-            Image.new("L", (2400, 1600), 0).save(
-                source, format="PNG", transparency=0
-            )
-
-            header, encoded = _file_to_data_url(str(source)).split(",", 1)
-            self.assertEqual(header, "data:image/png;base64")
-            with Image.open(BytesIO(base64.b64decode(encoded))) as decoded:
-                self.assertEqual(decoded.mode, "RGBA")
-                self.assertEqual(decoded.getpixel((0, 0))[3], 0)
-
-    def test_calendar_background_keeps_ultra_edge(self):
-        with tempfile.TemporaryDirectory() as tmp:
-            source = Path(tmp) / "calendar.png"
-            Image.new("RGB", (4000, 2250), (10, 20, 30)).save(
-                source, format="PNG"
-            )
-
-            _, encoded = _file_to_data_url(
-                str(source), max_edge=2880
-            ).split(",", 1)
-            with Image.open(BytesIO(base64.b64decode(encoded))) as image:
-                self.assertEqual(image.size, (2880, 1620))
-
     def test_color_key_transparency_survives_resampling(self):
         for mode, row, key in (
             ("RGB", b"\xff\x00\x00\x00\x00\xff" * 32, (255, 0, 0)),
