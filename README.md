@@ -28,6 +28,7 @@
 - [自然语言触发](#自然语言触发)
 - [WebUI](#webui-插件管理中心)
 - [每日签到](#每日签到)
+- [OneBot 图片发送](#onebot-图片发送)
 - [推荐配置](#推荐配置)
 - [更多文档](#更多文档)
 - [Roadmap](#roadmap)
@@ -183,15 +184,15 @@ AstrBot WebUI 插件页的「pluginCenter」可：
 
 图片下载临时文件统一放在插件专属数据目录 `data/plugin_data/astrbot_plugin_get_px/temp/`，由 AstrBot 的 `StarTools.get_data_dir()` 确定，不使用系统或 AstrBot 全局 tmp。Pages 的临时缓存统计和清理对应此目录，仅清理 `get_px_*`，跳过最近 10 分钟修改的文件；正常请求结束仍自动删除下载文件。共享 `data` 时也须确保协议端看到的绝对路径与传入路径一致。
 
-## OneBot 直调实验分支
+## OneBot 图片发送
 
-本实验仅影响 `/p` 和自然语言发图。重载插件后，在“Pixiv 图源与下载”设置 `onebot_image_transport`：
+OneBot 直调仅影响 `/p` 和自然语言发图。重载插件后，在“Pixiv 图源与下载”设置 `onebot_image_transport`：
 
 - `file`（默认）：直接调用 OneBot，将本地 `file:///` URI 传给协议端；POSIX 系统发送前将完整图片权限设为 `0644`，供不同 UID 的协议进程读取；AstrBot 与协议端必须能访问相同路径，同一机器的不同容器也需要正确的共享挂载。
 - `base64`：直接调用 OneBot，传输图片编码，适合跨机器或文件路径不可见的部署。
 - `astrbot`：使用原有 AstrBot 发送链路，便于对比或恢复。
 
-单图与合并转发均支持上述模式，其他平台继续使用框架链路。发送异常不会自动切换模式或重发，也不会将超时当作成功；日志的 `transport=file/base64/astrbot` 可确认实际路径。图片仍先下载到临时文件，并在请求结束后清理，因此协议端必须能及时读取文件；本实验不包含 NapCat 分块上传或文件长期保留。签到卡和日历发送不受此开关影响。
+单图与合并转发均支持上述模式，其他平台继续使用框架链路。发送异常不会自动切换模式或重发，也不会将超时当作成功；日志的 `transport=file/base64/astrbot` 可确认实际路径。图片仍先下载到临时文件，并在请求结束后清理，因此协议端必须能及时读取文件；下载文件不作长期保留。签到卡和日历发送不受此开关影响。
 
 ## 推荐配置
 
@@ -222,7 +223,7 @@ WebUI 配置页按以下 6 组折叠展示，分组细节与维护规则见 [doc
 | `group_content_safety_policies` | 群聊内容安全策略列表：强制普通分级、内置安全词开关与独立屏蔽词/作品 ID 黑名单，按群 ID 生效；配置页或管理中心均可维护 | `[]` |
 | `private_content_safety_policies` | 私聊内容安全策略列表：字段同群聊策略，按用户 ID 独立生效；配置页或管理中心均可维护 | `[]` |
 | `request_timeout` | 单张图片下载超时，单位秒 | `30` |
-| `onebot_image_transport` | OneBot 发图实验模式：`file` / `base64` / `astrbot` | `file` |
+| `onebot_image_transport` | OneBot 图片传输方式：`file` / `base64` / `astrbot` | `file` |
 | `image_quality` | 图片质量：`original`、`large`、`medium` | `original` |
 | `auto_downgrade_original_mb` | 原图超过该大小时自动降级，单位 MiB；`0` 为禁用 | `3.0` |
 | `forward_threshold` | 仅 aiocqhttp：成功下载图片数严格大于此值时合并转发；`0` 始终合并转发，`1` 表示超过 1 张才合并转发；其他平台自动逐条发送 | `1` |

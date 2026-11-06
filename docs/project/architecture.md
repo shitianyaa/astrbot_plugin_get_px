@@ -97,9 +97,9 @@ python -m pytest -q
 
 异常日志只提取 `error_type`、`retcode`、`status`、脱敏 `message/wording`，并包含 `send_mode`、可用的作品 ID、`phase`、`delivery_status` 和 `duration_ms`。错误文本最多 512 字符，避免异常回包撑大日志；地址、路径、凭据和长数字标识会被遮蔽，不输出完整请求与回包。错误提示、使用记录、去重占位释放失败分别记录，不重发已确认图片。
 
-## OneBot 直调实验
+## OneBot 图片发送
 
-`send_once()` 在 aiocqhttp 且存在事件 `bot` 时，根据 `onebot_image_transport` 选择直接调用事件已有客户端的 `call_action()`，不另建连接。单图调用 send_group_msg/send_private_msg，合并转发调用 send_group_forward_msg/send_private_forward_msg，保留 self_id 路由。file 模式显式转换图片为本地 URI，base64 模式沿用图片组件编码；两者均直接组装文本、图片和转发节点。astrbot 模式或其他平台继续走原框架链路。该实验保留未知状态不重发、不计费规则，未引入参考插件的超时判成功、路径到编码自动补发或 NapCat 分块上传兜底。
+`send_once()` 在 aiocqhttp 且存在事件 `bot` 时，根据 `onebot_image_transport` 选择直接调用事件已有客户端的 `call_action()`，不另建连接。单图调用 send_group_msg/send_private_msg，合并转发调用 send_group_forward_msg/send_private_forward_msg，保留 self_id 路由。file 模式显式转换图片为本地 URI，base64 模式沿用图片组件编码；两者均直接组装文本、图片和转发节点。astrbot 模式或其他平台继续走原框架链路。发送结果未知时不自动重发、不计费；传输模式由配置明确指定，发送异常后不自动切换模式。
 
 ## 下载临时目录
 
