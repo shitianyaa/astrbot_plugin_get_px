@@ -67,7 +67,7 @@ from .plugin_api import PluginWebApi
 
 LOG_PREFIX = "[GetPx]"
 PLUGIN_NAME = "astrbot_plugin_get_px"
-PLUGIN_VERSION = "v3.8.5"
+PLUGIN_VERSION = "v3.8.0"
 WEB_INTERNAL_ERROR_MESSAGE = "服务内部错误，请稍后重试"
 
 AUTO_TRIGGER_PATTERN = r"^/?(来\s*(.*?)(份|个|张|点))(.*?)(福利|色|瑟|涩|塞)?图$"
@@ -142,7 +142,6 @@ class GetPxPlugin(
         """插件加载时初始化 Pixiv 客户端。"""
         data_dir = StarTools.get_data_dir(PLUGIN_NAME)
         self.data_dir = Path(data_dir)
-        self.downloader.temp_dir = self.data_dir / "temp"
         self._migrate_grouped_config()
         dedupe_days = self._migrate_dedupe_config()
         self._init_client()
@@ -732,7 +731,6 @@ class GetPxPlugin(
         "max_count": "pixiv_source",
         "p_coin_cost": "pixiv_source",
         "image_quality": "pixiv_source",
-        "onebot_image_transport": "pixiv_source",
         "auto_downgrade_original_mb": "pixiv_source",
         "forward_threshold": "pixiv_source",
         "auto_trigger_enabled": "pixiv_source",

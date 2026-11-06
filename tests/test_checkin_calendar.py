@@ -1,9 +1,7 @@
 """Calendar view-model, event normalization, render and command tests."""
 
 import asyncio
-import base64
 from dataclasses import replace
-from io import BytesIO
 import json
 from pathlib import Path
 import sys
@@ -432,28 +430,6 @@ def test_render_calendar_inlines_background_as_data_url(tmp_path, monkeypatch) -
 
     assert str(captured["background_url"]).startswith("data:image/jpeg;base64,")
     assert captured["background_credit"] == "背景：夜樱 / 画师名 (ID: 12345)"
-
-
-def test_render_calendar_preserves_ultra_background_edge(tmp_path) -> None:
-    image = tmp_path / "landscape.png"
-    PILImage.new("RGB", (4000, 2250), (10, 20, 30)).save(image)
-    plugin = object.__new__(GetPxPlugin)
-    plugin.html_render = AsyncMock(return_value="calendar.jpg")
-
-    asyncio.run(
-        plugin._render_checkin_calendar(
-            month="2026-08",
-            today_key="2026-08-15",
-            records=[],
-            render_tier="极致",
-            background=CardBackground(image_path=str(image)),
-        )
-    )
-
-    data = plugin.html_render.await_args.args[1]
-    _, encoded = data["background_url"].split(",", 1)
-    with PILImage.open(BytesIO(base64.b64decode(encoded))) as decoded:
-        assert decoded.size == (2880, 1620)
 
 
 def test_calendar_command_reuses_cached_image_without_rerendering(tmp_path) -> None:

@@ -5,7 +5,6 @@ import os
 import re
 import tempfile
 import time
-from pathlib import Path
 from collections.abc import Iterable
 from urllib.parse import urlsplit, urlunsplit
 
@@ -185,8 +184,7 @@ def iter_download_urls(
 
 
 class ImageDownloader:
-    def __init__(self, lolicon_image_proxy_origins: object = "", *, temp_dir: Path | None = None):
-        self.temp_dir = Path(temp_dir) if temp_dir is not None else None
+    def __init__(self, lolicon_image_proxy_origins: object = ""):
         self._session: aiohttp.ClientSession | None = None
         self.lolicon_image_proxy_origins = parse_proxy_origins(
             lolicon_image_proxy_origins
@@ -208,9 +206,6 @@ class ImageDownloader:
             self._session = None
 
     async def download(self, url: str, timeout: float) -> tuple[str, int]:
-        if self.temp_dir is None:
-            raise RuntimeError("插件临时下载目录尚未初始化")
-        self.temp_dir.mkdir(parents=True, exist_ok=True)
         session = self._ensure_session()
         client_timeout = aiohttp.ClientTimeout(total=timeout)
         suffix = ".jpg"
@@ -235,7 +230,7 @@ class ImageDownloader:
                 if content_length and content_length > MAX_DOWNLOAD_BYTES:
                     raise _too_large_error(content_length)
 
-                fd, path = tempfile.mkstemp(prefix="get_px_", suffix=suffix, dir=self.temp_dir)
+                fd, path = tempfile.mkstemp(prefix="get_px_", suffix=suffix)
                 size = 0
                 file_obj = os.fdopen(fd, "wb")
                 fd = -1

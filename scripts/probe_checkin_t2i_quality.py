@@ -31,6 +31,9 @@ from astrbot_plugin_get_px.checkin.quality import (  # noqa: E402
 from scripts.generate_checkin_event_matrix import make_profile, make_record  # noqa: E402
 
 
+DEFAULT_OUTPUT_DIR = PROJECT_ROOT / "data" / "temp" / "t2i_quality_probe"
+
+
 def _fixture_background(output_dir: Path) -> Path:
     path = output_dir / "source_fixture.png"
     image = Image.new("RGB", (750, 1000), "#d9b9a4")
@@ -161,7 +164,7 @@ async def run(output_dir: Path) -> dict[str, Any]:
 
 def main() -> None:
     parser = argparse.ArgumentParser()
-    parser.add_argument("--output-dir", type=Path, required=True)
+    parser.add_argument("--output-dir", type=Path, default=DEFAULT_OUTPUT_DIR)
     args = parser.parse_args()
     result = asyncio.run(run(args.output_dir.resolve()))
     print(json.dumps(result, ensure_ascii=False))

@@ -5,6 +5,7 @@ import base64
 from datetime import datetime
 import math
 from pathlib import Path
+import tempfile
 import time
 from typing import Any
 
@@ -838,9 +839,8 @@ class PluginWebApi:
                         )
 
         # Check temporary downloaded images (get_px_*)
-        data_dir = getattr(self.plugin, "data_dir", None)
-        tmp_dir = Path(data_dir) / "temp" if data_dir is not None else None
-        if tmp_dir is not None and tmp_dir.exists():
+        tmp_dir = Path(tempfile.gettempdir())
+        if tmp_dir.exists():
             for p in tmp_dir.glob("get_px_*"):
                 if p.is_file():
                     try:
@@ -897,9 +897,8 @@ class PluginWebApi:
                         pass
 
         # Clear temporary downloaded images (skip files modified in last 10 min)
-        data_dir = getattr(self.plugin, "data_dir", None)
-        tmp_dir = Path(data_dir) / "temp" if data_dir is not None else None
-        if tmp_dir is not None and tmp_dir.exists():
+        tmp_dir = Path(tempfile.gettempdir())
+        if tmp_dir.exists():
             for p in tmp_dir.glob("get_px_*"):
                 if p.is_file():
                     try:
