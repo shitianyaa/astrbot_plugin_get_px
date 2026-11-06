@@ -17,6 +17,14 @@ from astrbot_plugin_get_px.pixiv.delivery import DeliveryStatus, send_once, log_
     r"C:\private\image.jpg",
     "/private/image.jpg",
     r"\\fixturehost\private folder\image.jpg",
+    r"C:\private folder\image.jpg",
+    "/private folder/image.jpg",
+    "file:///private/image.jpg",
+    "file://fixturehost/private/image.jpg",
+    "private/image.jpg",
+    r"private\image.jpg",
+    "./private/image.jpg",
+    "../private/image.jpg",
 ])
 def test_exception_paths_are_redacted(path):
     from astrbot_plugin_get_px.pixiv.delivery import _safe_error_text
@@ -26,6 +34,36 @@ def test_exception_paths_are_redacted(path):
     assert "private" not in text
     assert "image.jpg" not in text
     assert "Permission denied" in text
+    assert "[path]" in text
+
+
+def test_timeout_method_names_survive_redaction():
+    from astrbot_plugin_get_px.pixiv.delivery import _safe_error_text
+
+    original = (
+        "Timeout: NTEvent serviceAndMethod:NodeIKernelMsgService/sendMsg "
+        "ListenerName:NodeIKernelMsgListener/onMsgInfoListUpdate EventRet:\n{}"
+    )
+    assert _safe_error_text(original) == original
+
+
+def test_protocol_log_preserves_methods_while_redacting_private_fields():
+    original = (
+        "Timeout: NTEvent serviceAndMethod:NodeIKernelMsgService/sendMsg "
+        "ListenerName:NodeIKernelMsgListener/onMsgInfoListUpdate "
+        "file='file:///private folder/image.jpg' "
+        "token=secret-value user=123456789"
+    )
+    error = ActionFailed({"status": "failed", "retcode": 1200, "message": original})
+    with patch("astrbot_plugin_get_px.pixiv.delivery.logger") as logger:
+        log_delivery_error(error, context="send_mode=single", phase="send", delivery_status="unknown")
+    text = logger.warning.call_args.args[0]
+    assert "NodeIKernelMsgService/sendMsg" in text
+    assert "NodeIKernelMsgListener/onMsgInfoListUpdate" in text
+    assert "private" not in text
+    assert "image.jpg" not in text
+    assert "secret-value" not in text
+    assert "123456789" not in text
     assert "[path]" in text
 
 

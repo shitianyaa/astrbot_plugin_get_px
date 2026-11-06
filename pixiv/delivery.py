@@ -82,8 +82,15 @@ def _safe_error_text(value: object) -> str:
         return ""
     text = value
     text = re.sub(r"https?://\S+|\[CQ:[^\]]*\]", "[redacted]", text)
-    text = re.sub(r'''(?i)(["'])(?:\\{2,}|[a-z]:[\\/]|/)[^"'\r\n]*\1''', "[path]", text)
-    text = re.sub(r"(?i)(?:\\{2,}|[a-z]:[\\/]|/)[^\s\"']+", "[path]", text)
+    path_start = r"(?:file://|\\{2,}|[a-z]:[\\/]|/|\.\.?[\\/])"
+    text = re.sub(rf'''(?i)(["']){path_start}[^"'\r\n]*\1''', "[path]", text)
+    # 斜杠须位于路径起点，保留 NodeIKernelMsgService/sendMsg 等诊断标识。
+    text = re.sub(rf'''(?i)(?<![\w/\\]){path_start}[^\s"']+''', "[path]", text)
+    text = re.sub(
+        r'''(?i)(?<![\w/\\])(?:[\w.-]+[\\/]+)+[\w.-]+\.[a-z0-9]+(?=$|[\s"',;:)])''',
+        "[path]",
+        text,
+    )
     text = re.sub(
         r"""(?i)((?:token|secret|password|authorization|api[_-]?key)["']?\s*[=:]\s*)(?:"[^"]*"|'[^']*'|[^\s,;]+)""",
         r"\1[redacted]",

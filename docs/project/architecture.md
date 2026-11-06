@@ -101,7 +101,7 @@ python -m pytest -q
 
 `search.py` 按三态分别处理：构建失败、构建期间取消及构建失败通知期间取消均释放未提交图片的占用；确认成功记录使用并结算；未知与提交期间取消保留原 `normal_pending` 占用（仅在开启去重时生效），随自然日去重窗口过期。未知的 file 图片交给下载器延迟清理，base64 图片无需保留原文件。通知发送失败独立记录日志，不触发重发图片。
 
-异常日志只提取 `error_type`、`retcode`、`status`、脱敏 `message/wording`，并包含 `send_mode`、可用的作品 ID、`phase`、`delivery_status` 和 `duration_ms`。错误文本最多 512 字符，避免异常回包撑大日志；地址、本地路径及 Windows UNC 共享路径、凭据和长数字标识会被遮蔽，不输出完整请求与回包。错误提示、使用记录、去重占位释放失败分别记录，不重发已确认图片。
+异常日志只提取 `error_type`、`retcode`、`status`、脱敏 `message/wording`，并包含 `send_mode`、可用的作品 ID、`phase`、`delivery_status` 和 `duration_ms`。错误文本最多 512 字符，避免异常回包撑大日志；地址、本地路径及 Windows UNC 共享路径、凭据和长数字标识会被遮蔽，不输出完整请求与回包。路径按盘符、UNC、file URI、位于词边界的根目录或点目录起点，以及带文件扩展名的相对路径识别；`NodeIKernelMsgService/sendMsg` 等服务名/方法名保留，不单凭标识内部的斜杠判定路径。错误提示、使用记录、去重占位释放失败分别记录，不重发已确认图片。
 
 ## OneBot 图片发送
 
