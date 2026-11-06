@@ -15,11 +15,14 @@ from group_safety import (
 
 
 def test_group_safety_imports_in_plugin_package_context():
+    from astrbot.api import logger
+
     repo = Path(__file__).resolve().parents[1]
     sys.path.insert(0, str(repo.parent))
     try:
         module = importlib.import_module(f"{repo.name}.group_safety")
         assert callable(module.normalize_safety_text)
+        assert module.logger is logger
     finally:
         sys.path.remove(str(repo.parent))
 

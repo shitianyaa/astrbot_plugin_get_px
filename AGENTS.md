@@ -38,7 +38,7 @@
 - **配置读取**: 统一通过 `main.py` 封装方法读取，严禁散落调用 `self.context.get_config(...)`。
 - **数据库迁移**: SQLite schema 变更必须在 `checkin/schema.py` 提供版本迁移与备份机制。
 - **主题自包含**: 签到卡主题生成必须内联 CSS/base64 字体，严禁外部网络 URL。
-- **日志规范**: 统一使用“中文事件描述 + `snake_case=value` 字段”，禁止吞掉异常。
+- **日志规范**: logger 统一通过 `from astrbot.api import logger` 导入，禁止使用 Python 内置 `logging` 或以其作为导入失败的回退；独立测试如需替代日志器，在测试侧注入 mock。日志使用“中文事件描述 + `snake_case=value` 字段”，禁止吞掉异常。
 
 ## 文档与进度纪律
 
