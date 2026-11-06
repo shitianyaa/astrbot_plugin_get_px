@@ -38,7 +38,8 @@ import time
 import weakref
 from copy import deepcopy
 
-from astrbot.api.all import AstrBotConfig, Image, logger
+from astrbot.api import logger
+from astrbot.api.all import AstrBotConfig, Image
 from astrbot.api.event import AstrMessageEvent, filter
 from astrbot.api.star import Context, Star
 from astrbot.core.star.filter.command import GreedyStr
@@ -67,7 +68,7 @@ from .plugin_api import PluginWebApi
 
 LOG_PREFIX = "[GetPx]"
 PLUGIN_NAME = "astrbot_plugin_get_px"
-PLUGIN_VERSION = "v3.8.5"
+PLUGIN_VERSION = "v3.8.6"
 WEB_INTERNAL_ERROR_MESSAGE = "服务内部错误，请稍后重试"
 
 AUTO_TRIGGER_PATTERN = r"^/?(来\s*(.*?)(份|个|张|点))(.*?)(福利|色|瑟|涩|塞)?图$"

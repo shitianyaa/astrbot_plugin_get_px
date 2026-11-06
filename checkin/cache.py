@@ -15,7 +15,7 @@ import threading
 from typing import Any, Awaitable, Callable
 from zoneinfo import ZoneInfo
 
-from astrbot.api.all import logger
+from astrbot.api import logger
 from PIL import Image
 
 from .card import CardBackground

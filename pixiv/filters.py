@@ -3,7 +3,7 @@ from __future__ import annotations
 import random
 import re
 
-from astrbot.api.all import logger
+from astrbot.api import logger
 from astrbot.api.event import AstrMessageEvent
 
 from .index import ordered_by_unused

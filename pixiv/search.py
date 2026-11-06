@@ -2,7 +2,8 @@ from __future__ import annotations
 
 import asyncio
 
-from astrbot.api.all import Image, Plain, logger
+from astrbot.api import logger
+from astrbot.api.all import Image, Plain
 from astrbot.api.event import AstrMessageEvent
 from astrbot.api.message_components import Node, Nodes
 

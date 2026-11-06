@@ -7,7 +7,7 @@
 一个面向 AstrBot 的安全发图与签到插件：Lolicon 优先取图，失败时可用 Pixiv refresh_token 回退，并在 WebUI 管理群排行、成员数值、内容安全和签到数据。
 
 ![AstrBot](https://img.shields.io/badge/AstrBot-plugin-5865f2?style=flat-square)
-![Version](https://img.shields.io/badge/version-3.8.5-22c55e?style=flat-square)
+![Version](https://img.shields.io/badge/version-3.8.6-22c55e?style=flat-square)
 ![Python](https://img.shields.io/badge/Python-3.10%2B-3776ab?style=flat-square)
 ![Platform](https://img.shields.io/badge/platform-OneBot%20%2F%20aiocqhttp-f97316?style=flat-square)
 ![License](https://img.shields.io/badge/license-MIT-3b82f6?style=flat-square)
@@ -91,7 +91,7 @@
 
 默认分支仍不提供用于 Pixiv 登录、API 请求或图片下载的 HTTP/SOCKS 出站代理；这类网络代理请使用 [`proxy` 分支](https://github.com/shitianyaa/astrbot_plugin_get_px/tree/proxy)。如果只是 Lolicon 返回的图片地址不可用，可在 `lolicon_image_proxy_origins` 中按行填写图片反代 origin，插件只改写 Lolicon 图片 URL，不代理 API 或 Pixiv 登录。
 
-**v3.8.5 升级说明：** 本版包含签到大背景与头像渲染修复、OneBot 图片发送改进和跨群签到缓存修复。OneBot 图片发送默认使用本地文件路径；分容器部署请共享插件数据目录，并确保两端的绝对路径一致，否则将 `onebot_image_transport` 改为 `base64` 或 `astrbot`，详见 [OneBot 图片发送](#onebot-图片发送)。签到缓存升级后可能重建一次，不重复发放奖励；本次不修改数据库结构。完整变更见 [更新日志](CHANGELOG.md#v385-2026-11-06)。
+**v3.8.6 升级说明：** 本版包含签到大背景与头像渲染修复、OneBot 图片发送改进和跨群签到缓存修复。OneBot 图片发送默认使用本地文件路径；分容器部署请共享插件数据目录，并确保两端的绝对路径一致，否则将 `onebot_image_transport` 改为 `base64` 或 `astrbot`，详见 [OneBot 图片发送](#onebot-图片发送)。签到缓存升级后可能重建一次，不重复发放奖励；本次不修改数据库结构。完整变更见 [更新日志](CHANGELOG.md#v386-2026-11-06)。
 
 > [!WARNING]
 > **跨版本升级与签到数据**

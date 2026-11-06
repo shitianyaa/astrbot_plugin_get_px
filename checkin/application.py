@@ -4,7 +4,8 @@ import asyncio
 from dataclasses import dataclass, replace
 from pathlib import Path
 
-from astrbot.api.all import Image, Plain, logger
+from astrbot.api import logger
+from astrbot.api.all import Image, Plain
 from astrbot.api.event import AstrMessageEvent
 
 from .models import ACHIEVEMENTS, CheckinProfile, CheckinRecord

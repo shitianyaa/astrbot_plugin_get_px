@@ -16,6 +16,10 @@
   - 测试或验证流程变化
 - 修改 repo-wide 维护规则或 agent 入口约定时，同步更新 `AGENTS.md`。
 
+## 日志导入
+
+插件日志统一通过 `from astrbot.api import logger` 导入，不使用内置 `logging`，也不提供导入失败时的 logging fallback。脱离 AstrBot 环境的测试在测试侧注入 mock logger，不在运行时代码中增加兼容分支。
+
 ## 入口与模块边界
 
 入口与模块事实统一维护在 [`../project/architecture.md`](../project/architecture.md)。本文件只记录维护要求：不要把复杂业务逻辑重新塞回 `main.py`。
