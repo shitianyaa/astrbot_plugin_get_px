@@ -5,10 +5,17 @@ import json
 import os
 import re
 import time
+from enum import Enum
 from pathlib import Path
 
 from astrbot.api import logger
 from astrbot.api.message_components import Image, Plain, Node, Nodes
+
+
+class DeliveryStatus(Enum):
+    CONFIRMED = "confirmed"
+    FAILED = "failed"
+    UNKNOWN = "unknown"
 
 
 async def _onebot_segments(content: list, transport: str) -> list[dict]:
@@ -115,9 +122,18 @@ def log_delivery_error(
     )
 
 
+async def _send_notice(event, text: str, *, context: str, status: DeliveryStatus) -> None:
+    try:
+        await event.send(event.plain_result(text))
+    except Exception as exc:
+        log_delivery_error(
+            exc, context=context, phase="notice", delivery_status=status.value
+        )
+
+
 async def send_once(
     event, content: list, *, context: str, onebot_transport: str = "file"
-) -> bool:
+) -> DeliveryStatus:
     """发送接口无幂等保证；异常时保留未知状态，不自动重发图片。"""
     started = time.monotonic()
     direct = (
@@ -135,10 +151,26 @@ async def send_once(
         log_delivery_error(
             exc, context=context, phase="build", delivery_status="failed"
         )
-        return False
+        await _send_notice(
+            event, "⚠️ 图片消息构建失败，本次未发送且不扣费，请检查插件日志。",
+            context=context, status=DeliveryStatus.FAILED,
+        )
+        return DeliveryStatus.FAILED
     try:
         if direct:
-            await event.bot.call_action(action, **params)
+            receipt = await event.bot.call_action(action, **params)
+            # aiocqhttp 已解包 data；异步受理可返回 None，不能据此确认发图。
+            message_id = receipt.get("message_id") if isinstance(receipt, dict) else None
+            if type(message_id) not in (int, str) or not str(message_id).strip():
+                logger.warning(
+                    f"[GetPx] 发图回执缺少消息标识: {context} "
+                    f"phase=receipt delivery_status=unknown"
+                )
+                await _send_notice(
+                    event, "⚠️ 图片送达状态未知，已停止自动重发；请先查看聊天记录，本次未确认部分不扣费。",
+                    context=context, status=DeliveryStatus.UNKNOWN,
+                )
+                return DeliveryStatus.UNKNOWN
         else:
             await event.send(message)
     except Exception as exc:
@@ -149,21 +181,15 @@ async def send_once(
             delivery_status="unknown",
             duration_ms=int((time.monotonic() - started) * 1000),
         )
-        try:
-            await event.send(
-                event.plain_result(
-                    "⚠️ 图片送达状态未知，已停止自动重发；请先查看聊天记录，本次未确认部分不扣费。"
-                )
-            )
-        except Exception as notice_error:
-            log_delivery_error(
-                notice_error, context=context, phase="notice", delivery_status="unknown"
-            )
-        return False
+        await _send_notice(
+            event, "⚠️ 图片送达状态未知，已停止自动重发；请先查看聊天记录，本次未确认部分不扣费。",
+            context=context, status=DeliveryStatus.UNKNOWN,
+        )
+        return DeliveryStatus.UNKNOWN
     logger.info(
         f"[GetPx] 作品发送已确认: {context} delivery_status=confirmed duration_ms={int((time.monotonic() - started) * 1000)}"
     )
-    return True
+    return DeliveryStatus.CONFIRMED
 
 
 class DeliveryMixin:

@@ -281,6 +281,12 @@ def _plugin_for_checkin(tmp: str, result: CheckinResult, order, *, cache_hit=Fal
         get_custom_safety_terms=AsyncMock(return_value=set()),
         get_blacklisted_illust_ids=AsyncMock(return_value=set()),
     )
+    plugin.image_index.get_safety_snapshot = AsyncMock(
+        side_effect=lambda: (
+            plugin.image_index.get_custom_safety_terms.return_value,
+            plugin.image_index.get_blacklisted_illust_ids.return_value,
+        )
+    )
 
     async def record_usage(_event, background):
         if background and background.image_path:
@@ -342,8 +348,13 @@ class Issue24CacheTest(unittest.IsolatedAsyncioTestCase):
             plugin, selected = self.setup_plugin(tmp)
             first = await self.send_card(plugin, "a")
             snapshot = await plugin.checkin_store.get_today_record("10001")
-            self.assertEqual(await self.send_card(plugin, "b"), first)
-            self.assertEqual(await self.send_card(plugin, "a"), first)
+            with patch.object(
+                plugin, "_restore_checkin_background",
+                wraps=plugin._restore_checkin_background,
+            ) as restore:
+                self.assertEqual(await self.send_card(plugin, "b"), first)
+                self.assertEqual(await self.send_card(plugin, "a"), first)
+                restore.assert_not_awaited()
             self.assertEqual(len(selected), 1)
             self.assertEqual(plugin._render_checkin_card.await_count, 1)
             self.assertEqual(await plugin.checkin_store.get_today_record("10001"), snapshot)
@@ -362,7 +373,8 @@ class Issue24CacheTest(unittest.IsolatedAsyncioTestCase):
             plugin.image_index.get_blacklisted_illust_ids.return_value = {"110000"}
             self.assertIn("黑名单", blocked)
             self.assertEqual(identity["blacklisted_illust_ids"], ["110000"])
-            plugin.image_index.get_blacklisted_illust_ids.assert_awaited_once()
+            plugin.image_index.get_safety_snapshot.assert_awaited_once()
+            plugin.image_index.get_blacklisted_illust_ids.assert_not_awaited()
 
     async def test_disabled_independent_lists_do_not_split_identical_rules(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -620,7 +632,7 @@ class MainErrorHandlingTest(unittest.IsolatedAsyncioTestCase):
 
     async def test_initialize_logs_v3_migration_guidance_for_old_database(self):
         plugin = object.__new__(GetPxPlugin)
-        plugin.downloader = SimpleNamespace(temp_dir=None)
+        plugin.downloader = SimpleNamespace(temp_dir=None, resume_cleanup=AsyncMock())
         plugin._init_client = lambda: None
 
         class FakeImageIndex:
@@ -655,7 +667,7 @@ class MainErrorHandlingTest(unittest.IsolatedAsyncioTestCase):
 
     async def test_initialize_migrates_policy_before_convergence_and_logs_result(self):
         plugin = object.__new__(GetPxPlugin)
-        plugin.downloader = SimpleNamespace(temp_dir=None)
+        plugin.downloader = SimpleNamespace(temp_dir=None, resume_cleanup=AsyncMock())
         order = []
         plugin.config = {}
         plugin.context = SimpleNamespace()
@@ -735,7 +747,7 @@ class MainErrorHandlingTest(unittest.IsolatedAsyncioTestCase):
 
     async def test_initialize_skips_convergence_when_policy_migration_fails(self):
         plugin = object.__new__(GetPxPlugin)
-        plugin.downloader = SimpleNamespace(temp_dir=None)
+        plugin.downloader = SimpleNamespace(temp_dir=None, resume_cleanup=AsyncMock())
         plugin.config = {}
         plugin.context = SimpleNamespace()
         plugin._migrate_grouped_config = Mock()
@@ -782,7 +794,7 @@ class MainErrorHandlingTest(unittest.IsolatedAsyncioTestCase):
 
     async def test_initialize_stops_after_convergence_failure(self):
         plugin = object.__new__(GetPxPlugin)
-        plugin.downloader = SimpleNamespace(temp_dir=None)
+        plugin.downloader = SimpleNamespace(temp_dir=None, resume_cleanup=AsyncMock())
         plugin.config = {}
         plugin.context = SimpleNamespace()
         plugin._migrate_grouped_config = Mock()
@@ -1332,6 +1344,29 @@ class MainErrorHandlingTest(unittest.IsolatedAsyncioTestCase):
             plugin._record_checkin_background.assert_not_awaited()
             plugin._release_checkin_background_claim.assert_awaited_once()
             self.assertFalse(rendered.exists())
+
+    async def test_cache_lookup_error_returns_text_and_releases_background_claim(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            order = []
+            result = CheckinResult(
+                _profile(), _record(persisted=False, with_background=False), duplicate=False
+            )
+            plugin = _plugin_for_checkin(tmp, result, order)
+            source = Path(tmp) / "selected.png"
+            PILImage.new("RGB", (750, 1000), "blue").save(source)
+            plugin._prepare_checkin_background.return_value = CardBackground(
+                image_path=str(source), mode="pixiv_daily",
+                source="lolicon:random", illust_id="123:0",
+            )
+            plugin._get_cached_checkin_card = AsyncMock(side_effect=OSError("cache unavailable"))
+            event = _FakeEvent(order)
+            output = await _collect(plugin._handle_checkin(event))
+            self.assertEqual(len(output), 1)
+            self.assertEqual(event.sent, [])
+            plugin._release_checkin_background_claim.assert_awaited_once()
+            plugin._render_checkin_card.assert_not_awaited()
+            self.assertEqual(plugin.checkin_store.background_updates, [])
+            self.assertFalse(source.exists())
 
     async def test_send_failure_keeps_cache_but_does_not_record_usage(self):
         with tempfile.TemporaryDirectory() as tmp:

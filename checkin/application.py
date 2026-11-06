@@ -17,8 +17,10 @@ from .themes import get_checkin_theme
 
 try:
     from ..pixiv.downloader import cleanup
+    from ..pixiv.safety import normalized_builtin_terms
 except ImportError:  # Direct imports used by the test suite.
     from pixiv.downloader import cleanup
+    from pixiv.safety import normalized_builtin_terms
 
 
 LOG_PREFIX = "[GetPx]"
@@ -181,6 +183,7 @@ class CheckinApplicationMixin:
 
         background: CardBackground | None = None
         card_path: Path | None = None
+        cached_path: Path | None = None
         claim_held = False
         background_persisted = False
         profile_snapshot = self._checkin_profile_from_record(record)
@@ -803,10 +806,22 @@ class CheckinApplicationMixin:
 
     async def _checkin_safety_identity(self, policy) -> dict[str, object]:
         """Fingerprint effective rules rather than the requesting conversation."""
+        if policy.builtin_terms_enabled and self.image_index is not None:
+            try:
+                terms, blacklisted_ids = await self.image_index.get_safety_snapshot()
+            except Exception as exc:
+                logger.error(
+                    f"{LOG_PREFIX} 读取签到安全规则快照失败: error_type={type(exc).__name__}"
+                )
+                raise RuntimeError("内容安全服务暂不可用") from exc
+            terms = set(terms) | set(normalized_builtin_terms())
+        else:
+            terms = await self._safety_terms(policy)
+            blacklisted_ids = await self._blacklisted_illust_ids(policy)
         return {
             "general_only_enabled": policy.general_only_enabled,
-            "terms": sorted(await self._safety_terms(policy)),
-            "blacklisted_illust_ids": sorted(await self._blacklisted_illust_ids(policy)),
+            "terms": sorted(terms),
+            "blacklisted_illust_ids": sorted(blacklisted_ids),
         }
 
     async def _checkin_safety_snapshot(self, policy):

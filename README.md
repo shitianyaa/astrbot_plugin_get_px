@@ -7,10 +7,12 @@
 一个面向 AstrBot 的安全发图与签到插件：Lolicon 优先取图，失败时可用 Pixiv refresh_token 回退，并在 WebUI 管理群排行、成员数值、内容安全和签到数据。
 
 ![AstrBot](https://img.shields.io/badge/AstrBot-plugin-5865f2?style=flat-square)
-![Version](https://img.shields.io/badge/version-3.8.0-22c55e?style=flat-square)
+![Version](https://img.shields.io/badge/version-3.8.5-22c55e?style=flat-square)
 ![Python](https://img.shields.io/badge/Python-3.10%2B-3776ab?style=flat-square)
 ![Platform](https://img.shields.io/badge/platform-OneBot%20%2F%20aiocqhttp-f97316?style=flat-square)
 ![License](https://img.shields.io/badge/license-MIT-3b82f6?style=flat-square)
+
+<a href="https://qm.qq.com/q/cPQnFNtdN6"><img alt="QQ Group" src="https://img.shields.io/badge/QQ%E7%BE%A4-Bot%E6%B5%8B%E8%AF%95%E7%BE%A4-12B7F5?style=flat-square&logo=tencentqq&logoColor=white" /></a>
 
 > 欢迎来 QQ 群 **209949919** 交流、讨论，一起玩耍！
 
@@ -88,6 +90,8 @@
 ```
 
 默认分支仍不提供用于 Pixiv 登录、API 请求或图片下载的 HTTP/SOCKS 出站代理；这类网络代理请使用 [`proxy` 分支](https://github.com/shitianyaa/astrbot_plugin_get_px/tree/proxy)。如果只是 Lolicon 返回的图片地址不可用，可在 `lolicon_image_proxy_origins` 中按行填写图片反代 origin，插件只改写 Lolicon 图片 URL，不代理 API 或 Pixiv 登录。
+
+**v3.8.5 升级说明：** 本版包含签到大背景与头像渲染修复、OneBot 图片发送改进和跨群签到缓存修复。OneBot 图片发送默认使用本地文件路径；分容器部署请共享插件数据目录，并确保两端的绝对路径一致，否则将 `onebot_image_transport` 改为 `base64` 或 `astrbot`，详见 [OneBot 图片发送](#onebot-图片发送)。签到缓存升级后可能重建一次，不重复发放奖励；本次不修改数据库结构。完整变更见 [更新日志](CHANGELOG.md#v385-2026-11-06)。
 
 > [!WARNING]
 > **跨版本升级与签到数据**
@@ -180,11 +184,11 @@ AstrBot WebUI 插件页的「pluginCenter」可：
 
 > 联动通过读取万象画卷运行时实例的私有成员实现，无公开 API 契约。对方升级改了内部结构时联动会静默降级，届时需适配。
 
-发图接口正常返回才确认为成功并计费；接口报错或超时时，送达状态记为未知，不自动重发，也不将合并转发改为逐条补发。请先查看聊天记录，未确认部分不扣费；这样可以减少接口误报导致的重复图片，但真实未送达时也需手动重新请求。
-
-图片下载临时文件统一放在插件专属数据目录 `data/plugin_data/astrbot_plugin_get_px/temp/`，由 AstrBot 的 `StarTools.get_data_dir()` 确定，不使用系统或 AstrBot 全局 tmp。Pages 的临时缓存统计和清理对应此目录，仅清理 `get_px_*`，跳过最近 10 分钟修改的文件；正常请求结束仍自动删除下载文件。共享 `data` 时也须确保协议端看到的绝对路径与传入路径一致。
-
 ## OneBot 图片发送
+
+OneBot 直调收到含 `message_id` 的回执才确认接口成功并计费；空回执或异步受理不算确认成功，框架模式沿用框架调用成功返回的语义。构建失败会明确提示未发送、不扣费；接口报错、超时或请求取消按送达未知处理，不自动重发，也不将合并转发改为逐条补发。开启去重时，未知图片保留原去重范围内的占用，随 `dedupe_days` 过期。请先查看聊天记录，未确认部分不扣费。
+
+图片下载临时文件统一放在插件专属数据目录 `data/plugin_data/astrbot_plugin_get_px/temp/`，由 AstrBot 的 `StarTools.get_data_dir()` 确定，不使用系统或 AstrBot 全局 tmp。确认成功或构建失败后及时删除；送达未知的 `file` 图片保留 10 分钟供协议端读取，再自动清理，base64 图片仍及时清理。插件停止时保留这些文件，重启后按剩余保护时间恢复清理。Pages 仅清理其中的 `get_px_*`，跳过最近 10 分钟修改的文件。共享 `data` 时也须确保协议端看到的绝对路径与传入路径一致。
 
 OneBot 直调仅影响 `/p` 和自然语言发图。重载插件后，在“Pixiv 图源与下载”设置 `onebot_image_transport`：
 
@@ -192,7 +196,7 @@ OneBot 直调仅影响 `/p` 和自然语言发图。重载插件后，在“Pixi
 - `base64`：直接调用 OneBot，传输图片编码，适合跨机器或文件路径不可见的部署。
 - `astrbot`：使用原有 AstrBot 发送链路，便于对比或恢复。
 
-单图与合并转发均支持上述模式，其他平台继续使用框架链路。发送异常不会自动切换模式或重发，也不会将超时当作成功；日志的 `transport=file/base64/astrbot` 可确认实际路径。图片仍先下载到临时文件，并在请求结束后清理，因此协议端必须能及时读取文件；下载文件不作长期保留。签到卡和日历发送不受此开关影响。
+单图与合并转发均支持上述模式，其他平台继续使用框架链路。发送异常不会自动切换模式或重发，也不会将超时当作成功；日志的 `transport=file/base64/astrbot` 可确认实际路径。图片仍先下载到临时文件，未知路径发送保留 10 分钟读取窗口，不作长期保留。签到卡和日历发送不受此开关影响。
 
 ## 推荐配置
 
@@ -268,7 +272,7 @@ WebUI 配置页按以下 6 组折叠展示，分组细节与维护规则见 [doc
 | [签到说明](docs/user/checkin.md) | 发奖、商店、好感、卡片、问候、生日事件与称号 |
 | [项目架构](docs/project/architecture.md) | 模块划分（开发用） |
 
-**数据简述：** 发图去重窗口与签到数据保存在插件数据目录；发送用临时图发完即清；签到 JPEG 缓存按天自过期，不会整目录清空数据库、黑名单或备份。
+**数据简述：** 发图去重窗口与签到数据保存在插件数据目录；发送临时图及时清理，未知路径发送延迟 10 分钟清理；签到 JPEG 缓存按天自过期，不会整目录清空数据库、黑名单或备份。
 
 AI 签到问候会向所选 AstrBot 文本模型发送可用昵称、日期、签到统计、关系阶段、奖励、称号和成就；不会把用户 ID 当作昵称发送，昵称不可用时使用“匿名用户”。模型异常、错误角色或输出不合规时使用已保存的本地问候。
 
