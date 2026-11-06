@@ -7,7 +7,8 @@ from pathlib import Path
 import re
 import time
 
-from astrbot.api.all import File, Image, Plain, logger
+from astrbot.api import logger
+from astrbot.api.all import File, Image, Plain
 from astrbot.api.event import AstrMessageEvent
 from astrbot.core.star.star_tools import StarTools
 

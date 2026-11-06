@@ -58,7 +58,6 @@ class HolidayCalendar:
         if not self.should_refresh(now=now):
             return False
 
-        self._state["plugin_version"] = self.plugin_version
         self._state["last_attempt_at"] = now.isoformat()
         self._save()
 

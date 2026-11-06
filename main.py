@@ -38,7 +38,8 @@ import time
 import weakref
 from copy import deepcopy
 
-from astrbot.api.all import AstrBotConfig, Image, logger
+from astrbot.api import logger
+from astrbot.api.all import AstrBotConfig, Image
 from astrbot.api.event import AstrMessageEvent, filter
 from astrbot.api.star import Context, Star
 from astrbot.core.star.filter.command import GreedyStr
