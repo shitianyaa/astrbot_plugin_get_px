@@ -5,6 +5,7 @@ import os
 import re
 import tempfile
 import time
+from pathlib import Path
 from collections.abc import Iterable
 from urllib.parse import urlsplit, urlunsplit
 
@@ -17,6 +18,8 @@ LOG_PREFIX = "[GetPx]"
 MAX_DOWNLOAD_BYTES = 50 * 1024 * 1024
 MAX_PROXY_ORIGINS = 5
 MAX_DOWNLOAD_ATTEMPTS = 8
+# 与 Pages 最近 10 分钟的临时文件保护保持一致。
+DELIVERY_FILE_GRACE_SECONDS = 600
 _LOG_URL_PATTERN = re.compile(r"https?://\S+", re.IGNORECASE)
 
 ALLOWED_PIXIV_IMAGE_HOSTS = frozenset(
@@ -184,8 +187,10 @@ def iter_download_urls(
 
 
 class ImageDownloader:
-    def __init__(self, lolicon_image_proxy_origins: object = ""):
+    def __init__(self, lolicon_image_proxy_origins: object = "", *, temp_dir: Path | None = None):
+        self.temp_dir = Path(temp_dir) if temp_dir is not None else None
         self._session: aiohttp.ClientSession | None = None
+        self._cleanup_tasks: set[asyncio.Task] = set()
         self.lolicon_image_proxy_origins = parse_proxy_origins(
             lolicon_image_proxy_origins
         )
@@ -201,11 +206,61 @@ class ImageDownloader:
         return self._session
 
     async def close(self):
+        tasks = tuple(self._cleanup_tasks)
+        for task in tasks:
+            task.cancel()
+        if tasks:
+            await asyncio.gather(*tasks, return_exceptions=True)
+        self._cleanup_tasks.clear()
         if self._session is not None and not self._session.closed:
             await self._session.close()
             self._session = None
 
+    def defer_cleanup(self, path: str) -> None:
+        """Leave an uncertain file send readable for the protocol's grace window."""
+        try:
+            os.utime(path, None)
+        except FileNotFoundError:
+            return
+        except OSError as exc:
+            logger.warning(
+                f"{LOG_PREFIX} 延迟清理时间更新失败: error_type={type(exc).__name__}"
+            )
+        self._schedule_cleanup(path, DELIVERY_FILE_GRACE_SECONDS)
+
+    def _schedule_cleanup(self, path: str, delay: float) -> None:
+        async def remove_later():
+            await asyncio.sleep(delay)
+            cleanup(path)
+
+        task = asyncio.create_task(remove_later())
+        self._cleanup_tasks.add(task)
+        task.add_done_callback(self._cleanup_tasks.discard)
+
+    async def resume_cleanup(self) -> None:
+        """Resume bounded cleanup of plugin download leftovers after restart."""
+        def remaining_files():
+            pending = []
+            if self.temp_dir is None:
+                return pending
+            try:
+                for path in self.temp_dir.glob("get_px_*"):
+                    if path.is_file():
+                        remaining = path.stat().st_mtime + DELIVERY_FILE_GRACE_SECONDS - time.time()
+                        pending.append((str(path), min(DELIVERY_FILE_GRACE_SECONDS, max(0, remaining))))
+            except OSError as exc:
+                logger.warning(
+                    f"{LOG_PREFIX} 恢复临时图片清理失败: error_type={type(exc).__name__}"
+                )
+            return pending
+
+        for path, delay in await asyncio.to_thread(remaining_files):
+            self._schedule_cleanup(path, delay)
+
     async def download(self, url: str, timeout: float) -> tuple[str, int]:
+        if self.temp_dir is None:
+            raise RuntimeError("插件临时下载目录尚未初始化")
+        self.temp_dir.mkdir(parents=True, exist_ok=True)
         session = self._ensure_session()
         client_timeout = aiohttp.ClientTimeout(total=timeout)
         suffix = ".jpg"
@@ -230,7 +285,7 @@ class ImageDownloader:
                 if content_length and content_length > MAX_DOWNLOAD_BYTES:
                     raise _too_large_error(content_length)
 
-                fd, path = tempfile.mkstemp(prefix="get_px_", suffix=suffix)
+                fd, path = tempfile.mkstemp(prefix="get_px_", suffix=suffix, dir=self.temp_dir)
                 size = 0
                 file_obj = os.fdopen(fd, "wb")
                 fd = -1

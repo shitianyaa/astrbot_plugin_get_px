@@ -3,7 +3,7 @@
 import sys
 import tempfile
 from pathlib import Path
-from unittest.mock import AsyncMock, patch
+from unittest.mock import AsyncMock, Mock, patch
 
 import pytest
 
@@ -344,3 +344,212 @@ async def test_search_forward_branch_settles_downloaded_count() -> None:
     args, kwargs = harness.checkin_store.spend_coins.await_args
     assert kwargs["cost"] == 40
     assert event.sent[0][0].nodes[0].uin == "self-bot"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("forward", [False, True])
+async def test_uncertain_send_does_not_retry_fallback_or_charge(forward):
+    from aiocqhttp.exceptions import ActionFailed
+    harness = _SearchFlowHarness(illusts=[_illust(1), _illust(2)])
+    harness.checkin_store, _ = _settle_store()
+    harness._should_use_forward = lambda **kwargs: forward
+    harness.downloader = AsyncMock()
+    harness.downloader.download_for_send.return_value = ("unused.jpg", "original", 1024)
+    event = _FlowEvent(platform="aiocqhttp")
+    delivered = []
+    async def send(chain):
+        if isinstance(chain, list):
+            delivered.append(chain)
+            raise ActionFailed({"status": "failed", "retcode": 1200, "message": "ambiguous"})
+        event.sent.append(chain)
+    event.send = send
+    await _run_search(harness, event, "2")
+    assert len(delivered) == (1 if forward else 2)
+    harness.checkin_store.spend_coins.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_record_usage_error_does_not_repeat_confirmed_delivery():
+    harness = _SearchFlowHarness(illusts=[_illust(1)])
+    harness.checkin_store, _ = _settle_store()
+    harness.downloader = AsyncMock()
+    harness.downloader.download_for_send.return_value = ("unused.jpg", "original", 1024)
+    harness.image_index = AsyncMock()
+    harness.image_index.retention_days = 1
+    harness.image_index.record_usage.side_effect = RuntimeError("database unavailable")
+    event = _FlowEvent()
+    await _run_search(harness, event, "1")
+    assert len([chain for chain in event.sent if isinstance(chain, list)]) == 1
+    harness.checkin_store.spend_coins.assert_awaited_once()
+    harness.image_index.record_usage.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("fails", [False, True])
+@pytest.mark.parametrize("forward", [False, True])
+async def test_search_direct_onebot_settlement(tmp_path, fails, forward):
+    from PIL import Image
+    path = tmp_path / "fixture.png"
+    Image.new("RGB", (32, 32)).save(path)
+    harness = _SearchFlowHarness(illusts=[_illust(1)])
+    harness.config["onebot_image_transport"] = "file"
+    harness._forward_threshold = lambda: 0 if forward else 1
+    harness.checkin_store, _ = _settle_store()
+    harness.downloader = AsyncMock()
+    harness.downloader.download_for_send.return_value = (str(path), "original", path.stat().st_size)
+    harness.downloader.defer_cleanup = Mock()
+    event = _FlowEvent(platform="aiocqhttp")
+    event.get_group_id = lambda: "456"
+    event.bot = AsyncMock()
+    event.bot.call_action.return_value = {"message_id": 123}
+    if fails:
+        event.bot.call_action.side_effect = TimeoutError()
+    await _run_search(harness, event, "1")
+    event.bot.call_action.assert_awaited_once()
+    args, kwargs = event.bot.call_action.await_args
+    assert args == ("send_group_forward_msg" if forward else "send_group_msg",)
+    segments = kwargs["messages"][0]["data"]["content"] if forward else kwargs["message"]
+    assert segments[1]["data"]["file"] == path.resolve().as_uri()
+    assert path.exists() is fails
+    if fails:
+        harness.downloader.defer_cleanup.assert_called_once_with(str(path))
+        harness.checkin_store.spend_coins.assert_not_awaited()
+    else:
+        harness.downloader.defer_cleanup.assert_not_called()
+        harness.checkin_store.spend_coins.assert_awaited_once()
+
+
+def test_onebot_transport_nested_config_and_schema():
+    import json
+    from astrbot_plugin_get_px.main import GetPxPlugin
+    plugin = object.__new__(GetPxPlugin)
+    plugin.config = {"pixiv_source": {"onebot_image_transport": "base64"}}
+    assert plugin._cfg_str("onebot_image_transport", "file") == "base64"
+    schema = json.loads((Path(__file__).resolve().parents[1] / "_conf_schema.json").read_text(encoding="utf-8"))
+    field = schema["pixiv_source"]["items"]["onebot_image_transport"]
+    assert field["default"] == "file"
+    assert set(field["options"]) == {"file", "base64", "astrbot"}
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("forward", [False, True])
+@pytest.mark.parametrize("transport", ["file", "base64"])
+@pytest.mark.parametrize("outcome", ["confirmed", "failed", "unknown", "cancelled", "empty_receipt", "build_notice_cancelled", "build_cancelled"])
+async def test_delivery_state_controls_charge_pending_and_file_lifetime(tmp_path, forward, transport, outcome):
+    import asyncio
+    from PIL import Image
+    from astrbot_plugin_get_px.pixiv.downloader import ImageDownloader
+    from astrbot_plugin_get_px.pixiv.index import ImageIndexStore
+
+    count = 2 if forward else 1
+    paths = [tmp_path / f"get_px_fixture_{i}.png" for i in range(1, count + 1)]
+    for path in paths:
+        Image.new("RGB", (8, 8), "blue").save(path)
+    harness = _SearchFlowHarness(illusts=[_illust(i) for i in range(1, count + 1)])
+    harness.config["onebot_image_transport"] = transport
+    harness._forward_threshold = lambda: 0 if forward else 1
+    harness._dedupe_days_cfg = 1
+    harness.checkin_store, _ = _settle_store()
+    index = ImageIndexStore(tmp_path, retention_days=1)
+    harness.image_index = index
+    downloader = ImageDownloader(temp_dir=tmp_path)
+    downloader.download_for_send = AsyncMock(
+        side_effect=[(str(path), "original", path.stat().st_size) for path in paths]
+    )
+    harness.downloader = downloader
+    event = _FlowEvent(platform="aiocqhttp")
+    event.get_group_id = lambda: "456"
+    event.bot = Mock(call_action=AsyncMock(return_value={"message_id": 123}))
+    if outcome == "unknown":
+        event.bot.call_action.side_effect = TimeoutError()
+    elif outcome == "cancelled":
+        event.bot.call_action.side_effect = asyncio.CancelledError()
+    elif outcome == "empty_receipt":
+        event.bot.call_action.return_value = None
+    scope = harness._event_scope(event)
+    ids = {str(i) for i in range(1, count + 1)}
+    try:
+        for illust_id in ids:
+            await index.claim_usage(
+                scope=scope, source_key="lolicon:random", illust_id=illust_id,
+                feature="normal_pending", user_id="10001",
+            )
+        if outcome in ("failed", "build_notice_cancelled", "build_cancelled"):
+            if outcome == "build_notice_cancelled":
+                event.send = AsyncMock(side_effect=asyncio.CancelledError())
+            error = asyncio.CancelledError() if outcome == "build_cancelled" else ValueError("invalid payload")
+            with patch("astrbot_plugin_get_px.pixiv.delivery._onebot_request", side_effect=error):
+                if outcome == "failed":
+                    await _run_search(harness, event, str(count))
+                else:
+                    with pytest.raises(asyncio.CancelledError):
+                        await _run_search(harness, event, str(count))
+            event.bot.call_action.assert_not_awaited()
+            if outcome == "failed":
+                assert any("构建失败" in chain for chain in event.sent if isinstance(chain, str))
+        elif outcome == "cancelled":
+            with pytest.raises(asyncio.CancelledError):
+                await _run_search(harness, event, str(count))
+        else:
+            await _run_search(harness, event, str(count))
+        held = await index.get_used_illust_ids(scope, "lolicon:random")
+        assert held == (set() if outcome in ("failed", "build_notice_cancelled", "build_cancelled") else ids)
+        uncertain = outcome in ("unknown", "cancelled", "empty_receipt")
+        assert all(path.exists() is (uncertain and transport == "file") for path in paths)
+        assert len(downloader._cleanup_tasks) == (count if uncertain and transport == "file" else 0)
+        if outcome == "confirmed":
+            harness.checkin_store.spend_coins.assert_awaited_once_with(user_id="10001", cost=20 * count)
+        else:
+            harness.checkin_store.spend_coins.assert_not_awaited()
+    finally:
+        await downloader.close()
+        index.close()
+
+
+@pytest.mark.asyncio
+async def test_mixed_single_batch_charges_only_confirmed_and_retains_only_unknown(tmp_path):
+    from PIL import Image
+    from astrbot_plugin_get_px.pixiv.downloader import ImageDownloader
+    from astrbot_plugin_get_px.pixiv.index import ImageIndexStore
+
+    paths = {str(i): tmp_path / f"get_px_mixed_{i}.png" for i in (1, 2, 3)}
+    for path in paths.values():
+        Image.new("RGB", (8, 8), "blue").save(path)
+    harness = _SearchFlowHarness(illusts=[_illust(i) for i in (1, 2, 3)])
+    harness.config["onebot_image_transport"] = "file"
+    harness._should_use_forward = lambda **_kwargs: False
+    harness._dedupe_days_cfg = 1
+    harness.checkin_store, _ = _settle_store()
+    index = ImageIndexStore(tmp_path, retention_days=1)
+    harness.image_index = index
+    downloader = ImageDownloader(temp_dir=tmp_path)
+
+    async def download(illust, *_args, **_kwargs):
+        path = paths[str(illust["id"])]
+        size = path.stat().st_size
+        if str(illust["id"]) == "3":
+            path.unlink()  # 模拟并发清理导致构建前文件丢失。
+        return str(path), "original", size
+
+    downloader.download_for_send = download
+    harness.downloader = downloader
+    event = _FlowEvent(platform="aiocqhttp")
+    event.get_group_id = lambda: "456"
+    event.bot = Mock(call_action=AsyncMock(side_effect=[{"message_id": 123}, TimeoutError()]))
+    scope = harness._event_scope(event)
+    try:
+        for illust_id in paths:
+            await index.claim_usage(
+                scope=scope, source_key="lolicon:random", illust_id=illust_id,
+                feature="normal_pending", user_id="10001",
+            )
+        await _run_search(harness, event, "3")
+        assert await index.get_used_illust_ids(scope, "lolicon:random") == {"1", "2"}
+        rows = index._get_conn().execute("SELECT illust_id, feature FROM image_usage").fetchall()
+        assert {row["illust_id"]: row["feature"] for row in rows} == {"1": "normal", "2": "normal_pending"}
+        assert [path.exists() for path in paths.values()] == [False, True, False]
+        assert event.bot.call_action.await_count == 2
+        harness.checkin_store.spend_coins.assert_awaited_once_with(user_id="10001", cost=20)
+    finally:
+        await downloader.close()
+        index.close()

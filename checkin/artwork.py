@@ -22,6 +22,7 @@ from .card import (
     CHECKIN_CARD_HEIGHT,
     CHECKIN_CARD_WIDTH,
     CardBackground,
+    BackgroundEncodingError,
     _file_to_data_url,
     build_checkin_card_data,
     get_checkin_card_template,
@@ -48,6 +49,13 @@ _CHECKIN_BACKGROUND_MODE_LABELS = {
     "custom": "自定义背景",
     "fallback": "占位图",
 }
+
+# 日历极致档输出 2880×1620，背景按同一上限压缩，避免先缩到卡片尺寸再放大。
+_CALENDAR_ARTWORK_MAX_EDGE = 2880
+
+
+def _calendar_background_data_url(path: str) -> str:
+    return _file_to_data_url(path, max_edge=_CALENDAR_ARTWORK_MAX_EDGE)
 
 
 def _checkin_background_mode_label(background: CardBackground | None) -> str:
@@ -259,6 +267,52 @@ class CheckinArtworkMixin:
         selected["meta_pages"] = [page_data]
         return selected
 
+    async def _prepare_checkin_card_data(
+        self,
+        event: AstrMessageEvent,
+        *,
+        profile,
+        record,
+        background,
+        bot_name,
+        user_title: str = "",
+    ) -> dict[str, object]:
+        """下载并内联单次渲染资源，供画质降级复用。"""
+        avatar_url = ""
+        source = (
+            self._checkin_avatar_url(event)
+            if self._cfg_bool("checkin_avatar_enabled", True)
+            else ""
+        )
+        if source:
+            path = ""
+            try:
+                path, _size = await self.downloader.download(
+                    source, timeout=self._cfg_float("request_timeout", 30.0, 5.0, 120.0)
+                )
+                avatar_url = await asyncio.to_thread(_file_to_data_url, path)
+                if not avatar_url:
+                    raise ValueError("invalid avatar image")
+            except Exception as exc:
+                logger.warning(
+                    f"{LOG_PREFIX} 签到头像获取失败，使用昵称占位: "
+                    f"error_type={type(exc).__name__}"
+                )
+            finally:
+                cleanup(path)
+        return await asyncio.to_thread(
+            build_checkin_card_data,
+            profile=profile,
+            record=record,
+            bot_name=bot_name,
+            avatar_url=avatar_url,
+            background=background,
+            user_title=user_title,
+            background_refresh_cost=self._cfg_int(
+                "checkin_background_refresh_cost", 100, 0, 500
+            ),
+        )
+
     async def _render_checkin_card(
         self,
         event: AstrMessageEvent,
@@ -269,31 +323,24 @@ class CheckinArtworkMixin:
         bot_name: str,
         user_title: str = "",
         render_tier: str | None = None,
+        prepared_data: dict[str, object] | None = None,
     ) -> str:
-        avatar_url = (
-            self._checkin_avatar_url(event)
-            if self._cfg_bool("checkin_avatar_enabled", True)
-            else ""
-        )
         width = CHECKIN_CARD_WIDTH
         height = CHECKIN_CARD_HEIGHT
         render_spec = get_checkin_render_tier(
             render_tier or self._configured_checkin_render_tier()
         )
-        # 视图模型构建含背景图 Data URL 编码（读文件 + base64），放入线程池
-        data = await asyncio.to_thread(
-            build_checkin_card_data,
-            profile=profile,
-            record=record,
-            bot_name=bot_name,
-            avatar_url=avatar_url,
-            background=background,
-            user_title=user_title,
-            width=width,
-            height=height,
-            background_refresh_cost=self._cfg_int(
-                "checkin_background_refresh_cost", 100, 0, 500
-            ),
+        data = (
+            prepared_data
+            if prepared_data is not None
+            else await self._prepare_checkin_card_data(
+                event,
+                profile=profile,
+                record=record,
+                bot_name=bot_name,
+                background=background,
+                user_title=user_title,
+            )
         )
         options = {
             "full_page": False,
@@ -358,6 +405,7 @@ class CheckinArtworkMixin:
         user_title: str,
         preferred_tier: str,
         policy,
+        safety_identity=None,
     ) -> tuple[Path | None, str]:
         for spec in checkin_render_fallbacks(preferred_tier):
             cache_key = await asyncio.to_thread(
@@ -370,6 +418,7 @@ class CheckinArtworkMixin:
                 user_title=user_title,
                 render_tier=spec.name,
                 policy=policy,
+                safety_identity=safety_identity,
             )
             cached = await asyncio.to_thread(
                 self._cache_get_for_tier,
@@ -402,16 +451,28 @@ class CheckinArtworkMixin:
         preferred_tier: str,
         cache=None,
         policy=None,
+        safety_identity=None,
     ) -> tuple[Path, str]:
+        """复用资源逐档渲染；源背景编码失败交由调用方撤销作品选择。"""
         last_error: Exception | None = None
         fallback_specs = checkin_render_fallbacks(preferred_tier)
+        prepared_data = None
         for tier_index, spec in enumerate(fallback_specs):
             renderer_source_path = ""
             render_succeeded = False
             started_at = time.monotonic()
 
             async def render_card() -> str:
-                nonlocal renderer_source_path
+                nonlocal renderer_source_path, prepared_data
+                if prepared_data is None:
+                    prepared_data = await self._prepare_checkin_card_data(
+                        event,
+                        profile=profile,
+                        record=record,
+                        background=background,
+                        bot_name=bot_name,
+                        user_title=user_title,
+                    )
                 renderer_source_path = await self._render_checkin_card(
                     event,
                     profile=profile,
@@ -420,6 +481,7 @@ class CheckinArtworkMixin:
                     bot_name=bot_name,
                     user_title=user_title,
                     render_tier=spec.name,
+                    prepared_data=prepared_data,
                 )
                 return renderer_source_path
 
@@ -447,6 +509,7 @@ class CheckinArtworkMixin:
                         user_title=user_title,
                         render_tier=spec.name,
                         policy=policy,
+                        safety_identity=safety_identity,
                     )
                     card_path = Path(
                         await self._cache_store_for_tier(
@@ -464,6 +527,9 @@ class CheckinArtworkMixin:
                     f"耗时={int((time.monotonic() - started_at) * 1000)}ms"
                 )
                 return card_path, spec.name
+            except BackgroundEncodingError:
+                # 降画质不能修复被拒绝的源图，交回业务层撤销作品选择。
+                raise
             except Exception as exc:
                 last_error = exc
                 has_lower_tier = tier_index + 1 < len(fallback_specs)
@@ -1008,7 +1074,7 @@ class CheckinArtworkMixin:
             background_credit = getattr(background, "pixiv_caption", "") or ""
         # 读文件 + PIL 校验 + base64 可达数 MB，与视图组装一并放进线程池
         background_url = await asyncio.to_thread(
-            _file_to_data_url,
+            _calendar_background_data_url,
             str(getattr(background, "image_path", "") or ""),
         )
         data = await asyncio.to_thread(

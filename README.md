@@ -7,12 +7,14 @@
 一个面向 AstrBot 的安全发图与签到插件：Lolicon 优先取图，失败时可用 Pixiv refresh_token 回退，并在 WebUI 管理群排行、成员数值、内容安全和签到数据。
 
 ![AstrBot](https://img.shields.io/badge/AstrBot-plugin-5865f2?style=flat-square)
-![Version](https://img.shields.io/badge/version-3.8.0-22c55e?style=flat-square)
+![Version](https://img.shields.io/badge/version-3.8.5-22c55e?style=flat-square)
 ![Python](https://img.shields.io/badge/Python-3.10%2B-3776ab?style=flat-square)
 ![Platform](https://img.shields.io/badge/platform-OneBot%20%2F%20aiocqhttp-f97316?style=flat-square)
 ![License](https://img.shields.io/badge/license-MIT-3b82f6?style=flat-square)
 
 <a href="https://qm.qq.com/q/cPQnFNtdN6"><img alt="QQ Group" src="https://img.shields.io/badge/QQ%E7%BE%A4-Bot%E6%B5%8B%E8%AF%95%E7%BE%A4-12B7F5?style=flat-square&logo=tencentqq&logoColor=white" /></a>
+
+> 欢迎来 QQ 群 **209949919** 交流、讨论，一起玩耍！
 
 <br>
 <img src="logo.png" alt="画境拾珍 Logo" width="180">
@@ -28,6 +30,7 @@
 - [自然语言触发](#自然语言触发)
 - [WebUI](#webui-插件管理中心)
 - [每日签到](#每日签到)
+- [OneBot 图片发送](#onebot-图片发送)
 - [推荐配置](#推荐配置)
 - [更多文档](#更多文档)
 - [Roadmap](#roadmap)
@@ -65,7 +68,7 @@
 | 每日签到 | H 纸张画册卡片、竖向随机背景、金币、好感度、连签、商店与主题 |
 | 万象联动 | 可选接入万象画卷，签到领生图额度、商店购买额度，总开关默认关闭 |
 | 管理中心 | 群排行与趋势、成员数值、安全词与黑名单、签到备份 |
-| 稳定性 | 0–7 个自然日去重、发送失败重试、临时文件自动清理 |
+| 稳定性 | 0–7 个自然日去重、发送状态诊断、临时文件自动清理 |
 
 > 主要面向 QQ OneBot / aiocqhttp。其他平台会尽量降级为逐条发送，请自行测试兼容性。
 
@@ -88,6 +91,8 @@
 
 默认分支仍不提供用于 Pixiv 登录、API 请求或图片下载的 HTTP/SOCKS 出站代理；这类网络代理请使用 [`proxy` 分支](https://github.com/shitianyaa/astrbot_plugin_get_px/tree/proxy)。如果只是 Lolicon 返回的图片地址不可用，可在 `lolicon_image_proxy_origins` 中按行填写图片反代 origin，插件只改写 Lolicon 图片 URL，不代理 API 或 Pixiv 登录。
 
+**v3.8.5 升级说明：** 本版包含签到大背景与头像渲染修复、OneBot 图片发送改进和跨群签到缓存修复。OneBot 图片发送默认使用本地文件路径；分容器部署请共享插件数据目录，并确保两端的绝对路径一致，否则将 `onebot_image_transport` 改为 `base64` 或 `astrbot`，详见 [OneBot 图片发送](#onebot-图片发送)。签到缓存升级后可能重建一次，不重复发放奖励；本次不修改数据库结构。完整变更见 [更新日志](CHANGELOG.md#v385-2026-11-06)。
+
 > [!WARNING]
 > **跨版本升级与签到数据**
 >
@@ -101,6 +106,10 @@
 > 签到卡片依赖 AstrBot T2I（HTML 转图片）。公共 T2I 常有海外节点、体积限制或 SSL 问题，**强烈建议自建**。
 >
 > - 自部署文档：[AstrBot T2I 服务部署指南](https://docs.astrbot.app/others/self-host-t2i.html)
+
+签到卡和日历的大背景会在内联前缩放、重编码：卡片最长边不超过 1920px，日历不超过 2880px，编码后背景不超过 1.5MB。高细节图片会进一步缩小，透明度、EXIF 方向和 ICC 色彩按原图处理；小图保持原始字节。签到背景无法编码时使用占位图，不保留被拒绝作品的署名、说明或去重占用。此预算不包含模板和字体，不能消除端点过载导致的超时。细节见 [T2I 渲染说明](docs/dev/t2i-rendering.md)。
+
+签到卡头像在本地下载、校验后以 data URL 内联，获取失败时显示昵称首字；同一次画质降级复用已准备的头像与背景，缓存命中不下载头像。
 
 ## 常用指令
 
@@ -158,7 +167,7 @@ AstrBot WebUI 插件页的「pluginCenter」可：
 ## 每日签到
 
 - 奖励全局一天一次；群榜按实际签到的群分别记录，不重复发金币。
-- 重复签到不重奖，重发当天缓存卡片。
+- 重复签到不重奖，按实际生效的安全规则复用当天卡片：相同规则跨群共享，不同规则分别保留；返回原群仍使用其缓存卡片。
 - 商店：加持 200/500/1000；背景刷新默认 100（可配）；非默认主题默认每套 1500（可配）。默认「米白」免费。
 
 细则（好感等级、卡片规格、问候 24/32 字、生日事件、称号、节假日等）见 [签到说明](docs/user/checkin.md)。
@@ -174,6 +183,20 @@ AstrBot WebUI 插件页的「pluginCenter」可：
 - **前置条件**：需同时安装万象画卷并启用其每日生图限制；对方版本过旧或私有成员不兼容时自动降级为"不可用"，不影响签到本身。
 
 > 联动通过读取万象画卷运行时实例的私有成员实现，无公开 API 契约。对方升级改了内部结构时联动会静默降级，届时需适配。
+
+## OneBot 图片发送
+
+OneBot 直调收到含 `message_id` 的回执才确认接口成功并计费；空回执或异步受理不算确认成功，框架模式沿用框架调用成功返回的语义。构建失败会明确提示未发送、不扣费；接口报错、超时或请求取消按送达未知处理，不自动重发，也不将合并转发改为逐条补发。开启去重时，未知图片保留原去重范围内的占用，随 `dedupe_days` 过期。请先查看聊天记录，未确认部分不扣费。
+
+图片下载临时文件统一放在插件专属数据目录 `data/plugin_data/astrbot_plugin_get_px/temp/`，由 AstrBot 的 `StarTools.get_data_dir()` 确定，不使用系统或 AstrBot 全局 tmp。确认成功或构建失败后及时删除；送达未知的 `file` 图片保留 10 分钟供协议端读取，再自动清理，base64 图片仍及时清理。插件停止时保留这些文件，重启后按剩余保护时间恢复清理。Pages 仅清理其中的 `get_px_*`，跳过最近 10 分钟修改的文件。共享 `data` 时也须确保协议端看到的绝对路径与传入路径一致。
+
+OneBot 直调仅影响 `/p` 和自然语言发图。重载插件后，在“Pixiv 图源与下载”设置 `onebot_image_transport`：
+
+- `file`（默认）：直接调用 OneBot，将本地 `file:///` URI 传给协议端；POSIX 系统发送前将完整图片权限设为 `0644`，供不同 UID 的协议进程读取；AstrBot 与协议端必须能访问相同路径，同一机器的不同容器也需要正确的共享挂载。
+- `base64`：直接调用 OneBot，传输图片编码，适合跨机器或文件路径不可见的部署。
+- `astrbot`：使用原有 AstrBot 发送链路，便于对比或恢复。
+
+单图与合并转发均支持上述模式，其他平台继续使用框架链路。发送异常不会自动切换模式或重发，也不会将超时当作成功；日志的 `transport=file/base64/astrbot` 可确认实际路径。图片仍先下载到临时文件，未知路径发送保留 10 分钟读取窗口，不作长期保留。签到卡和日历发送不受此开关影响。
 
 ## 推荐配置
 
@@ -204,6 +227,7 @@ WebUI 配置页按以下 6 组折叠展示，分组细节与维护规则见 [doc
 | `group_content_safety_policies` | 群聊内容安全策略列表：强制普通分级、内置安全词开关与独立屏蔽词/作品 ID 黑名单，按群 ID 生效；配置页或管理中心均可维护 | `[]` |
 | `private_content_safety_policies` | 私聊内容安全策略列表：字段同群聊策略，按用户 ID 独立生效；配置页或管理中心均可维护 | `[]` |
 | `request_timeout` | 单张图片下载超时，单位秒 | `30` |
+| `onebot_image_transport` | OneBot 图片传输方式：`file` / `base64` / `astrbot` | `file` |
 | `image_quality` | 图片质量：`original`、`large`、`medium` | `original` |
 | `auto_downgrade_original_mb` | 原图超过该大小时自动降级，单位 MiB；`0` 为禁用 | `3.0` |
 | `forward_threshold` | 仅 aiocqhttp：成功下载图片数严格大于此值时合并转发；`0` 始终合并转发，`1` 表示超过 1 张才合并转发；其他平台自动逐条发送 | `1` |
@@ -248,7 +272,7 @@ WebUI 配置页按以下 6 组折叠展示，分组细节与维护规则见 [doc
 | [签到说明](docs/user/checkin.md) | 发奖、商店、好感、卡片、问候、生日事件与称号 |
 | [项目架构](docs/project/architecture.md) | 模块划分（开发用） |
 
-**数据简述：** 发图去重窗口与签到数据保存在插件数据目录；发送用临时图发完即清；签到 JPEG 缓存按天自过期，不会整目录清空数据库、黑名单或备份。
+**数据简述：** 发图去重窗口与签到数据保存在插件数据目录；发送临时图及时清理，未知路径发送延迟 10 分钟清理；签到 JPEG 缓存按天自过期，不会整目录清空数据库、黑名单或备份。
 
 AI 签到问候会向所选 AstrBot 文本模型发送可用昵称、日期、签到统计、关系阶段、奖励、称号和成就；不会把用户 ID 当作昵称发送，昵称不可用时使用“匿名用户”。模型异常、错误角色或输出不合规时使用已保存的本地问候。
 

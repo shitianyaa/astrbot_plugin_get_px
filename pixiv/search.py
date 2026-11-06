@@ -7,6 +7,7 @@ from astrbot.api.event import AstrMessageEvent
 from astrbot.api.message_components import Node, Nodes
 
 from .constants import AIOCQHTTP_PLATFORM, MAX_IMAGE_COUNT
+from .delivery import DeliveryNotSubmitted, DeliveryStatus, log_delivery_error, send_once
 from .downloader import cleanup
 from .safety import ContentSafetyPolicy, STRICT_CONTENT_SAFETY_POLICY
 
@@ -191,8 +192,11 @@ class SearchMixin:
                 feature=feature,
                 user_id=user_id,
             )
-        except Exception:
-            pass
+        except Exception as exc:
+            log_delivery_error(
+                exc, context=f"illust_id={illust_id}", phase="record_usage",
+                delivery_status="confirmed",
+            )
 
     async def _handle_search(
         self,
@@ -307,6 +311,14 @@ class SearchMixin:
         pick_count = len(chosen)
         pending_illust_ids: set[str] = set()
         sent_illust_ids: set[str] = set()
+        unknown_illust_ids: set[str] = set()
+        retained_paths: set[str] = set()
+        onebot_transport = self._cfg_str("onebot_image_transport", "file")
+        file_transport = (
+            onebot_transport == "file"
+            and event.get_platform_name() == AIOCQHTTP_PLATFORM
+            and getattr(event, "bot", None) is not None
+        )
         if dedupe_days > 0 and self.image_index is not None:
             pending_illust_ids = {
                 str(illust.get("id") or "") for illust in chosen if illust.get("id")
@@ -315,6 +327,36 @@ class SearchMixin:
         # 下载所有图片
         downloaded: list[tuple[dict, str, str, int]] = []
         temp_paths: list[str] = []
+
+        async def deliver_images(content, images, *, context: str) -> None:
+            """按实际提交阶段维护计费、去重占用和文件读取窗口。"""
+            ids = {str(illust["id"]) for illust, *_ in images if illust.get("id")}
+
+            def retain_unknown():
+                unknown_illust_ids.update(ids)
+                if file_transport:
+                    retained_paths.update(path for _, path, *_ in images)
+
+            try:
+                status = await send_once(
+                    event, content, context=context, onebot_transport=onebot_transport
+                )
+            except DeliveryNotSubmitted:
+                raise
+            except asyncio.CancelledError:
+                # 取消发生在提交期间也可能已送达，保留占用与协议端读取窗口。
+                retain_unknown()
+                raise
+            if status is DeliveryStatus.UNKNOWN:
+                retain_unknown()
+            elif status is DeliveryStatus.CONFIRMED:
+                sent_illust_ids.update(ids)
+                for illust, *_ in images:
+                    await self._record_image_usage(
+                        event, source_key, illust, feature="normal",
+                        user_id=str(event.get_sender_id() or ""),
+                    )
+
         try:
             for idx, illust in enumerate(chosen, 1):
                 illust_id = illust.get("id", "?")
@@ -399,153 +441,18 @@ class SearchMixin:
                             ],
                         )
                     )
-                # 合并转发（带重试机制）
-                max_retries = 3
-                forward_success = False
-                for attempt in range(1, max_retries + 1):
-                    try:
-                        await event.send(event.chain_result([nodes]))
-                        sent_illust_ids.update(
-                            str(illust.get("id") or "")
-                            for illust, *_rest in downloaded
-                            if illust.get("id")
-                        )
-                        logger.info(
-                            f"{LOG_PREFIX} 合并转发 {len(nodes.nodes)} 条作品"
-                            + (f" (第{attempt}次尝试)" if attempt > 1 else "")
-                        )
-                        forward_success = True
-                        break
-                    except Exception as e:
-                        if attempt < max_retries:
-                            wait_sec = attempt * 2
-                            logger.info(
-                                f"{LOG_PREFIX} 合并转发失败，准备重试: "
-                                f"attempt={attempt}/{max_retries} "
-                                f"retry_after_seconds={wait_sec} "
-                                f"error_type={type(e).__name__}"
-                            )
-                            await asyncio.sleep(wait_sec)
-                        else:
-                            friendly_err = self._friendly_send_error(e)
-                            logger.warning(
-                                f"{LOG_PREFIX} 合并转发失败，降级为逐条发送: "
-                                f"attempts={max_retries} reason={friendly_err} "
-                                f"error_type={type(e).__name__}"
-                            )
-
-                # 合并转发失败，降级为逐条发送
-                if not forward_success:
-                    await event.send(
-                        event.plain_result("⚠️ 合并转发失败，正在逐条发送...")
-                    )
-                    for illust, path, actual_q, file_size in downloaded:
-                        title = illust.get("title", "无标题")
-                        illust_id = illust.get("id", "?")
-                        content = [
-                            Plain(f"🎨 {title} (ID: {illust_id})"),
-                            Image.fromFileSystem(path),
-                        ]
-                        # 逐条发送（带重试机制）
-                        for attempt in range(1, max_retries + 1):
-                            try:
-                                await event.send(event.chain_result(content))
-                                if illust.get("id"):
-                                    sent_illust_ids.add(str(illust.get("id")))
-                                logger.info(
-                                    f"{LOG_PREFIX} [降级] 作品 {illust_id} 已发送"
-                                )
-                                await self._record_image_usage(
-                                    event,
-                                    source_key,
-                                    illust,
-                                    feature="normal",
-                                    user_id=str(event.get_sender_id() or ""),
-                                )
-                                break
-                            except Exception as e:
-                                if attempt < max_retries:
-                                    await asyncio.sleep(attempt * 2)
-                                else:
-                                    friendly_err = self._friendly_send_error(e)
-                                    logger.error(
-                                        f"{LOG_PREFIX} 降级发送失败: "
-                                        f"illust_id={illust_id} attempts={max_retries} "
-                                        f"reason={friendly_err} "
-                                        f"error_type={type(e).__name__}"
-                                    )
-                                    try:
-                                        await event.send(
-                                            event.plain_result(
-                                                f"⚠️ 作品 {illust_id}「{title}」发送失败，已跳过"
-                                            )
-                                        )
-                                    except Exception:
-                                        pass
-                else:
-                    for illust, path, actual_q, file_size in downloaded:
-                        await self._record_image_usage(
-                            event,
-                            source_key,
-                            illust,
-                            feature="normal",
-                            user_id=str(event.get_sender_id() or ""),
-                        )
+                await deliver_images([nodes], downloaded, context="send_mode=forward")
             else:
-                # 逐条发送模式
                 for illust, path, actual_q, file_size in downloaded:
-                    title = illust.get("title", "无标题")
                     illust_id = illust.get("id", "?")
                     content = [
-                        Plain(f"🎨 {title} (ID: {illust_id})"),
+                        Plain(f"🎨 {illust.get('title', '无标题')} (ID: {illust_id})"),
                         Image.fromFileSystem(path),
                     ]
-                    # 逐条发送（带重试机制）
-                    max_retries = 3
-                    for attempt in range(1, max_retries + 1):
-                        try:
-                            await event.send(event.chain_result(content))
-                            if illust.get("id"):
-                                sent_illust_ids.add(str(illust.get("id")))
-                            logger.info(
-                                f"{LOG_PREFIX} 作品 {illust_id} 已发送"
-                                + (f" (第{attempt}次尝试)" if attempt > 1 else "")
-                            )
-                            await self._record_image_usage(
-                                event,
-                                source_key,
-                                illust,
-                                feature="normal",
-                                user_id=str(event.get_sender_id() or ""),
-                            )
-                            break
-                        except Exception as e:
-                            if attempt < max_retries:
-                                wait_sec = attempt * 2
-                                logger.info(
-                                    f"{LOG_PREFIX} 作品发送失败，准备重试: "
-                                    f"illust_id={illust_id} "
-                                    f"attempt={attempt}/{max_retries} "
-                                    f"retry_after_seconds={wait_sec} "
-                                    f"error_type={type(e).__name__}"
-                                )
-                                await asyncio.sleep(wait_sec)
-                            else:
-                                friendly_err = self._friendly_send_error(e)
-                                logger.error(
-                                    f"{LOG_PREFIX} 作品发送失败: "
-                                    f"illust_id={illust_id} attempts={max_retries} "
-                                    f"reason={friendly_err} "
-                                    f"error_type={type(e).__name__}"
-                                )
-                                try:
-                                    await event.send(
-                                        event.plain_result(
-                                            f"⚠️ 作品 {illust_id}「{title}」发送失败，已跳过"
-                                        )
-                                    )
-                                except Exception:
-                                    pass
+                    await deliver_images(
+                        content, [(illust, path, actual_q, file_size)],
+                        context=f"send_mode=single illust_id={illust_id}",
+                    )
         finally:
             if self._p_charging_active() and sent_illust_ids:
                 total_cost = self._p_unit_cost() * len(sent_illust_ids)
@@ -594,9 +501,12 @@ class SearchMixin:
                         f"error_type={type(exc).__name__}"
                     )
             for p in temp_paths:
-                cleanup(p)
+                if p in retained_paths:
+                    self.downloader.defer_cleanup(p)
+                else:
+                    cleanup(p)
             if pending_illust_ids and self.image_index is not None:
-                for illust_id in pending_illust_ids - sent_illust_ids:
+                for illust_id in pending_illust_ids - sent_illust_ids - unknown_illust_ids:
                     try:
                         await self.image_index.release_usage(
                             scope=self._event_scope(event),
@@ -604,5 +514,8 @@ class SearchMixin:
                             illust_id=illust_id,
                             feature="normal_pending",
                         )
-                    except Exception:
-                        pass
+                    except Exception as exc:
+                        log_delivery_error(
+                            exc, context=f"illust_id={illust_id}", phase="release_usage",
+                            delivery_status="not_confirmed",
+                        )
