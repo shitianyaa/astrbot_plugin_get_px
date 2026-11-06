@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from datetime import date, datetime
 import hashlib
+import math
 import random
 from typing import Any
 
@@ -12,6 +13,11 @@ from .models import (
     BASE_COIN_MIN,
     MIN_AFFECTION,
     SHANGHAI_TZ,
+    STREAK_AFFECTION_BONUS,
+    STREAK_AFFECTION_BONUS_MAX,
+    STREAK_COIN_BONUS,
+    STREAK_COIN_BONUS_MAX,
+    STREAK_STEP_DAYS,
     CheckinProfile,
 )
 
@@ -103,6 +109,42 @@ def daily_note(user_id: str, date_key: str, streak_days: int) -> str:
     seed_text = f"checkin-note|{date_key}|{user_id}"
     seed = int.from_bytes(hashlib.sha256(seed_text.encode("utf-8")).digest()[:8], "big")
     return notes[seed % len(notes)]
+
+
+def checkin_coin_bonus(
+    *,
+    base_coins: int,
+    streak_days: int,
+    affection: float,
+    step_percent: int = 0,
+    enabled: bool = True,
+) -> int:
+    """Return streak and pre-checkin affection-level coin bonuses."""
+    streak_bonus = min(
+        (streak_days // STREAK_STEP_DAYS) * STREAK_COIN_BONUS,
+        STREAK_COIN_BONUS_MAX,
+    )
+    if not enabled or not step_percent:
+        return streak_bonus
+    level_steps = {
+        "排斥": 0,
+        "陌生": 0,
+        "熟悉": 1,
+        "亲近": 2,
+        "信赖": 3,
+        "挚友": 4,
+    }.get(affection_level(affection)["name"], 0)
+    return streak_bonus + math.floor(
+        (base_coins + streak_bonus) * level_steps * step_percent / 100
+    )
+
+
+def checkin_affection_bonus(streak_days: int) -> float:
+    """Return the unchanged streak affection bonus."""
+    return min(
+        (streak_days // STREAK_STEP_DAYS) * STREAK_AFFECTION_BONUS,
+        STREAK_AFFECTION_BONUS_MAX,
+    )
 
 
 def parse_date(value: str) -> date | None:

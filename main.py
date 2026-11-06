@@ -749,6 +749,8 @@ class GetPxPlugin(
         "checkin_bot_name": "checkin_basic",
         "checkin_card_quality_tier": "checkin_basic",
         "checkin_avatar_enabled": "checkin_basic",
+        "checkin_affection_bonus_enabled": "checkin_basic",
+        "checkin_affection_bonus_step_percent": "checkin_basic",
         "checkin_greeting_mode": "checkin_basic",
         "checkin_hitokoto_categories": "checkin_basic",
         "checkin_ai_greeting_provider_id": "checkin_basic",

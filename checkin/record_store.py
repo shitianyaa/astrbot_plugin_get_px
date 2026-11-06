@@ -11,11 +11,6 @@ import sqlite3
 from .models import (
     BOOST_MULTIPLIER,
     BOOST_PRODUCTS,
-    STREAK_AFFECTION_BONUS,
-    STREAK_AFFECTION_BONUS_MAX,
-    STREAK_COIN_BONUS,
-    STREAK_COIN_BONUS_MAX,
-    STREAK_STEP_DAYS,
     BackgroundRefreshResult,
     BoostPurchaseResult,
     CheckinProfile,
@@ -26,6 +21,8 @@ from .models import (
 from .rules import (
     boost_remaining_days,
     boost_status_text,
+    checkin_affection_bonus,
+    checkin_coin_bonus,
     daily_base_reward as _daily_base_reward,
     daily_note as _daily_note,
     is_boost_active,
@@ -207,6 +204,8 @@ class RecordStoreMixin:
         group_id: str = "",
         group_name: str = "",
         platform: str = "",
+        affection_bonus_step_percent: int = 0,
+        affection_bonus_enabled: bool = True,
     ) -> CheckinResult:
         user_id = str(user_id or "")
         if not user_id:
@@ -226,6 +225,8 @@ class RecordStoreMixin:
                 str(group_id or ""),
                 str(group_name or ""),
                 str(platform or ""),
+                affection_bonus_step_percent,
+                affection_bonus_enabled,
             )
 
     async def purchase_boost(self, *, user_id: str, days: int) -> BoostPurchaseResult:
@@ -701,6 +702,8 @@ class RecordStoreMixin:
         group_id: str,
         group_name: str,
         platform: str,
+        affection_bonus_step_percent: int,
+        affection_bonus_enabled: bool,
     ) -> CheckinResult:
         with closing(self._connect()) as conn:
             conn.execute("BEGIN IMMEDIATE")
@@ -781,14 +784,14 @@ class RecordStoreMixin:
 
                 total_days = profile.total_days + 1
                 base_coins, base_affection = _daily_base_reward(user_id, date_key)
-                streak_steps = streak_days // STREAK_STEP_DAYS
-                bonus_coins = min(
-                    streak_steps * STREAK_COIN_BONUS, STREAK_COIN_BONUS_MAX
+                bonus_coins = checkin_coin_bonus(
+                    base_coins=base_coins,
+                    streak_days=streak_days,
+                    affection=profile.affection,
+                    step_percent=affection_bonus_step_percent,
+                    enabled=affection_bonus_enabled,
                 )
-                bonus_affection = min(
-                    streak_steps * STREAK_AFFECTION_BONUS,
-                    STREAK_AFFECTION_BONUS_MAX,
-                )
+                bonus_affection = checkin_affection_bonus(streak_days)
                 boost_active = is_boost_active(profile, date_key)
                 affection_reward = round(base_affection + bonus_affection, 2)
                 if boost_active:

@@ -321,6 +321,23 @@
         "default": true,
         "hint": "开启后 QQ 平台会尝试在签到卡片中显示用户头像；获取失败时自动使用默认头像。"
       },
+      "checkin_affection_bonus_enabled": {
+        "description": "好感度签到金币加成",
+        "type": "bool",
+        "default": true,
+        "hint": "启用后，按本次签到前的好感度等级增加签到金币；关闭或将每级比例设为 0 时仅保留原有奖励。"
+      },
+      "checkin_affection_bonus_step_percent": {
+        "description": "好感度每级金币加成（%）",
+        "type": "int",
+        "default": 5,
+        "slider": {
+          "min": 0,
+          "max": 25,
+          "step": 1
+        },
+        "hint": "排斥/陌生无加成；熟悉、亲近、信赖、挚友分别按每级配置比例的 1、2、3、4 倍加成，最多 100%。"
+      },
       "checkin_greeting_mode": {
         "description": "签到问候来源",
         "type": "string",
@@ -618,6 +635,18 @@
     "description": "旧扁平键（过渡版，迁移后移除）",
     "type": "bool",
     "default": true,
+    "invisible": true
+  },
+  "checkin_affection_bonus_enabled": {
+    "description": "旧扁平键（过渡版，迁移后移除）",
+    "type": "bool",
+    "default": true,
+    "invisible": true
+  },
+  "checkin_affection_bonus_step_percent": {
+    "description": "旧扁平键（过渡版，迁移后移除）",
+    "type": "int",
+    "default": 5,
     "invisible": true
   },
   "checkin_greeting_mode": {

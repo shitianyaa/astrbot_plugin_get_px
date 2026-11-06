@@ -32,10 +32,13 @@ pixiv/
 │  ├─ downloader.py      图片下载、Lolicon 反代轮换与质量降级
 │  ├─ index.py           多自然日去重索引、安全词与作品黑名单
 plugin_api/
-└─ api.py                Plugin Pages 后端 API
+├─ api.py                Plugin Pages 后端 API 与设置路由
+└─ settings.py           Schema 驱动的安全配置快照、校验和部分保存
 ```
 
 根目录不再保留单文件业务实现或兼容 wrapper。`__init__.py` 集中注册旧包路径别名，已有预览脚本可以继续使用，但新代码和测试必须直接导入领域包。
+
+管理中心普通配置由 `plugin_api/settings.py` 从 `_conf_schema.json` 生成界面目录，读取当前有效分组/旧扁平值并在提交时严格验证；敏感令牌在读取时脱敏。群/私聊模板列表始终走既有会话策略服务，不开放通用配置覆盖接口。签到金币奖励在 `checkin/rules.py` 统一计算，实际事务与预览调用同一纯规则函数。
 
 模块按职责划分，不按行数强制拆分。`__init__.py` 和组合入口可以很小；普通业务模块只有在具备独立职责和测试边界时才单独存在。
 

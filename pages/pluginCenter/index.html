@@ -36,6 +36,7 @@
         <button data-view="members" type="button">成员数值</button>
         <button data-view="safety" type="button">内容安全</button>
         <button data-view="policies" type="button">会话策略</button>
+        <button data-view="settings" type="button">插件设置</button>
         <button data-view="data" type="button">数据管理</button>
         <button id="refreshBtn" class="refresh" type="button">刷新数据</button>
       </nav>
@@ -267,6 +268,23 @@
               </div>
             </form>
           </dialog>
+        </section>
+
+        <section id="settingsView" class="workspace" aria-labelledby="settingsTitle">
+          <div class="section-heading wide">
+            <p>PLUGIN SETTINGS</p>
+            <h2 id="settingsTitle">插件设置</h2>
+            <span>按配置分组编辑插件选项；群聊与私聊策略继续在“会话策略”中独立管理。</span>
+          </div>
+          <p id="settingsNotice" class="settings-notice" role="status">保存后建议重载插件，让连接、代理及缓存等选项完整生效。</p>
+          <p id="settingsStatus" class="form-status" aria-live="polite"></p>
+          <form id="configSettingsForm" class="settings-form">
+            <div id="settingsGroups" class="settings-groups"></div>
+            <div class="settings-actions">
+              <button id="settingsReloadBtn" type="button">重新载入</button>
+              <button id="settingsSaveBtn" type="submit">保存插件设置</button>
+            </div>
+          </form>
         </section>
 
         <!-- 数据管理模块 -->

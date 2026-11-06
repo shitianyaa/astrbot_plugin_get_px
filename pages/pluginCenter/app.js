@@ -1,4 +1,5 @@
 import * as policyState from "./policy-state.mjs";
+import * as settingsModule from "./settings.mjs";
 const bridge = window.AstrBotPluginPage;
 
 const state = {
@@ -27,8 +28,11 @@ const state = {
     blacklist: false,
     members: false,
     cache: false,
+    settings: false,
   },
 };
+
+let settingsPage = null;
 
 const MAX_BACKUP_BYTES = 5 * 1024 * 1024;
 const dateFormatter = new Intl.DateTimeFormat("zh-CN", {
@@ -960,7 +964,7 @@ function backupFileError(file) {
 }
 
 function switchView(name) {
-  const validNames = new Set(["ranking", "members", "safety", "policies", "data"]);
+  const validNames = new Set(["ranking", "members", "safety", "policies", "settings", "data"]);
   if (!validNames.has(name)) name = "ranking";
   document.querySelectorAll(".workspace-nav [data-view]").forEach((button) =>
     button.classList.toggle("active", button.dataset.view === name));
@@ -980,6 +984,10 @@ function switchView(name) {
   }
   if (name === "policies" && els.policyList && !activePolicyBucket().loaded) {
     reloadPolicies().catch((error) => showToast(error.message, "error"));
+  }
+  if (name === "settings" && settingsPage && !state.loaded.settings) {
+    settingsPage.load().then(() => { state.loaded.settings = true; })
+      .catch((error) => showToast(error.message || "设置读取失败", "error"));
   }
 }
 
@@ -1265,6 +1273,11 @@ async function start() {
   }
   await bridge.ready();
   bindEvents();
+  settingsPage = settingsModule.createSettingsPage({
+    bridge,
+    notify: showToast,
+    navigate: switchView,
+  });
   const initialView = location.hash.slice(1);
   switchView(initialView || "ranking");
   loadFont();

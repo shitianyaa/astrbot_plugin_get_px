@@ -1,6 +1,8 @@
 # 配置说明
 
-配置真源是根目录 `_conf_schema.json`，已按功能分为 6 个 object 分组，WebUI 配置页会以折叠区块呈现。修改配置字段时必须同步更新 README、本文档和相关测试。
+配置真源是根目录 `_conf_schema.json`，已按功能分为 6 个 object 分组。插件管理中心的“插件设置”按这些分组编辑全部可见普通配置；群聊与私聊模板列表继续由“会话策略”编辑器管理，避免双重写入。修改配置字段时必须同步更新 README、本文档和相关测试。
+
+在管理中心更改常规设置后建议重载插件，令客户端、代理与缓存相关选项完整生效。Pixiv refresh token 的读取接口仅返回是否已配置；输入新令牌替换，单独勾选清除可删除，密码框留空则保持原值。
 
 ## 1. Pixiv 图源与下载（`pixiv_source`）
 
@@ -48,6 +50,8 @@
 | `checkin_bot_name` | `string` | `neko` | 签到卡片 bot 角色名 |
 | `checkin_card_quality_tier` | `enum` | `省流量` | `省流量`(960×540+medium)/`清晰`(1248×702+large)/`极致`(1728×972+large)；签到日历同档 |
 | `checkin_avatar_enabled` | `bool` | `true` | QQ 平台尝试在卡片显示用户头像 |
+| `checkin_affection_bonus_enabled` | `bool` | `true` | 按签到前的好感度等级应用金币加成 |
+| `checkin_affection_bonus_step_percent` | `int` | `5` | 每级金币加成比例，范围 0–25%；各等级为 0/5/10/15/20%（默认）；0 或关闭时沿用原奖励 |
 | `checkin_greeting_mode` | `enum` | `hitokoto` | `local`(本地事件)/`hitokoto`(一言 API)/`ai`(文本模型) |
 | `checkin_hitokoto_categories` | `list` | `["全部"]` | 一言类型多选 |
 | `checkin_ai_greeting_provider_id` | `string` | 空 | AI 问候模型，留空用当前会话模型 |

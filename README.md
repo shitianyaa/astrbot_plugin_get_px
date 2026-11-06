@@ -219,6 +219,8 @@ WebUI 配置页按以下 6 组折叠展示，分组细节与维护规则见 [doc
 | `checkin_background_tag` | 签到背景标签；留空时 Lolicon 随机取图，失败后使用 Pixiv 推荐作品 | 空 |
 | `checkin_custom_background` | 本地图片路径；默认主题按竖向作品相框完整显示 | 空 |
 | `checkin_avatar_enabled` | 签到卡片显示用户头像 | `true` |
+| `checkin_affection_bonus_enabled` | 按签到前好感度等级启用金币加成 | `true` |
+| `checkin_affection_bonus_step_percent` | 每级金币加成比例（范围 `0–25%`；默认等级收益为 `0/5/10/15/20%`） | `5` |
 | `checkin_card_quality_tier` | 签到卡画质：`省流量` / `清晰` / `极致`；签到日历输出分辨率与背景画质完全跟随该档位；预览和刷新背景立即生效，普通重复签到保持当天档位 | `省流量` |
 | `checkin_greeting_mode` | 签到问候来源：`local` / `hitokoto` / `ai` | `hitokoto` |
 | `checkin_hitokoto_categories` | 一言类型中文多选；选择”全部”或留空时从全部分类随机 | `全部` |
@@ -230,6 +232,8 @@ WebUI 配置页按以下 6 组折叠展示，分组细节与维护规则见 [doc
 | `webui_font_source` | WebUI 字体来源：`mirror`、`official`、`none` | `mirror` |
 
 </details>
+
+插件管理中心的“插件设置”可编辑 Schema 中全部可见普通配置；群聊/私聊策略继续使用“会话策略”编辑器。Pixiv refresh token 仅显示是否已配置，留空保留、输入新值替换，勾选清除才会删除。保存常规设置后建议重载插件，让客户端与代理等设置完整生效。
 
 ## 会话内容安全策略
 
