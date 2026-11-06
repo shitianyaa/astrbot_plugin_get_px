@@ -344,3 +344,83 @@ async def test_search_forward_branch_settles_downloaded_count() -> None:
     args, kwargs = harness.checkin_store.spend_coins.await_args
     assert kwargs["cost"] == 40
     assert event.sent[0][0].nodes[0].uin == "self-bot"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("forward", [False, True])
+async def test_uncertain_send_does_not_retry_fallback_or_charge(forward):
+    from aiocqhttp.exceptions import ActionFailed
+    harness = _SearchFlowHarness(illusts=[_illust(1), _illust(2)])
+    harness.checkin_store, _ = _settle_store()
+    harness._should_use_forward = lambda **kwargs: forward
+    harness.downloader = AsyncMock()
+    harness.downloader.download_for_send.return_value = ("unused.jpg", "original", 1024)
+    event = _FlowEvent(platform="aiocqhttp")
+    delivered = []
+    async def send(chain):
+        if isinstance(chain, list):
+            delivered.append(chain)
+            raise ActionFailed({"status": "failed", "retcode": 1200, "message": "ambiguous"})
+        event.sent.append(chain)
+    event.send = send
+    await _run_search(harness, event, "2")
+    assert len(delivered) == (1 if forward else 2)
+    harness.checkin_store.spend_coins.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_record_usage_error_does_not_repeat_confirmed_delivery():
+    harness = _SearchFlowHarness(illusts=[_illust(1)])
+    harness.checkin_store, _ = _settle_store()
+    harness.downloader = AsyncMock()
+    harness.downloader.download_for_send.return_value = ("unused.jpg", "original", 1024)
+    harness.image_index = AsyncMock()
+    harness.image_index.retention_days = 0
+    harness.image_index.record_usage.side_effect = RuntimeError("database unavailable")
+    event = _FlowEvent()
+    await _run_search(harness, event, "1")
+    assert len([chain for chain in event.sent if isinstance(chain, list)]) == 1
+    harness.checkin_store.spend_coins.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("fails", [False, True])
+@pytest.mark.parametrize("forward", [False, True])
+async def test_search_direct_onebot_settlement(tmp_path, fails, forward):
+    from PIL import Image
+    path = tmp_path / "fixture.png"
+    Image.new("RGB", (32, 32)).save(path)
+    harness = _SearchFlowHarness(illusts=[_illust(1)])
+    harness.config["onebot_image_transport"] = "file"
+    harness._forward_threshold = lambda: 0 if forward else 1
+    harness.checkin_store, _ = _settle_store()
+    harness.downloader = AsyncMock()
+    harness.downloader.download_for_send.return_value = (str(path), "original", path.stat().st_size)
+    event = _FlowEvent(platform="aiocqhttp")
+    event.get_group_id = lambda: "456"
+    event.bot = AsyncMock()
+    if fails:
+        event.bot.call_action.side_effect = TimeoutError()
+    await _run_search(harness, event, "1")
+    event.bot.call_action.assert_awaited_once()
+    args, kwargs = event.bot.call_action.await_args
+    assert args == ("send_group_forward_msg" if forward else "send_group_msg",)
+    segments = kwargs["messages"][0]["data"]["content"] if forward else kwargs["message"]
+    assert segments[1]["data"]["file"] == path.resolve().as_uri()
+    assert not path.exists()
+    if fails:
+        harness.checkin_store.spend_coins.assert_not_awaited()
+    else:
+        harness.checkin_store.spend_coins.assert_awaited_once()
+
+
+def test_onebot_transport_nested_config_and_schema():
+    import json
+    from astrbot_plugin_get_px.main import GetPxPlugin
+    plugin = object.__new__(GetPxPlugin)
+    plugin.config = {"pixiv_source": {"onebot_image_transport": "base64"}}
+    assert plugin._cfg_str("onebot_image_transport", "file") == "base64"
+    schema = json.loads((Path(__file__).resolve().parents[1] / "_conf_schema.json").read_text(encoding="utf-8"))
+    field = schema["pixiv_source"]["items"]["onebot_image_transport"]
+    assert field["default"] == "file"
+    assert set(field["options"]) == {"file", "base64", "astrbot"}

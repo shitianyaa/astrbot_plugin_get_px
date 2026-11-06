@@ -26,6 +26,8 @@ from astrbot_plugin_get_px.checkin import (  # noqa: E402
     UnversionedCheckinDatabaseError,
 )
 from astrbot_plugin_get_px.checkin.card import CardBackground  # noqa: E402
+from astrbot_plugin_get_px.checkin.cache import CheckinCardCache  # noqa: E402
+from astrbot_plugin_get_px.checkin.store import CheckinStore  # noqa: E402
 from astrbot_plugin_get_px.pixiv.safety import ContentSafetyPolicy  # noqa: E402
 
 
@@ -195,6 +197,13 @@ class _FakeCache:
         self.get_calls = []
         self.store_calls = []
         self.key_inputs = []
+        self.backgrounds = {}
+
+    def get_background(self, date_key, key):
+        return self.backgrounds.get((date_key, key))
+
+    def store_background(self, date_key, key, background):
+        self.backgrounds[date_key, key] = replace(background, image_path="", illust=None)
 
     def cache_key(self, **kwargs):
         self.key_inputs.append(kwargs)
@@ -267,7 +276,11 @@ def _plugin_for_checkin(tmp: str, result: CheckinResult, order, *, cache_hit=Fal
     plugin._prepare_checkin_background = AsyncMock()
     plugin._restore_checkin_background = AsyncMock()
     plugin._render_checkin_card = AsyncMock()
-    plugin.image_index = SimpleNamespace(retention_days=7)
+    plugin.image_index = SimpleNamespace(
+        retention_days=7,
+        get_custom_safety_terms=AsyncMock(return_value=set()),
+        get_blacklisted_illust_ids=AsyncMock(return_value=set()),
+    )
 
     async def record_usage(_event, background):
         if background and background.image_path:
@@ -278,6 +291,164 @@ def _plugin_for_checkin(tmp: str, result: CheckinResult, order, *, cache_hit=Fal
         side_effect=lambda *_: order.append("release_claim")
     )
     return plugin
+
+
+class Issue24CacheTest(unittest.IsolatedAsyncioTestCase):
+    def setup_plugin(self, tmp):
+        plugin = _plugin_for_checkin(
+            tmp, CheckinResult(_profile(), _record(), duplicate=True), []
+        )
+        plugin.config["checkin_greeting_mode"] = "local"
+        plugin.checkin_store = CheckinStore(Path(tmp) / "data")
+        plugin.checkin_cache = CheckinCardCache(Path(tmp) / "cache")
+        # Exercise the actual no-token Lolicon restore path, without network calls.
+        del plugin._restore_checkin_background
+        plugin._content_safety_policy = AsyncMock(
+            side_effect=lambda event: ContentSafetyPolicy(
+                general_only_enabled=event.group_id != "relaxed", group_id=event.group_id
+            )
+        )
+        selected = []
+
+        async def select(event, _record, **_kwargs):
+            illust_id = f"{110000 + len(selected)}:0"
+            selected.append(illust_id)
+            return CardBackground(
+                mode="pixiv_daily", source="lolicon:random", illust_id=illust_id,
+                title=f"Artwork {illust_id}", author="Artist", quality="large",
+            )
+
+        plugin._prepare_checkin_background.side_effect = select
+        plugin._prepare_checkin_card_data = AsyncMock(return_value={})
+
+        async def render(_event, **kwargs):
+            path = Path(tmp) / "rendered.jpg"
+            shade = int(kwargs["background"].illust_id.split(":")[0]) % 255
+            PILImage.new("RGB", (960, 540), (shade, 40, 90)).save(path, "JPEG")
+            return str(path)
+
+        plugin._render_checkin_card.side_effect = render
+        return plugin, selected
+
+    async def send_card(self, plugin, group):
+        event = _FakeEvent(group_id=group)
+        self.assertEqual(await _collect(plugin._handle_checkin(event)), [])
+        self.assertEqual(len(event.sent), 1)
+        path = Path(event.sent[0][0].path)
+        return path, path.read_bytes(), event.sent[0][1].text
+
+    async def test_same_rules_cross_group_reuses_without_lolicon_restore(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            plugin, selected = self.setup_plugin(tmp)
+            first = await self.send_card(plugin, "a")
+            snapshot = await plugin.checkin_store.get_today_record("10001")
+            self.assertEqual(await self.send_card(plugin, "b"), first)
+            self.assertEqual(await self.send_card(plugin, "a"), first)
+            self.assertEqual(len(selected), 1)
+            self.assertEqual(plugin._render_checkin_card.await_count, 1)
+            self.assertEqual(await plugin.checkin_store.get_today_record("10001"), snapshot)
+
+    async def test_snapshot_keeps_filter_rules_when_global_lists_change_mid_selection(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            plugin, _ = self.setup_plugin(tmp)
+            plugin.image_index.get_blacklisted_illust_ids.return_value = {"110000"}
+            frozen, identity = await plugin._checkin_safety_snapshot(
+                ContentSafetyPolicy(group_id="a")
+            )
+            plugin.image_index.get_blacklisted_illust_ids.return_value = set()
+            blocked = await plugin._blacklist_reason_for_illust(
+                {"id": 110000, "title": "safe", "x_restrict": 0}, "110000", frozen
+            )
+            plugin.image_index.get_blacklisted_illust_ids.return_value = {"110000"}
+            self.assertIn("黑名单", blocked)
+            self.assertEqual(identity["blacklisted_illust_ids"], ["110000"])
+            plugin.image_index.get_blacklisted_illust_ids.assert_awaited_once()
+
+    async def test_disabled_independent_lists_do_not_split_identical_rules(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            plugin, selected = self.setup_plugin(tmp)
+            plugin._content_safety_policy.side_effect = lambda event: ContentSafetyPolicy(
+                group_id=event.group_id, custom_terms=(event.group_id,),
+                blacklisted_illust_ids=("123" if event.group_id == "a" else "456",),
+            )
+            first = await self.send_card(plugin, "a")
+            self.assertEqual(await self.send_card(plugin, "b"), first)
+            self.assertEqual(len(selected), 1)
+
+    async def test_different_rules_keep_stable_variants_after_restart_and_concurrency(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            plugin, selected = self.setup_plugin(tmp)
+            first = await self.send_card(plugin, "a")
+            snapshot = await plugin.checkin_store.get_today_record("10001")
+            second = await self.send_card(plugin, "relaxed")
+            self.assertNotEqual(second, first)
+            self.assertIn(selected[1], second[2])
+            self.assertEqual(await plugin.checkin_store.get_today_record("10001"), snapshot)
+            plugin.checkin_cache = CheckinCardCache(Path(tmp) / "cache")
+            results = await asyncio.gather(
+                self.send_card(plugin, "a"), self.send_card(plugin, "relaxed")
+            )
+            self.assertEqual(results, [first, second])
+            self.assertEqual(plugin._render_checkin_card.await_count, 2)
+            self.assertEqual(len(selected), 2)
+
+    async def test_global_rule_updates_and_clearing_rebuild_without_rewards(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            plugin, selected = self.setup_plugin(tmp)
+            first = await self.send_card(plugin, "a")
+            snapshot = await plugin.checkin_store.get_today_record("10001")
+            plugin.image_index.get_blacklisted_illust_ids.return_value = {"110000"}
+            second = await self.send_card(plugin, "a")
+            self.assertNotEqual(second, first)
+            self.assertEqual(await self.send_card(plugin, "a"), second)
+            plugin.image_index.get_custom_safety_terms.return_value = {"new blocked term"}
+            third = await self.send_card(plugin, "a")
+            self.assertNotEqual(third, second)
+            self.assertEqual(await self.send_card(plugin, "a"), third)
+            shutil.rmtree(plugin.checkin_cache.root)
+            self.assertNotEqual(await self.send_card(plugin, "a"), third)
+            self.assertEqual(len(selected), 4)
+            self.assertEqual(await plugin.checkin_store.get_today_record("10001"), snapshot)
+
+    async def test_missing_corrupt_summary_or_jpeg_never_pairs_wrong_caption(self):
+        for damage in ("summary_missing", "summary_corrupt", "jpeg_missing", "jpeg_corrupt"):
+            with self.subTest(damage=damage), tempfile.TemporaryDirectory() as tmp:
+                plugin, selected = self.setup_plugin(tmp)
+                first = await self.send_card(plugin, "a")
+                second = await self.send_card(plugin, "relaxed")
+                if damage.startswith("summary"):
+                    for path in plugin.checkin_cache.root.rglob("*.json"):
+                        if damage == "summary_missing":
+                            path.unlink()
+                        else:
+                            path.write_text('{"mode": 3}', encoding="utf-8")
+                elif damage == "jpeg_missing":
+                    second[0].unlink()
+                else:
+                    second[0].write_bytes(b"broken jpeg")
+                third = await self.send_card(plugin, "relaxed")
+                self.assertNotEqual(third, second)
+                self.assertIn(selected[-1], third[2])
+                self.assertEqual(await self.send_card(plugin, "relaxed"), third)
+                self.assertEqual(await self.send_card(plugin, "a"), first)
+
+    async def test_refresh_and_theme_change_do_not_reuse_old_variants(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            plugin, selected = self.setup_plugin(tmp)
+            await self.send_card(plugin, "a")
+            second = await self.send_card(plugin, "relaxed")
+            purchase = await plugin.checkin_store.purchase_background_refresh(
+                user_id="10001", cost=0, mode="pixiv_daily", source="lolicon:random",
+                illust_id="220000:0", title="Refresh", author="Artist", quality="large",
+            )
+            self.assertTrue(purchase.success)
+            third = await self.send_card(plugin, "relaxed")
+            self.assertNotEqual(third, second)
+            self.assertEqual(await self.send_card(plugin, "relaxed"), third)
+            await plugin.checkin_store.purchase_theme(user_id="10001", theme_id="yellow", cost=0)
+            await plugin.checkin_store.select_theme(user_id="10001", theme_id="yellow")
+            self.assertNotEqual(await self.send_card(plugin, "relaxed"), third)
+            self.assertEqual(len(selected), 4)
 
 
 class _ConcurrentCheckinStore(_FakeCheckinStore):
@@ -449,6 +620,7 @@ class MainErrorHandlingTest(unittest.IsolatedAsyncioTestCase):
 
     async def test_initialize_logs_v3_migration_guidance_for_old_database(self):
         plugin = object.__new__(GetPxPlugin)
+        plugin.downloader = SimpleNamespace(temp_dir=None)
         plugin._init_client = lambda: None
 
         class FakeImageIndex:
@@ -483,6 +655,7 @@ class MainErrorHandlingTest(unittest.IsolatedAsyncioTestCase):
 
     async def test_initialize_migrates_policy_before_convergence_and_logs_result(self):
         plugin = object.__new__(GetPxPlugin)
+        plugin.downloader = SimpleNamespace(temp_dir=None)
         order = []
         plugin.config = {}
         plugin.context = SimpleNamespace()
@@ -562,6 +735,7 @@ class MainErrorHandlingTest(unittest.IsolatedAsyncioTestCase):
 
     async def test_initialize_skips_convergence_when_policy_migration_fails(self):
         plugin = object.__new__(GetPxPlugin)
+        plugin.downloader = SimpleNamespace(temp_dir=None)
         plugin.config = {}
         plugin.context = SimpleNamespace()
         plugin._migrate_grouped_config = Mock()
@@ -608,6 +782,7 @@ class MainErrorHandlingTest(unittest.IsolatedAsyncioTestCase):
 
     async def test_initialize_stops_after_convergence_failure(self):
         plugin = object.__new__(GetPxPlugin)
+        plugin.downloader = SimpleNamespace(temp_dir=None)
         plugin.config = {}
         plugin.context = SimpleNamespace()
         plugin._migrate_grouped_config = Mock()
@@ -827,8 +1002,12 @@ class MainErrorHandlingTest(unittest.IsolatedAsyncioTestCase):
                 call.kwargs["policy"]
                 for call in plugin._restore_checkin_background.await_args_list
             ]
-            self.assertIs(restore_policies[0], first_policy)
-            self.assertIs(restore_policies[1], second_policy)
+            self.assertEqual(
+                restore_policies[0], (await plugin._checkin_safety_snapshot(first_policy))[0]
+            )
+            self.assertEqual(
+                restore_policies[1], (await plugin._checkin_safety_snapshot(second_policy))[0]
+            )
             cache_identities = {
                 json.dumps(
                     item["view_model"]["content_safety_policy"],
@@ -841,12 +1020,12 @@ class MainErrorHandlingTest(unittest.IsolatedAsyncioTestCase):
                 cache_identities,
                 {
                     json.dumps(
-                        first_policy.cache_identity(),
+                        await plugin._checkin_safety_identity(first_policy),
                         ensure_ascii=False,
                         sort_keys=True,
                     ),
                     json.dumps(
-                        second_policy.cache_identity(),
+                        await plugin._checkin_safety_identity(second_policy),
                         ensure_ascii=False,
                         sort_keys=True,
                     ),
@@ -878,7 +1057,7 @@ class MainErrorHandlingTest(unittest.IsolatedAsyncioTestCase):
             second_policy=ContentSafetyPolicy(),
         )
 
-    async def test_duplicate_restore_failure_reselects_and_persists_new_artwork(
+    async def test_duplicate_restore_failure_reselects_without_changing_daily_record(
         self,
     ):
         with tempfile.TemporaryDirectory() as tmp:
@@ -921,25 +1100,24 @@ class MainErrorHandlingTest(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(output, [])
             plugin._restore_checkin_background.assert_awaited_once()
             plugin._prepare_checkin_background.assert_awaited_once()
-            self.assertIs(
+            self.assertEqual(
                 plugin._prepare_checkin_background.await_args.kwargs["policy"],
-                policy,
+                (await plugin._checkin_safety_snapshot(policy))[0],
             )
             self.assertEqual(
                 plugin.checkin_cache.key_inputs[0]["view_model"]["content_safety_policy"],
-                policy.cache_identity(),
+                await plugin._checkin_safety_identity(policy),
             )
-            self.assertEqual(len(plugin.checkin_store.background_updates), 1)
-            update = plugin.checkin_store.background_updates[0]
-            self.assertEqual(update["illust_id"], "778899:0")
-            self.assertEqual(update["mode"], "pixiv_daily")
-            self.assertEqual(update["quality"], "high")
+            self.assertEqual(plugin.checkin_store.background_updates, [])
+            self.assertEqual(
+                next(iter(plugin.checkin_cache.backgrounds.values())).illust_id,
+                "778899:0",
+            )
             self.assertLess(
                 order.index("cache_get"), order.index("reselect_artwork")
             )
             self.assertLess(order.index("reselect_artwork"), order.index("render"))
-            self.assertLess(order.index("render"), order.index("background_metadata"))
-            self.assertLess(order.index("background_metadata"), order.index("send"))
+            self.assertLess(order.index("render"), order.index("send"))
             self.assertIn("usage", order)
             self.assertNotIn("release_claim", order)
 
@@ -973,14 +1151,8 @@ class MainErrorHandlingTest(unittest.IsolatedAsyncioTestCase):
             )
 
             self.assertEqual(len(output), 1)
-            self.assertEqual(len(plugin.checkin_store.background_updates), 2)
-            self.assertEqual(
-                plugin.checkin_store.background_updates[0]["illust_id"], "778899:0"
-            )
-            # 发送失败回滚：当天记录背景撤销为占位，未发送缓存与渲染文件清理。
-            self.assertEqual(
-                plugin.checkin_store.background_updates[1]["mode"], "fallback"
-            )
+            self.assertEqual(plugin.checkin_store.background_updates, [])
+            self.assertEqual(plugin.checkin_cache.backgrounds, {})
             self.assertFalse(plugin.checkin_cache.cache_path.exists())
             self.assertFalse(rendered.exists())
             plugin._record_checkin_background.assert_not_awaited()

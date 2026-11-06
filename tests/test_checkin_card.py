@@ -1,14 +1,17 @@
 import base64
+import os
 from dataclasses import FrozenInstanceError, replace
+import random
+import struct
 import sys
 import tempfile
 import unittest
 from io import BytesIO
 from pathlib import Path
 from types import SimpleNamespace
-from unittest.mock import AsyncMock, Mock
+from unittest.mock import AsyncMock, Mock, patch
 
-from PIL import Image
+from PIL import Image, ImageCms
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 
@@ -176,6 +179,220 @@ class FileToDataUrlTest(unittest.TestCase):
             broken.write_bytes(b"not an image")
             self.assertEqual(_file_to_data_url(str(broken)), "")
 
+    def test_oversized_artwork_is_downscaled_and_reencoded(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            source = Path(tmp) / "large.png"
+            Image.new("RGB", (2400, 3200), (20, 90, 180)).save(
+                source, format="PNG"
+            )
+
+            data_url = _file_to_data_url(str(source))
+            header, encoded = data_url.split(",", 1)
+            decoded = base64.b64decode(encoded)
+
+            self.assertEqual(header, "data:image/jpeg;base64")
+            with Image.open(BytesIO(decoded)) as image:
+                self.assertEqual(image.format, "JPEG")
+                self.assertLessEqual(max(image.size), 1920)
+                self.assertGreaterEqual(max(image.size), 1900)
+                ratio = image.size[0] / image.size[1]
+                self.assertAlmostEqual(ratio, 2400 / 3200, places=2)
+
+    def test_heavy_artwork_within_edge_limit_is_recompressed(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            source = Path(tmp) / "heavy.png"
+            payload = os.urandom(1600 * 1200 * 3)
+            Image.frombytes("RGB", (1600, 1200), payload).save(source, format="PNG")
+            self.assertGreater(source.stat().st_size, 1_500_000)
+
+            data_url = _file_to_data_url(str(source))
+            header, encoded = data_url.split(",", 1)
+            decoded = base64.b64decode(encoded)
+
+            self.assertEqual(header, "data:image/jpeg;base64")
+            with Image.open(BytesIO(decoded)) as image:
+                self.assertEqual(image.format, "JPEG")
+                self.assertEqual(image.size, (1600, 1200))
+
+    def test_exif_orientation_is_applied_when_reencoding(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            source = Path(tmp) / "rotated.jpg"
+            exif = Image.Exif()
+            exif[0x0112] = 6  # 顺时针 90°，显示时宽高互换
+            Image.new("RGB", (2400, 1200), (30, 60, 90)).save(
+                source, format="JPEG", exif=exif
+            )
+
+            data_url = _file_to_data_url(str(source))
+            _, encoded = data_url.split(",", 1)
+            with Image.open(BytesIO(base64.b64decode(encoded))) as image:
+                self.assertEqual(image.size, (960, 1920))
+
+    def test_rgba_artwork_keeps_alpha_channel(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            source = Path(tmp) / "alpha.png"
+            image = Image.new("RGBA", (2400, 1600), (0, 0, 0, 0))
+            image.paste((200, 40, 40, 255), (200, 200, 2200, 1400))
+            image.save(source, format="PNG")
+
+            header, encoded = _file_to_data_url(str(source)).split(",", 1)
+            self.assertEqual(header, "data:image/png;base64")
+            with Image.open(BytesIO(base64.b64decode(encoded))) as decoded:
+                self.assertEqual(decoded.format, "PNG")
+                self.assertEqual(decoded.mode, "RGBA")
+                self.assertEqual(decoded.getpixel((0, 0))[3], 0)
+                self.assertEqual(decoded.getpixel((1200, 800))[3], 255)
+
+    def test_rgb_transparency_is_preserved(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            source = Path(tmp) / "rgb-transparent.png"
+            Image.new("RGB", (2400, 1600), (255, 0, 0)).save(
+                source, format="PNG", transparency=(255, 0, 0)
+            )
+
+            header, encoded = _file_to_data_url(str(source)).split(",", 1)
+            self.assertEqual(header, "data:image/png;base64")
+            with Image.open(BytesIO(base64.b64decode(encoded))) as decoded:
+                self.assertEqual(decoded.mode, "RGBA")
+                self.assertEqual(decoded.getpixel((0, 0))[3], 0)
+
+    def test_grayscale_transparency_is_preserved(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            source = Path(tmp) / "gray-transparent.png"
+            Image.new("L", (2400, 1600), 0).save(
+                source, format="PNG", transparency=0
+            )
+
+            header, encoded = _file_to_data_url(str(source)).split(",", 1)
+            self.assertEqual(header, "data:image/png;base64")
+            with Image.open(BytesIO(base64.b64decode(encoded))) as decoded:
+                self.assertEqual(decoded.mode, "RGBA")
+                self.assertEqual(decoded.getpixel((0, 0))[3], 0)
+
+    def test_calendar_background_keeps_ultra_edge(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            source = Path(tmp) / "calendar.png"
+            Image.new("RGB", (4000, 2250), (10, 20, 30)).save(
+                source, format="PNG"
+            )
+
+            _, encoded = _file_to_data_url(
+                str(source), max_edge=2880
+            ).split(",", 1)
+            with Image.open(BytesIO(base64.b64decode(encoded))) as image:
+                self.assertEqual(image.size, (2880, 1620))
+
+    def test_color_key_transparency_survives_resampling(self):
+        for mode, row, key in (
+            ("RGB", b"\xff\x00\x00\x00\x00\xff" * 32, (255, 0, 0)),
+            ("L", b"\x00\xff" * 32, 0),
+        ):
+            with self.subTest(mode=mode), tempfile.TemporaryDirectory() as tmp:
+                source = Path(tmp) / "color-key.png"
+                Image.frombytes(mode, (64, 64), row * 64).save(
+                    source, transparency=key
+                )
+                _, encoded = _file_to_data_url(str(source), max_edge=32).split(",", 1)
+                with Image.open(BytesIO(base64.b64decode(encoded))) as decoded:
+                    alpha_min, alpha_max = decoded.getchannel("A").getextrema()
+                    self.assertGreater(alpha_min, 0)
+                    self.assertLess(alpha_max, 255)
+
+    def test_reencoded_artwork_fits_byte_budget(self):
+        rng = random.Random(22)
+        for mode, size, max_edge in (
+            ("RGB", (1920, 1920), 1920),
+            ("RGBA", (1920, 1280), 1920),
+            ("RGBA", (2880, 1620), 2880),
+        ):
+            with self.subTest(mode=mode, size=size), tempfile.TemporaryDirectory() as tmp:
+                source = Path(tmp) / "detailed.png"
+                Image.frombytes(
+                    mode, size, rng.randbytes(size[0] * size[1] * len(mode))
+                ).save(source)
+                original = source.read_bytes()
+                _, encoded = _file_to_data_url(
+                    str(source), max_edge=max_edge
+                ).split(",", 1)
+                payload = base64.b64decode(encoded)
+                self.assertLessEqual(len(payload), 1_500_000)
+                self.assertLessEqual(len(encoded), 2_000_000)
+                with Image.open(BytesIO(payload)) as decoded:
+                    self.assertLess(max(decoded.size), max_edge)
+                    self.assertAlmostEqual(
+                        decoded.width / decoded.height, size[0] / size[1], places=2
+                    )
+                    if mode == "RGBA":
+                        self.assertEqual(decoded.mode, "RGBA")
+                        self.assertLess(decoded.getchannel("A").getextrema()[1], 255)
+                self.assertEqual(source.read_bytes(), original)
+
+    def test_transparent_webp_does_not_expand_past_byte_budget(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            source = Path(tmp) / "compact.webp"
+            size = (2400, 1600)
+            image = Image.frombytes(
+                "RGB", size, random.Random(22).randbytes(size[0] * size[1] * 3)
+            )
+            image.putalpha(128)
+            image.save(source, format="WEBP", quality=10, method=2)
+            _, encoded = _file_to_data_url(str(source)).split(",", 1)
+            payload = base64.b64decode(encoded)
+            self.assertLessEqual(len(payload), 1_500_000)
+            with Image.open(BytesIO(payload)) as decoded:
+                self.assertEqual(decoded.format, "PNG")
+                self.assertEqual(decoded.getchannel("A").getextrema(), (128, 128))
+
+    def test_pixel_budget_rejects_artwork_before_decoding(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            source = Path(tmp) / "over-budget.png"
+            Image.new("1", (8000, 5001), 1).save(source)
+            with patch.object(
+                Image.Image, "load", side_effect=AssertionError("unexpected decode")
+            ) as load:
+                self.assertEqual(_file_to_data_url(str(source)), "")
+                load.assert_not_called()
+
+    def test_icc_colors_are_converted_to_srgb_with_alpha_preserved(self):
+        # 将 sRGB 的传递曲线改成线性，构造像素值相同但显示颜色不同的有效 RGB 配置。
+        profile = bytearray(
+            ImageCms.ImageCmsProfile(ImageCms.createProfile("sRGB")).tobytes()
+        )
+        for index in range(struct.unpack_from(">I", profile, 128)[0]):
+            signature, offset, _size = struct.unpack_from(">4sII", profile, 132 + index * 12)
+            if signature in (b"rTRC", b"gTRC", b"bTRC"):
+                self.assertEqual(profile[offset : offset + 4], b"para")
+                struct.pack_into(">H", profile, offset + 8, 0)
+                struct.pack_into(">i", profile, offset + 12, 65536)
+        profile[84:100] = bytes(16)
+        source_profile = ImageCms.ImageCmsProfile(BytesIO(bytes(profile)))
+        srgb = ImageCms.createProfile("sRGB")
+        reference = ImageCms.profileToProfile(
+            Image.new("RGB", (1, 1), (64, 128, 192)),
+            source_profile,
+            srgb,
+            outputMode="RGB",
+        ).getpixel((0, 0))
+        self.assertGreater(reference[0], 100)
+        for mode in ("RGB", "RGBA"):
+            with self.subTest(mode=mode), tempfile.TemporaryDirectory() as tmp:
+                source = Path(tmp) / "profiled.png"
+                color = (64, 128, 192, 100) if mode == "RGBA" else (64, 128, 192)
+                Image.new(mode, (64, 64), color).save(source, icc_profile=bytes(profile))
+                _, encoded = _file_to_data_url(str(source), max_edge=32).split(",", 1)
+                with Image.open(BytesIO(base64.b64decode(encoded))) as decoded:
+                    actual = decoded.convert("RGB").getpixel((0, 0))
+                    for channel, expected in zip(actual, reference):
+                        self.assertLessEqual(abs(channel - expected), 2)
+                    if mode == "RGBA":
+                        self.assertEqual(decoded.getchannel("A").getextrema(), (100, 100))
+
+    def test_invalid_icc_uses_existing_background_fallback(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            source = Path(tmp) / "invalid-profile.png"
+            Image.new("RGB", (64, 64)).save(source, icc_profile=b"invalid ICC profile")
+            self.assertEqual(_file_to_data_url(str(source), max_edge=32), "")
+
 
 class CheckinCardRenderQualityTest(unittest.IsolatedAsyncioTestCase):
     async def test_configured_jpeg_quality_is_passed_to_renderer(self):
@@ -251,6 +468,147 @@ class CheckinCardRenderQualityTest(unittest.IsolatedAsyncioTestCase):
             plugin.checkin_cache.cache_key.call_args.kwargs["template_version"],
             "yellow:1",
         )
+        self.assertEqual(
+            plugin.checkin_cache.cache_key.call_args.kwargs["view_model"]["resource_version"],
+            2,
+        )
+
+
+class CheckinInlineResourcesTest(unittest.IsolatedAsyncioTestCase):
+    def plugin(self):
+        plugin = object.__new__(GetPxPlugin)
+        plugin.config = {"checkin_avatar_enabled": True}
+        plugin.downloader = SimpleNamespace(download=AsyncMock())
+        plugin.html_render = AsyncMock(return_value="unused.jpg")
+        return plugin
+
+    def event(self, platform="aiocqhttp"):
+        return SimpleNamespace(
+            get_sender_id=lambda: "10001",
+            get_platform_name=lambda: platform,
+        )
+
+    def arguments(self):
+        return dict(
+            profile=_profile(), record=_record(), background=None, bot_name="neko"
+        )
+
+    async def test_avatar_is_inlined_in_every_theme_and_temp_file_removed(self):
+        from html.parser import HTMLParser
+        from jinja2 import Template
+        from astrbot_plugin_get_px.checkin.themes import CHECKIN_THEMES
+
+        class Resources(HTMLParser):
+            def handle_starttag(self, tag, attrs):
+                for key, value in attrs:
+                    if key in ("src", "href") and value:
+                        if value.startswith(("http://", "https://", "//")):
+                            raise AssertionError(f"external resource in {tag}")
+
+        plugin = self.plugin()
+        with tempfile.TemporaryDirectory() as tmp:
+            source = Path(tmp) / "avatar.png"
+            Image.new("RGB", (64, 64), "red").save(source)
+            plugin.downloader.download.return_value = (
+                str(source),
+                source.stat().st_size,
+            )
+            await plugin._render_checkin_card(self.event(), **self.arguments())
+            self.assertFalse(source.exists())
+        data = plugin.html_render.await_args.args[1]
+        self.assertTrue(data["avatar_url"].startswith("data:image/png;base64,"))
+        for theme_id in CHECKIN_THEMES:
+            html = Template(checkin_card.get_checkin_card_template(theme_id)).render(
+                **data
+            )
+            Resources().feed(html)
+            self.assertNotRegex(html, r"url\([\s\"\x27]*(?:https?:)?//")
+
+    async def test_avatar_failure_uses_placeholder_and_cleans_invalid_file(self):
+        plugin = self.plugin()
+        with tempfile.TemporaryDirectory() as tmp:
+            source = Path(tmp) / "invalid.jpg"
+            source.write_bytes(b"not an image")
+            plugin.downloader.download.return_value = (
+                str(source),
+                source.stat().st_size,
+            )
+            await plugin._render_checkin_card(self.event(), **self.arguments())
+            self.assertFalse(source.exists())
+        self.assertEqual(plugin.html_render.await_args.args[1]["avatar_url"], "")
+        plugin.downloader.download.side_effect = TimeoutError()
+        await plugin._render_checkin_card(self.event(), **self.arguments())
+        self.assertEqual(plugin.html_render.await_args.args[1]["avatar_url"], "")
+
+    async def test_disabled_and_other_platform_do_not_download(self):
+        plugin = self.plugin()
+        await plugin._render_checkin_card(self.event("other"), **self.arguments())
+        plugin.config["checkin_avatar_enabled"] = False
+        await plugin._render_checkin_card(self.event(), **self.arguments())
+        plugin.downloader.download.assert_not_awaited()
+
+    async def test_cancel_during_avatar_encoding_cleans_file(self):
+        import asyncio
+        from astrbot_plugin_get_px.checkin import artwork
+
+        plugin = self.plugin()
+        with tempfile.TemporaryDirectory() as tmp:
+            source = Path(tmp) / "avatar.png"
+            Image.new("RGB", (64, 64)).save(source)
+            plugin.downloader.download.return_value = (
+                str(source),
+                source.stat().st_size,
+            )
+            with patch.object(
+                artwork.asyncio,
+                "to_thread",
+                new=AsyncMock(side_effect=asyncio.CancelledError),
+            ):
+                with self.assertRaises(asyncio.CancelledError):
+                    await plugin._render_checkin_card(self.event(), **self.arguments())
+            self.assertFalse(source.exists())
+        plugin.html_render.assert_not_awaited()
+
+    async def test_fallback_prepares_resources_once(self):
+        from astrbot_plugin_get_px.checkin import artwork
+
+        plugin = self.plugin()
+        plugin.html_render.side_effect = RuntimeError("T2I unavailable")
+        with tempfile.TemporaryDirectory() as tmp:
+            source = Path(tmp) / "avatar.png"
+            Image.new("RGB", (64, 64)).save(source)
+            plugin.downloader.download.return_value = (
+                str(source),
+                source.stat().st_size,
+            )
+            with patch.object(
+                artwork,
+                "build_checkin_card_data",
+                wraps=artwork.build_checkin_card_data,
+            ) as build:
+                with self.assertRaisesRegex(RuntimeError, "all check-in"):
+                    await plugin._render_checkin_card_with_fallback(
+                        self.event(),
+                        preferred_tier="极致",
+                        **self.arguments(),
+                    )
+                self.assertEqual(build.call_count, 1)
+        plugin.downloader.download.assert_awaited_once()
+        self.assertEqual(plugin.html_render.await_count, 3)
+
+    async def test_cache_hit_skips_resource_preparation(self):
+        plugin = self.plugin()
+        plugin._checkin_card_cache_key = Mock(return_value="key")
+        cache = SimpleNamespace(store=AsyncMock(return_value="cached.jpg"))
+        result, _tier = await plugin._render_checkin_card_with_fallback(
+            self.event(),
+            preferred_tier="极致",
+            cache=cache,
+            **self.arguments(),
+        )
+        self.assertEqual(result, Path("cached.jpg"))
+        plugin.downloader.download.assert_not_awaited()
+        plugin.html_render.assert_not_awaited()
 
 
 if __name__ == "__main__":

@@ -75,6 +75,12 @@ python scripts/ci/check_plugin_lifecycle.py \
 
 渲染链路、各资产画布约定与自建端点本地重渲方法见 [`t2i-rendering.md`](./t2i-rendering.md)。
 
+背景编码回归运行 `python -m pytest -q tests/test_checkin_card.py tests/test_checkin_calendar.py`，覆盖输出 1.5MB 预算、透明色重采样、透明 WebP、ICC 到 sRGB、无效 ICC 回退、40MP 解码前拦截和真实日历调用的 2880px 上限。上线前另用 `/签到`、`/签到日历` 验证三档真实 T2I 输出；本地编码测试不代表远端渲染成功。
+
+头像与资源复用回归包含：QQ 头像内联、关闭头像及非 QQ 平台不下载、超时和无效响应使用昵称占位、取消时清理下载文件、三档仅准备一次资源、缓存命中不准备资源，以及所有主题注入动态数据后的外链检查。
+
+跨群签到缓存回归运行 `python -m pytest -q tests/test_main_error_handling.py tests/test_checkin_cache.py`：使用真实 SQLite 和 JPEG 缓存验证 A→B→A 的相同/不同安全规则、仅 Lolicon 无 Pixiv token、缓存重载与并发、全局词和黑名单更新、背景刷新及主题切换、摘要/JPEG 缺失或损坏、清理重建不重复发奖，以及摘要原子写入失败不覆盖已有文件。测试替代远端取图和 T2I，不代表 QQ 实机发送验证。
+
 ## 测试覆盖建议
 
 当前测试覆盖主要业务流程和边界情况：
@@ -199,3 +205,19 @@ async def test_something_async():
     result = await async_function()
     assert result is not None
 ```
+
+## 发送状态与异常日志回归
+
+运行 `python -m pytest -q tests/test_delivery.py tests/test_p_coin_cost.py`，验证模拟送达后报错不重发、普通图片与合并转发不重复补发、未知状态不扣费、正常状态照常结算、构建异常不调用发送、取消继续传播、提示失败记录日志，以及错误回包脱敏。真实 OneBot 回包需在部署端触发问题后结合 `retcode` 和脱敏错误详情确认；自动化测试不向真实会话发消息。
+
+## OneBot 图片发送验证
+
+运行 `python -m pytest -q tests/test_delivery.py tests/test_p_coin_cost.py`，验证群聊/私聊、单图/合并转发三种传输模式的 API 名称、路由、文件 URI 和 base64 原始字节，以及异常时无自动补发。真实部署请分别选择 file、base64、astrbot 重载后发送同一作品，对比 transport、耗时和错误回包；路径模式要求协议端可访问同一文件。自动化测试只使用 Mock OneBot 客户端，不向群聊发消息。
+
+## 插件下载临时目录回归
+
+`python -m pytest -q tests/test_downloader.py tests/test_plugin_api_cache.py` 验证指定目录落盘、未初始化不回退系统 tmp、错误时清理半成品，以及 Pages 不调用系统临时目录、只删除过期下载、保留活跃文件与无关文件。部署检查需确认日志中的 file URI 对协议端可见，共享 data 目录不等于两端绝对路径自动相同。
+
+### 跨用户图片读取回归
+
+`tests/test_delivery.py` 覆盖POSIX file模式设置0644、Windows与base64不改权限、合并转发嵌套图片、chmod异常不调用发送API。真实mkstemp 0600→0644断言仅在POSIX执行，Windows明确跳过；跨容器不同UID的读取仍需部署端验证。
