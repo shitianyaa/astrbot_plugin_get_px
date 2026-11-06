@@ -7,7 +7,7 @@ from astrbot.api.event import AstrMessageEvent
 from astrbot.api.message_components import Node, Nodes
 
 from .constants import AIOCQHTTP_PLATFORM, MAX_IMAGE_COUNT
-from .delivery import log_delivery_error, send_once
+from .delivery import DeliveryStatus, log_delivery_error, send_once
 from .downloader import cleanup
 from .safety import ContentSafetyPolicy, STRICT_CONTENT_SAFETY_POLICY
 
@@ -311,6 +311,14 @@ class SearchMixin:
         pick_count = len(chosen)
         pending_illust_ids: set[str] = set()
         sent_illust_ids: set[str] = set()
+        unknown_illust_ids: set[str] = set()
+        retained_paths: set[str] = set()
+        onebot_transport = self._cfg_str("onebot_image_transport", "file")
+        file_transport = (
+            onebot_transport == "file"
+            and event.get_platform_name() == AIOCQHTTP_PLATFORM
+            and getattr(event, "bot", None) is not None
+        )
         if dedupe_days > 0 and self.image_index is not None:
             pending_illust_ids = {
                 str(illust.get("id") or "") for illust in chosen if illust.get("id")
@@ -319,6 +327,33 @@ class SearchMixin:
         # 下载所有图片
         downloaded: list[tuple[dict, str, str, int]] = []
         temp_paths: list[str] = []
+
+        async def deliver_images(content, images, *, context: str) -> None:
+            ids = {str(illust["id"]) for illust, *_ in images if illust.get("id")}
+
+            def retain_unknown():
+                unknown_illust_ids.update(ids)
+                if file_transport:
+                    retained_paths.update(path for _, path, *_ in images)
+
+            try:
+                status = await send_once(
+                    event, content, context=context, onebot_transport=onebot_transport
+                )
+            except asyncio.CancelledError:
+                # 取消发生在提交期间也可能已送达，保留占用与协议端读取窗口。
+                retain_unknown()
+                raise
+            if status is DeliveryStatus.UNKNOWN:
+                retain_unknown()
+            elif status is DeliveryStatus.CONFIRMED:
+                sent_illust_ids.update(ids)
+                for illust, *_ in images:
+                    await self._record_image_usage(
+                        event, source_key, illust, feature="normal",
+                        user_id=str(event.get_sender_id() or ""),
+                    )
+
         try:
             for idx, illust in enumerate(chosen, 1):
                 illust_id = illust.get("id", "?")
@@ -403,19 +438,7 @@ class SearchMixin:
                             ],
                         )
                     )
-                confirmed = await send_once(
-                    event, [nodes], context="send_mode=forward",
-                    onebot_transport=self._cfg_str("onebot_image_transport", "file"),
-                )
-                if confirmed:
-                    sent_illust_ids.update(
-                        str(illust.get("id")) for illust, *_ in downloaded if illust.get("id")
-                    )
-                    for illust, *_ in downloaded:
-                        await self._record_image_usage(
-                            event, source_key, illust, feature="normal",
-                            user_id=str(event.get_sender_id() or ""),
-                        )
+                await deliver_images([nodes], downloaded, context="send_mode=forward")
             else:
                 for illust, path, actual_q, file_size in downloaded:
                     illust_id = illust.get("id", "?")
@@ -423,17 +446,10 @@ class SearchMixin:
                         Plain(f"🎨 {illust.get('title', '无标题')} (ID: {illust_id})"),
                         Image.fromFileSystem(path),
                     ]
-                    confirmed = await send_once(
-                        event, content, context=f"send_mode=single illust_id={illust_id}",
-                        onebot_transport=self._cfg_str("onebot_image_transport", "file"),
+                    await deliver_images(
+                        content, [(illust, path, actual_q, file_size)],
+                        context=f"send_mode=single illust_id={illust_id}",
                     )
-                    if confirmed:
-                        if illust.get("id"):
-                            sent_illust_ids.add(str(illust_id))
-                        await self._record_image_usage(
-                            event, source_key, illust, feature="normal",
-                            user_id=str(event.get_sender_id() or ""),
-                        )
         finally:
             if self._p_charging_active() and sent_illust_ids:
                 total_cost = self._p_unit_cost() * len(sent_illust_ids)
@@ -482,9 +498,12 @@ class SearchMixin:
                         f"error_type={type(exc).__name__}"
                     )
             for p in temp_paths:
-                cleanup(p)
+                if p in retained_paths:
+                    self.downloader.defer_cleanup(p)
+                else:
+                    cleanup(p)
             if pending_illust_ids and self.image_index is not None:
-                for illust_id in pending_illust_ids - sent_illust_ids:
+                for illust_id in pending_illust_ids - sent_illust_ids - unknown_illust_ids:
                     try:
                         await self.image_index.release_usage(
                             scope=self._event_scope(event),

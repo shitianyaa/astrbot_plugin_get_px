@@ -632,7 +632,7 @@ class MainErrorHandlingTest(unittest.IsolatedAsyncioTestCase):
 
     async def test_initialize_logs_v3_migration_guidance_for_old_database(self):
         plugin = object.__new__(GetPxPlugin)
-        plugin.downloader = SimpleNamespace(temp_dir=None)
+        plugin.downloader = SimpleNamespace(temp_dir=None, resume_cleanup=AsyncMock())
         plugin._init_client = lambda: None
 
         class FakeImageIndex:
@@ -667,7 +667,7 @@ class MainErrorHandlingTest(unittest.IsolatedAsyncioTestCase):
 
     async def test_initialize_migrates_policy_before_convergence_and_logs_result(self):
         plugin = object.__new__(GetPxPlugin)
-        plugin.downloader = SimpleNamespace(temp_dir=None)
+        plugin.downloader = SimpleNamespace(temp_dir=None, resume_cleanup=AsyncMock())
         order = []
         plugin.config = {}
         plugin.context = SimpleNamespace()
@@ -747,7 +747,7 @@ class MainErrorHandlingTest(unittest.IsolatedAsyncioTestCase):
 
     async def test_initialize_skips_convergence_when_policy_migration_fails(self):
         plugin = object.__new__(GetPxPlugin)
-        plugin.downloader = SimpleNamespace(temp_dir=None)
+        plugin.downloader = SimpleNamespace(temp_dir=None, resume_cleanup=AsyncMock())
         plugin.config = {}
         plugin.context = SimpleNamespace()
         plugin._migrate_grouped_config = Mock()
@@ -794,7 +794,7 @@ class MainErrorHandlingTest(unittest.IsolatedAsyncioTestCase):
 
     async def test_initialize_stops_after_convergence_failure(self):
         plugin = object.__new__(GetPxPlugin)
-        plugin.downloader = SimpleNamespace(temp_dir=None)
+        plugin.downloader = SimpleNamespace(temp_dir=None, resume_cleanup=AsyncMock())
         plugin.config = {}
         plugin.context = SimpleNamespace()
         plugin._migrate_grouped_config = Mock()
@@ -1344,6 +1344,29 @@ class MainErrorHandlingTest(unittest.IsolatedAsyncioTestCase):
             plugin._record_checkin_background.assert_not_awaited()
             plugin._release_checkin_background_claim.assert_awaited_once()
             self.assertFalse(rendered.exists())
+
+    async def test_cache_lookup_error_returns_text_and_releases_background_claim(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            order = []
+            result = CheckinResult(
+                _profile(), _record(persisted=False, with_background=False), duplicate=False
+            )
+            plugin = _plugin_for_checkin(tmp, result, order)
+            source = Path(tmp) / "selected.png"
+            PILImage.new("RGB", (750, 1000), "blue").save(source)
+            plugin._prepare_checkin_background.return_value = CardBackground(
+                image_path=str(source), mode="pixiv_daily",
+                source="lolicon:random", illust_id="123:0",
+            )
+            plugin._get_cached_checkin_card = AsyncMock(side_effect=OSError("cache unavailable"))
+            event = _FakeEvent(order)
+            output = await _collect(plugin._handle_checkin(event))
+            self.assertEqual(len(output), 1)
+            self.assertEqual(event.sent, [])
+            plugin._release_checkin_background_claim.assert_awaited_once()
+            plugin._render_checkin_card.assert_not_awaited()
+            self.assertEqual(plugin.checkin_store.background_updates, [])
+            self.assertFalse(source.exists())
 
     async def test_send_failure_keeps_cache_but_does_not_record_usage(self):
         with tempfile.TemporaryDirectory() as tmp:

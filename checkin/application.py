@@ -183,6 +183,7 @@ class CheckinApplicationMixin:
 
         background: CardBackground | None = None
         card_path: Path | None = None
+        cached_path: Path | None = None
         claim_held = False
         background_persisted = False
         profile_snapshot = self._checkin_profile_from_record(record)

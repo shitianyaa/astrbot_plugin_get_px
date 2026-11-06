@@ -200,6 +200,7 @@ class GetPxPlugin(
             self.data_dir,
             plugin_version=PLUGIN_VERSION,
         )
+        await self.downloader.resume_cleanup()
         self._holiday_refresh_task = asyncio.create_task(
             self._refresh_holiday_calendar()
         )

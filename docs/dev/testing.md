@@ -208,7 +208,7 @@ async def test_something_async():
 
 ## 发送状态与异常日志回归
 
-运行 `python -m pytest -q tests/test_delivery.py tests/test_p_coin_cost.py`，验证模拟送达后报错不重发、普通图片与合并转发不重复补发、未知状态不扣费、正常状态照常结算、构建异常不调用发送、取消继续传播、提示失败记录日志，以及错误回包脱敏。真实 OneBot 回包需在部署端触发问题后结合 `retcode` 和脱敏错误详情确认；自动化测试不向真实会话发消息。
+运行 `python -m pytest -q tests/test_delivery.py tests/test_p_coin_cost.py`，验证发送三态、aiocqhttp 真实结果解析契约、消息 ID 回执确认、空/异步回执不扣费、协议异常不误判确定未送达、普通图片与合并转发不重复补发、未知/取消保留 pending 占用、确认成功正常结算、构建失败只发送通知、取消继续传播、提示失败记录日志，以及错误回包脱敏。file/base64 的文件保留与清理分别断言，合并转发覆盖批量图片。自动化测试不向真实会话发消息。
 
 ## OneBot 图片发送验证
 
@@ -217,6 +217,8 @@ async def test_something_async():
 ## 插件下载临时目录回归
 
 `python -m pytest -q tests/test_downloader.py tests/test_plugin_api_cache.py` 验证指定目录落盘、未初始化不回退系统 tmp、错误时清理半成品，以及 Pages 不调用系统临时目录、只删除过期下载、保留活跃文件与无关文件。部署检查需确认日志中的 file URI 对协议端可见，共享 data 目录不等于两端绝对路径自动相同。
+
+下载器测试另覆盖未知路径发送保留 600 秒后自动删除、mtime 更新、关闭任务但保留文件、重启按剩余保护时间恢复清理及忽略无关文件。签到流程测试验证缓存查询抛 OSError 时仍返回文字、释放占用并清理原图，不产生 UnboundLocalError。
 
 ### 跨用户图片读取回归
 

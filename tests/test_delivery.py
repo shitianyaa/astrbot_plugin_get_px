@@ -9,7 +9,7 @@ from aiocqhttp.exceptions import ActionFailed
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 
-from astrbot_plugin_get_px.pixiv.delivery import send_once, log_delivery_error  # noqa: E402
+from astrbot_plugin_get_px.pixiv.delivery import DeliveryStatus, send_once, log_delivery_error  # noqa: E402
 
 
 @pytest.mark.asyncio
@@ -44,12 +44,13 @@ async def test_chmod_failure_is_logged_before_api_call(tmp_path):
     event = SimpleNamespace(
         get_platform_name=lambda: "aiocqhttp", get_group_id=lambda: "456",
         get_sender_id=lambda: "789", bot=SimpleNamespace(call_action=AsyncMock()),
-        send=AsyncMock(),
+        send=AsyncMock(), plain_result=lambda text: text,
     )
     with patch.object(delivery, "os", SimpleNamespace(name="posix", chmod=Mock(side_effect=PermissionError("denied")))), patch.object(delivery, "logger") as logger:
-        assert not await send_once(event, [Image.fromFileSystem(str(path))], context="test")
+        assert await send_once(event, [Image.fromFileSystem(str(path))], context="test") is DeliveryStatus.FAILED
     event.bot.call_action.assert_not_awaited()
-    event.send.assert_not_awaited()
+    event.send.assert_awaited_once()
+    assert "构建失败" in event.send.await_args.args[0]
     assert 'error_type="PermissionError"' in logger.warning.call_args.args[0]
     assert 'phase=build' in logger.warning.call_args.args[0]
 
@@ -94,7 +95,7 @@ async def test_direct_onebot_transport(tmp_path, group, forward, transport):
         bot=SimpleNamespace(call_action=AsyncMock(return_value={"message_id": 1})),
         send=AsyncMock(), chain_result=lambda items: items,
     )
-    assert await send_once(event, content, context="test", onebot_transport=transport)
+    assert await send_once(event, content, context="test", onebot_transport=transport) is DeliveryStatus.CONFIRMED
     if transport == "astrbot":
         event.bot.call_action.assert_not_awaited()
         event.send.assert_awaited_once()
@@ -123,7 +124,7 @@ async def test_direct_onebot_timeout_never_falls_back(tmp_path):
         get_sender_id=lambda: "789", bot=SimpleNamespace(call_action=AsyncMock(side_effect=TimeoutError())),
         send=AsyncMock(), plain_result=lambda text: text,
     )
-    assert not await send_once(event, [Image.fromFileSystem(str(path))], context="test")
+    assert await send_once(event, [Image.fromFileSystem(str(path))], context="test") is DeliveryStatus.UNKNOWN
     event.bot.call_action.assert_awaited_once()
     assert event.send.await_count == 1  # 仅状态提示，不补发图片。
 
@@ -152,7 +153,7 @@ async def test_delivered_then_error_does_not_resend_image(error):
         plain_result=lambda text: text,
     )
     with patch("astrbot_plugin_get_px.pixiv.delivery.logger") as logger:
-        assert not await send_once(event, ["image"], context="send_mode=single")
+        assert await send_once(event, ["image"], context="send_mode=single") is DeliveryStatus.UNKNOWN
     assert delivered == [["image"]]
     assert "delivery_status=unknown" in logger.warning.call_args.args[0]
     assert "retcode=" in logger.warning.call_args.args[0]
@@ -160,13 +161,15 @@ async def test_delivered_then_error_does_not_resend_image(error):
 
 
 @pytest.mark.asyncio
-async def test_pre_send_failure_never_calls_send():
+async def test_pre_send_failure_only_sends_failure_notice():
     event = SimpleNamespace(
-        chain_result=Mock(side_effect=ValueError("invalid chain")), send=AsyncMock()
+        chain_result=Mock(side_effect=ValueError("invalid chain")), send=AsyncMock(),
+        plain_result=lambda text: text,
     )
     with patch("astrbot_plugin_get_px.pixiv.delivery.logger") as logger:
-        assert not await send_once(event, [], context="send_mode=single")
-    event.send.assert_not_awaited()
+        assert await send_once(event, [], context="send_mode=single") is DeliveryStatus.FAILED
+    event.send.assert_awaited_once()
+    assert "构建失败" in event.send.await_args.args[0]
     assert "delivery_status=failed" in logger.warning.call_args.args[0]
 
 
@@ -178,7 +181,7 @@ async def test_notice_error_is_logged_and_not_retried():
         plain_result=lambda text: text,
     )
     with patch("astrbot_plugin_get_px.pixiv.delivery.logger") as logger:
-        assert not await send_once(event, [], context="send_mode=forward")
+        assert await send_once(event, [], context="send_mode=forward") is DeliveryStatus.UNKNOWN
     assert event.send.await_count == 2  # 图片一次，状态提示一次。
     assert "phase=notice" in logger.warning.call_args.args[0]
 
@@ -192,6 +195,47 @@ async def test_cancel_propagates_without_retry():
     with pytest.raises(asyncio.CancelledError):
         await send_once(event, [], context="send_mode=single")
     event.send.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "payload, expected",
+    [
+        ({"status": "ok", "retcode": 0, "data": {"message_id": 123}}, DeliveryStatus.CONFIRMED),
+        ({"status": "async", "retcode": 1, "data": None}, DeliveryStatus.UNKNOWN),
+        ({"status": "ok", "retcode": 0, "data": {}}, DeliveryStatus.UNKNOWN),
+        ({"status": "failed", "retcode": 1200, "data": None}, DeliveryStatus.UNKNOWN),
+    ],
+)
+async def test_direct_receipts_use_sdk_contract_and_require_message_id(payload, expected):
+    from aiocqhttp.api_impl import _handle_api_result
+    from astrbot.api.message_components import Plain
+
+    async def action(*_args, **_kwargs):
+        return _handle_api_result(payload)
+
+    event = SimpleNamespace(
+        get_platform_name=lambda: "aiocqhttp", get_group_id=lambda: "456",
+        get_sender_id=lambda: "789", bot=SimpleNamespace(call_action=AsyncMock(side_effect=action)),
+        send=AsyncMock(), plain_result=lambda text: text,
+    )
+    assert await send_once(event, [Plain("fixture")], context="test") is expected
+    event.bot.call_action.assert_awaited_once()
+    assert event.send.await_count == (0 if expected is DeliveryStatus.CONFIRMED else 1)
+
+
+@pytest.mark.asyncio
+async def test_build_failure_notice_error_is_logged_without_image_submission():
+    event = SimpleNamespace(
+        chain_result=Mock(side_effect=ValueError("invalid chain")),
+        send=AsyncMock(side_effect=RuntimeError("notice failed")),
+        plain_result=lambda text: text,
+    )
+    with patch("astrbot_plugin_get_px.pixiv.delivery.logger") as logger:
+        assert await send_once(event, [], context="test") is DeliveryStatus.FAILED
+    event.send.assert_awaited_once()
+    assert len(logger.warning.call_args_list) == 2
+    assert "phase=notice" in logger.warning.call_args.args[0]
 
 
 def test_protocol_error_details_are_allowlisted_and_redacted():

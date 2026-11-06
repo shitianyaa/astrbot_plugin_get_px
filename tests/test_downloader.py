@@ -1,3 +1,4 @@
+import asyncio
 import os
 import sys
 import tempfile
@@ -57,6 +58,52 @@ def _downloader_with(resp) -> ImageDownloader:
 
 
 class ImageDownloaderSizeLimitTest(unittest.IsolatedAsyncioTestCase):
+    async def test_uncertain_file_is_retained_then_automatically_removed(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "get_px_pending.jpg"
+            path.write_bytes(b"fixture")
+            os.utime(path, (1, 1))
+            downloader = ImageDownloader(temp_dir=Path(tmp))
+            with mock.patch.object(dl.asyncio, "sleep", new_callable=mock.AsyncMock) as sleep:
+                downloader.defer_cleanup(str(path))
+                self.assertTrue(path.exists())
+                self.assertGreater(path.stat().st_mtime, 1)
+                await asyncio.gather(*tuple(downloader._cleanup_tasks))
+                sleep.assert_awaited_once_with(600)
+            self.assertFalse(path.exists())
+            await downloader.close()
+
+    async def test_close_preserves_pending_file_and_restart_resumes_cleanup(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "get_px_pending.jpg"
+            path.write_bytes(b"fixture")
+            downloader = ImageDownloader(temp_dir=Path(tmp))
+            downloader.defer_cleanup(str(path))
+            await downloader.close()
+            self.assertTrue(path.exists())
+            self.assertEqual(downloader._cleanup_tasks, set())
+            restarted = ImageDownloader(temp_dir=Path(tmp))
+            with mock.patch.object(dl, "DELIVERY_FILE_GRACE_SECONDS", 0):
+                await restarted.resume_cleanup()
+                await asyncio.gather(*tuple(restarted._cleanup_tasks))
+            self.assertFalse(path.exists())
+            await restarted.close()
+
+    async def test_restart_uses_remaining_grace_and_ignores_unrelated_files(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            fresh, expired, unrelated = [root / name for name in ("get_px_fresh.jpg", "get_px_expired.jpg", "keep.jpg")]
+            for path, modified in ((fresh, 9980), (expired, 9000), (unrelated, 9000)):
+                path.write_bytes(b"fixture")
+                os.utime(path, (modified, modified))
+            downloader = ImageDownloader(temp_dir=root)
+            with mock.patch.object(dl.time, "time", return_value=10000), mock.patch.object(downloader, "_schedule_cleanup") as schedule:
+                await downloader.resume_cleanup()
+            scheduled = {Path(call.args[0]).name: call.args[1] for call in schedule.call_args_list}
+            self.assertEqual(scheduled, {fresh.name: 580, expired.name: 0})
+            self.assertTrue(unrelated.exists())
+            await downloader.close()
+
     async def test_uninitialized_directory_does_not_use_system_temp(self):
         downloader = ImageDownloader()
         with mock.patch.object(downloader, "_ensure_session") as session:
