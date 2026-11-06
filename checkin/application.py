@@ -10,7 +10,7 @@ from astrbot.api.event import AstrMessageEvent
 from .models import ACHIEVEMENTS, CheckinProfile, CheckinRecord
 from .quality import CHECKIN_JPEG_QUALITY, get_checkin_render_tier
 from .birthday import birthday_matches, parse_qq_birthday
-from .card import CardBackground, build_checkin_card_data
+from .card import BackgroundEncodingError, CardBackground, build_checkin_card_data
 from .content import CheckinContent, resolve_checkin_content
 from .greeting import DEFAULT_CHECKIN_GREETING_PROMPT
 from .themes import get_checkin_theme
@@ -279,18 +279,34 @@ class CheckinApplicationMixin:
                         )
             if cached_path is None:
                 stage = "card_render"
-                cached_path, actual_tier = await self._render_checkin_card_with_fallback(
-                    event,
-                    profile=profile_snapshot,
-                    record=record,
-                    background=background,
-                    bot_name=bot_name,
-                    user_title=user_title,
-                    preferred_tier=preferred_tier,
-                    cache=cache,
-                    policy=policy,
-                    safety_identity=safety_identity,
-                )
+                for background_attempt in range(2):
+                    try:
+                        cached_path, actual_tier = await self._render_checkin_card_with_fallback(
+                            event,
+                            profile=profile_snapshot,
+                            record=record,
+                            background=background,
+                            bot_name=bot_name,
+                            user_title=user_title,
+                            preferred_tier=preferred_tier,
+                            cache=cache,
+                            policy=policy,
+                            safety_identity=safety_identity,
+                        )
+                        break
+                    except BackgroundEncodingError:
+                        if background_attempt:
+                            raise
+                        logger.warning(
+                            f"{LOG_PREFIX} 签到背景无法编码，撤销作品并使用占位图: "
+                            f"reason=background_encoding_failed"
+                        )
+                        if claim_held:
+                            await self._release_checkin_background_claim(event, background)
+                            claim_held = False
+                        if background and background.mode == "pixiv_daily":
+                            cleanup(background.image_path)
+                        background = CardBackground(mode="fallback", source="fallback")
 
             if not result.duplicate and background is not None:
                 stage = "background_persist"
@@ -788,7 +804,7 @@ class CheckinApplicationMixin:
             render_tier or self._record_checkin_render_tier(record)
         )
         view_model["render_tier"] = render_spec.name
-        view_model["resource_version"] = 2
+        view_model["resource_version"] = 3
         view_model["render_quality"] = CHECKIN_JPEG_QUALITY
         view_model["background_quality"] = str(
             background.quality or render_spec.background_quality

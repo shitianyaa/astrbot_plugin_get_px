@@ -18,6 +18,10 @@ class DeliveryStatus(Enum):
     UNKNOWN = "unknown"
 
 
+class DeliveryNotSubmitted(asyncio.CancelledError):
+    """消息尚未提交时取消；调用方应释放图片占用并继续传播取消。"""
+
+
 async def _onebot_segments(content: list, transport: str) -> list[dict]:
     """仅转换发图链路使用的组件，路径模式不经过框架的 base64 转换。"""
     segments = []
@@ -78,7 +82,8 @@ def _safe_error_text(value: object) -> str:
         return ""
     text = value
     text = re.sub(r"https?://\S+|\[CQ:[^\]]*\]", "[redacted]", text)
-    text = re.sub(r"(?i)(?:[a-z]:[\\/]|/)[^\s\"']+", "[path]", text)
+    text = re.sub(r'''(?i)(["'])(?:\\{2,}|[a-z]:[\\/]|/)[^"'\r\n]*\1''', "[path]", text)
+    text = re.sub(r"(?i)(?:\\{2,}|[a-z]:[\\/]|/)[^\s\"']+", "[path]", text)
     text = re.sub(
         r"""(?i)((?:token|secret|password|authorization|api[_-]?key)["']?\s*[=:]\s*)(?:"[^"]*"|'[^']*'|[^\s,;]+)""",
         r"\1[redacted]",
@@ -147,14 +152,19 @@ async def send_once(
             action, params = await _onebot_request(event, content, onebot_transport)
         else:
             message = event.chain_result(content)
+    except asyncio.CancelledError as exc:
+        raise DeliveryNotSubmitted() from exc
     except Exception as exc:
         log_delivery_error(
             exc, context=context, phase="build", delivery_status="failed"
         )
-        await _send_notice(
-            event, "⚠️ 图片消息构建失败，本次未发送且不扣费，请检查插件日志。",
-            context=context, status=DeliveryStatus.FAILED,
-        )
+        try:
+            await _send_notice(
+                event, "⚠️ 图片消息构建失败，本次未发送且不扣费，请检查插件日志。",
+                context=context, status=DeliveryStatus.FAILED,
+            )
+        except asyncio.CancelledError as cancelled:
+            raise DeliveryNotSubmitted() from cancelled
         return DeliveryStatus.FAILED
     try:
         if direct:

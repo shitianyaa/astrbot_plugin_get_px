@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import base64
-from dataclasses import asdict, dataclass
+from dataclasses import asdict, dataclass, field
 from datetime import date
 from functools import lru_cache
 from html import escape
@@ -83,6 +83,10 @@ def get_checkin_card_template(theme_id: str = DEFAULT_CHECKIN_THEME_ID) -> str:
     return html.replace(_CSS_MARKER, css)
 
 
+class BackgroundEncodingError(ValueError):
+    """已选择的背景无法内联，必须撤销选择或回退占位图。"""
+
+
 @dataclass(frozen=True)
 class CardBackground:
     image_path: str = ""
@@ -94,6 +98,8 @@ class CardBackground:
     illust: dict[str, Any] | None = None
     quality: str = ""
     file_size: int = 0
+    # 付费刷新在扣费前验证，渲染时复用，避免再次读取和压缩。
+    data_url: str | None = field(default=None, repr=False, compare=False)
 
     @property
     def pixiv_caption(self) -> str:
@@ -250,9 +256,17 @@ def build_checkin_card_view_model(
             else f"好感度奖励 ×{record.boost_multiplier:g}"
         )
 
-    artwork_title = background.title or record.background_title
-    artwork_author = background.author or record.background_author
-    artwork_id = background.illust_id or record.background_illust_id
+    artwork_url = (
+        background.data_url
+        if background.data_url is not None
+        else _file_to_data_url(background.image_path)
+    )
+    if background.image_path and not artwork_url:
+        raise BackgroundEncodingError("selected background could not be encoded")
+    placeholder = background.mode == "fallback"
+    artwork_title = "" if placeholder else background.title or record.background_title
+    artwork_author = "" if placeholder else background.author or record.background_author
+    artwork_id = "" if placeholder else background.illust_id or record.background_illust_id
 
     return CheckinCardViewModel(
         date_label=_date_label(record.date_key),
@@ -285,7 +299,7 @@ def build_checkin_card_view_model(
         artwork_title=_truncate_display(artwork_title, 18),
         artwork_author=_truncate_display(artwork_author, 12),
         artwork_id=_truncate_display(artwork_id, 24),
-        artwork_url=_file_to_data_url(background.image_path),
+        artwork_url=artwork_url,
         artwork_aspect_ratio=_artwork_aspect_ratio(background),
     )
 

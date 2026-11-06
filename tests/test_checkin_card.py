@@ -77,6 +77,18 @@ def _record() -> CheckinRecord:
 
 
 class CheckinCardViewModelTest(unittest.TestCase):
+    def test_prevalidated_background_reuses_encoding(self):
+        background = CardBackground(
+            image_path="already-validated.png", mode="pixiv_daily",
+            illust_id="123", data_url="data:image/png;base64,fixture",
+        )
+        with patch.object(checkin_card, "_file_to_data_url") as encode:
+            data = checkin_card.build_checkin_card_data(
+                profile=_profile(), record=_record(), bot_name="neko", background=background,
+            )
+        self.assertEqual(data["artwork_url"], background.data_url)
+        encode.assert_not_called()
+
     def test_builds_h_card_from_persisted_record_snapshot(self):
         builder = getattr(checkin_card, "build_checkin_card_view_model", None)
         self.assertIsNotNone(builder, "缺少 H 卡片 view-model 构建器")
@@ -470,7 +482,7 @@ class CheckinCardRenderQualityTest(unittest.IsolatedAsyncioTestCase):
         )
         self.assertEqual(
             plugin.checkin_cache.cache_key.call_args.kwargs["view_model"]["resource_version"],
-            2,
+            3,
         )
 
 

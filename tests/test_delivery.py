@@ -12,6 +12,23 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 from astrbot_plugin_get_px.pixiv.delivery import DeliveryStatus, send_once, log_delivery_error  # noqa: E402
 
 
+@pytest.mark.parametrize("path", [
+    r"\\fixturehost\private\image.jpg",
+    r"C:\private\image.jpg",
+    "/private/image.jpg",
+    r"\\fixturehost\private folder\image.jpg",
+])
+def test_exception_paths_are_redacted(path):
+    from astrbot_plugin_get_px.pixiv.delivery import _safe_error_text
+
+    text = _safe_error_text(str(PermissionError(13, "Permission denied", path)))
+    assert "fixturehost" not in text
+    assert "private" not in text
+    assert "image.jpg" not in text
+    assert "Permission denied" in text
+    assert "[path]" in text
+
+
 @pytest.mark.asyncio
 @pytest.mark.parametrize("transport", ["file", "base64"])
 @pytest.mark.parametrize("platform", ["posix", "nt"])

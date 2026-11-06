@@ -300,6 +300,74 @@ def _plugin_for_checkin(tmp: str, result: CheckinResult, order, *, cache_hit=Fal
 
 
 class Issue24CacheTest(unittest.IsolatedAsyncioTestCase):
+    async def test_rejected_background_uses_consistent_placeholder_and_cache(self):
+        from astrbot_plugin_get_px.checkin import card
+
+        with tempfile.TemporaryDirectory() as tmp:
+            plugin, _selected = self.setup_plugin(tmp)
+            source = Path(tmp) / "rejected.png"
+            PILImage.new("RGB", (6, 8)).save(source)
+            plugin._prepare_checkin_background.side_effect = None
+            plugin._prepare_checkin_background.return_value = CardBackground(
+                mode="pixiv_daily", source="lolicon:random", image_path=str(source),
+                illust_id="999999:0", title="RejectedArtwork", author="RejectedArtist",
+            )
+            del plugin._prepare_checkin_card_data
+            rendered = []
+
+            async def render(_event, **kwargs):
+                rendered.append(kwargs["prepared_data"])
+                return _make_card(Path(tmp) / "rendered.jpg")
+
+            plugin._render_checkin_card.side_effect = render
+            with patch.object(card, "_file_to_data_url", return_value=""):
+                event = _FakeEvent(group_id="a")
+                self.assertEqual(await _collect(plugin._handle_checkin(event)), [])
+            self.assertEqual(len(rendered), 1)
+            for field in ("artwork_url", "artwork_title", "artwork_author", "artwork_id"):
+                self.assertEqual(rendered[0][field], "")
+            self.assertNotIn("Rejected", rendered[0]["artwork_credit"])
+            self.assertEqual(len(event.sent), 1)
+            self.assertEqual(len(event.sent[0]), 1)
+            summaries = list(plugin.checkin_cache.root.rglob("*.json"))
+            self.assertEqual(len(summaries), 1)
+            summary = json.loads(summaries[0].read_text(encoding="utf-8"))
+            self.assertEqual(summary["mode"], "fallback")
+            self.assertEqual(summary["illust_id"], "")
+            plugin._release_checkin_background_claim.assert_awaited_once()
+            used_background = plugin._record_checkin_background.await_args.args[1]
+            self.assertEqual(used_background.mode, "fallback")
+            self.assertEqual(used_background.illust_id, "")
+            self.assertFalse(source.exists())
+            # 摘要命中后直接复用占位卡，不再恢复或重新抽取被拒绝的作品。
+            self.assertEqual(await _collect(plugin._handle_checkin(_FakeEvent(group_id="a"))), [])
+            self.assertEqual(len(rendered), 1)
+
+    async def test_paid_refresh_rejects_encoding_before_charge(self):
+        from astrbot_plugin_get_px.checkin import shop
+
+        with tempfile.TemporaryDirectory() as tmp:
+            plugin, _selected = self.setup_plugin(tmp)
+            await plugin.checkin_store.checkin(user_id="10001", username="Alice", bot_name="neko")
+            await plugin.checkin_store.update_checkin_member(
+                user_id="10001", coins=500, affection=0, total_days=1, streak_days=1,
+            )
+            before = await plugin.checkin_store.get_today_record("10001")
+            source = Path(tmp) / "rejected.png"
+            PILImage.new("RGB", (6, 8)).save(source)
+            plugin._prepare_checkin_background.side_effect = None
+            plugin._prepare_checkin_background.return_value = CardBackground(
+                mode="pixiv_daily", source="lolicon:random", image_path=str(source),
+                illust_id="999999:0", title="RejectedArtwork",
+            )
+            with patch.object(shop, "_file_to_data_url", return_value=""):
+                output = await _collect(plugin._handle_refresh_checkin_background(_FakeEvent()))
+            self.assertIn("不扣金币", output[0])
+            self.assertEqual((await plugin.checkin_store.get_profile("10001")).coins, 500)
+            self.assertEqual(await plugin.checkin_store.get_today_record("10001"), before)
+            plugin._release_checkin_background_claim.assert_awaited_once()
+            self.assertFalse(source.exists())
+
     def setup_plugin(self, tmp):
         plugin = _plugin_for_checkin(
             tmp, CheckinResult(_profile(), _record(), duplicate=True), []

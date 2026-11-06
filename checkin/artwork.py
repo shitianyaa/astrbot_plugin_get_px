@@ -22,6 +22,7 @@ from .card import (
     CHECKIN_CARD_HEIGHT,
     CHECKIN_CARD_WIDTH,
     CardBackground,
+    BackgroundEncodingError,
     _file_to_data_url,
     build_checkin_card_data,
     get_checkin_card_template,
@@ -452,6 +453,7 @@ class CheckinArtworkMixin:
         policy=None,
         safety_identity=None,
     ) -> tuple[Path, str]:
+        """复用资源逐档渲染；源背景编码失败交由调用方撤销作品选择。"""
         last_error: Exception | None = None
         fallback_specs = checkin_render_fallbacks(preferred_tier)
         prepared_data = None
@@ -525,6 +527,9 @@ class CheckinArtworkMixin:
                     f"耗时={int((time.monotonic() - started_at) * 1000)}ms"
                 )
                 return card_path, spec.name
+            except BackgroundEncodingError:
+                # 降画质不能修复被拒绝的源图，交回业务层撤销作品选择。
+                raise
             except Exception as exc:
                 last_error = exc
                 has_lower_tier = tier_index + 1 < len(fallback_specs)

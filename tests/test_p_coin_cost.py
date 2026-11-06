@@ -434,7 +434,7 @@ def test_onebot_transport_nested_config_and_schema():
 @pytest.mark.asyncio
 @pytest.mark.parametrize("forward", [False, True])
 @pytest.mark.parametrize("transport", ["file", "base64"])
-@pytest.mark.parametrize("outcome", ["confirmed", "failed", "unknown", "cancelled", "empty_receipt"])
+@pytest.mark.parametrize("outcome", ["confirmed", "failed", "unknown", "cancelled", "empty_receipt", "build_notice_cancelled", "build_cancelled"])
 async def test_delivery_state_controls_charge_pending_and_file_lifetime(tmp_path, forward, transport, outcome):
     import asyncio
     from PIL import Image
@@ -474,18 +474,26 @@ async def test_delivery_state_controls_charge_pending_and_file_lifetime(tmp_path
                 scope=scope, source_key="lolicon:random", illust_id=illust_id,
                 feature="normal_pending", user_id="10001",
             )
-        if outcome == "failed":
-            with patch("astrbot_plugin_get_px.pixiv.delivery._onebot_request", side_effect=ValueError("invalid payload")):
-                await _run_search(harness, event, str(count))
+        if outcome in ("failed", "build_notice_cancelled", "build_cancelled"):
+            if outcome == "build_notice_cancelled":
+                event.send = AsyncMock(side_effect=asyncio.CancelledError())
+            error = asyncio.CancelledError() if outcome == "build_cancelled" else ValueError("invalid payload")
+            with patch("astrbot_plugin_get_px.pixiv.delivery._onebot_request", side_effect=error):
+                if outcome == "failed":
+                    await _run_search(harness, event, str(count))
+                else:
+                    with pytest.raises(asyncio.CancelledError):
+                        await _run_search(harness, event, str(count))
             event.bot.call_action.assert_not_awaited()
-            assert any("构建失败" in chain for chain in event.sent if isinstance(chain, str))
+            if outcome == "failed":
+                assert any("构建失败" in chain for chain in event.sent if isinstance(chain, str))
         elif outcome == "cancelled":
             with pytest.raises(asyncio.CancelledError):
                 await _run_search(harness, event, str(count))
         else:
             await _run_search(harness, event, str(count))
         held = await index.get_used_illust_ids(scope, "lolicon:random")
-        assert held == (set() if outcome == "failed" else ids)
+        assert held == (set() if outcome in ("failed", "build_notice_cancelled", "build_cancelled") else ids)
         uncertain = outcome in ("unknown", "cancelled", "empty_receipt")
         assert all(path.exists() is (uncertain and transport == "file") for path in paths)
         assert len(downloader._cleanup_tasks) == (count if uncertain and transport == "file" else 0)

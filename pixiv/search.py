@@ -7,7 +7,7 @@ from astrbot.api.event import AstrMessageEvent
 from astrbot.api.message_components import Node, Nodes
 
 from .constants import AIOCQHTTP_PLATFORM, MAX_IMAGE_COUNT
-from .delivery import DeliveryStatus, log_delivery_error, send_once
+from .delivery import DeliveryNotSubmitted, DeliveryStatus, log_delivery_error, send_once
 from .downloader import cleanup
 from .safety import ContentSafetyPolicy, STRICT_CONTENT_SAFETY_POLICY
 
@@ -329,6 +329,7 @@ class SearchMixin:
         temp_paths: list[str] = []
 
         async def deliver_images(content, images, *, context: str) -> None:
+            """按实际提交阶段维护计费、去重占用和文件读取窗口。"""
             ids = {str(illust["id"]) for illust, *_ in images if illust.get("id")}
 
             def retain_unknown():
@@ -340,6 +341,8 @@ class SearchMixin:
                 status = await send_once(
                     event, content, context=context, onebot_transport=onebot_transport
                 )
+            except DeliveryNotSubmitted:
+                raise
             except asyncio.CancelledError:
                 # 取消发生在提交期间也可能已送达，保留占用与协议端读取窗口。
                 retain_unknown()

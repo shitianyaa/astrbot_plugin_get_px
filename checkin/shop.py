@@ -1,12 +1,13 @@
 from __future__ import annotations
 
-from dataclasses import dataclass
+import asyncio
+from dataclasses import dataclass, replace
 from pathlib import Path
 
 from astrbot.api.all import Image, Plain, logger
 from astrbot.api.event import AstrMessageEvent
 
-from .card import CardBackground
+from .card import CardBackground, _file_to_data_url
 from .models import BOOST_PRODUCTS
 from .rules import boost_status_text
 from .store import CheckinStore
@@ -450,6 +451,14 @@ class CheckinShopMixin:
             ):
                 yield event.plain_result("暂时没有找到新的合适背景，本次不扣金币")
                 return
+            data_url = await asyncio.to_thread(_file_to_data_url, background.image_path)
+            if not data_url:
+                logger.warning(
+                    f"{LOG_PREFIX} 更新签到背景被拒绝: reason=background_encoding_failed"
+                )
+                yield event.plain_result("新背景无法处理，本次不扣金币，请稍后重试")
+                return
+            background = replace(background, data_url=data_url)
             purchase = await self.checkin_store.purchase_background_refresh(
                 user_id=user_id,
                 cost=cost,

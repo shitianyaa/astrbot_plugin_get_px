@@ -99,9 +99,9 @@ python -m pytest -q
 
 `pixiv/delivery.py` 的 `send_once()` 对普通图片和合并转发返回 `DeliveryStatus` 三态：构建异常为 `FAILED`，提示未发送；OneBot 直调须取得含 `message_id` 的 data 回执才为 `CONFIRMED`，框架发送沿用其正常返回语义；空回执、异步受理或发送异常为 `UNKNOWN`。aiocqhttp 已对失败协议回包抛出异常并解包 data，调用方不把原始 status/retcode 当作成功回执。协议报错不保证图片未送达，不能简单归为确定失败。仅确认成功的作品进入使用记录与金币结算；未知不扣费、不重发、不从转发降为逐条补发。此策略没有查询 QQ 实际送达状态。
 
-`search.py` 按三态分别处理：构建失败释放占用；确认成功记录使用并结算；未知与提交期间取消保留原 `normal_pending` 占用（仅在开启去重时生效），随自然日去重窗口过期。未知的 file 图片交给下载器延迟清理，base64 图片无需保留原文件。通知发送失败独立记录日志，不触发重发图片。
+`search.py` 按三态分别处理：构建失败、构建期间取消及构建失败通知期间取消均释放未提交图片的占用；确认成功记录使用并结算；未知与提交期间取消保留原 `normal_pending` 占用（仅在开启去重时生效），随自然日去重窗口过期。未知的 file 图片交给下载器延迟清理，base64 图片无需保留原文件。通知发送失败独立记录日志，不触发重发图片。
 
-异常日志只提取 `error_type`、`retcode`、`status`、脱敏 `message/wording`，并包含 `send_mode`、可用的作品 ID、`phase`、`delivery_status` 和 `duration_ms`。错误文本最多 512 字符，避免异常回包撑大日志；地址、路径、凭据和长数字标识会被遮蔽，不输出完整请求与回包。错误提示、使用记录、去重占位释放失败分别记录，不重发已确认图片。
+异常日志只提取 `error_type`、`retcode`、`status`、脱敏 `message/wording`，并包含 `send_mode`、可用的作品 ID、`phase`、`delivery_status` 和 `duration_ms`。错误文本最多 512 字符，避免异常回包撑大日志；地址、本地路径及 Windows UNC 共享路径、凭据和长数字标识会被遮蔽，不输出完整请求与回包。错误提示、使用记录、去重占位释放失败分别记录，不重发已确认图片。
 
 ## OneBot 图片发送
 
