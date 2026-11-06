@@ -150,6 +150,7 @@ class CheckinApplicationMixin:
                 affection_bonus_enabled=self._cfg_bool(
                     "checkin_affection_bonus_enabled", True
                 ),
+                reward_settings=self._checkin_reward_settings(),
             )
         except Exception as e:
             logger.error(

@@ -10,6 +10,7 @@ import pytest
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 
 from astrbot_plugin_get_px.checkin.rules import checkin_coin_bonus
+from astrbot_plugin_get_px.checkin.rules import CheckinRewardSettings
 from astrbot_plugin_get_px.checkin import CheckinStore
 import astrbot_plugin_get_px.checkin.commands as checkin_commands
 import astrbot_plugin_get_px.checkin.record_store as record_store
@@ -95,3 +96,37 @@ async def test_preview_and_store_use_precheckin_affection_and_duplicates_keep_aw
             user_id="user1", username="user", bot_name="neko", affection_bonus_step_percent=5
         )
         assert next_result.record.bonus_coins == 4
+
+
+@pytest.mark.asyncio
+async def test_custom_reward_policy_matches_preview_and_store_and_duplicate_is_stable(monkeypatch):
+    monkeypatch.setattr(record_store, "_daily_base_reward", lambda _user, _date: (80, 0.55))
+    monkeypatch.setattr(checkin_commands, "daily_base_reward", lambda _user, _date: (80, 0.55))
+    policy = CheckinRewardSettings(
+        coin_min=0, coin_max=0, streak_step_days=1,
+        streak_coin_bonus=7, streak_coin_bonus_max=10,
+        streak_affection_bonus=.15, streak_affection_bonus_max=.20,
+    )
+    with tempfile.TemporaryDirectory() as tmp:
+        store = FrozenCheckinStore(Path(tmp))
+        await store.get_profile("custom")
+        profile = await store.get_profile("custom")
+        from astrbot_plugin_get_px.main import GetPxPlugin
+        preview = GetPxPlugin._build_checkin_preview_record(
+            profile=profile, date_key=store.date_key,
+            now=store.now_iso(), username="custom", bot_name="neko",
+            affection_bonus_step_percent=20, reward_settings=policy,
+        )
+        result = await store.checkin(
+            user_id="custom", username="custom", bot_name="neko",
+            affection_bonus_step_percent=20, reward_settings=policy,
+        )
+        assert result.record is not None
+        assert (result.record.base_coins, result.record.base_affection) == (0, .55)
+        assert result.record == preview
+        duplicate = await store.checkin(
+            user_id="custom", username="custom", bot_name="neko",
+            affection_bonus_step_percent=0,
+            reward_settings=CheckinRewardSettings(coin_min=900, coin_max=900),
+        )
+        assert duplicate.duplicate and duplicate.record == result.record

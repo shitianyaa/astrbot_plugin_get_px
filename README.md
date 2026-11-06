@@ -221,6 +221,10 @@ WebUI 配置页按以下 6 组折叠展示，分组细节与维护规则见 [doc
 | `checkin_avatar_enabled` | 签到卡片显示用户头像 | `true` |
 | `checkin_affection_bonus_enabled` | 按签到前好感度等级启用金币加成 | `true` |
 | `checkin_affection_bonus_step_percent` | 每级金币加成比例（范围 `0–25%`；默认等级收益为 `0/5/10/15/20%`） | `5` |
+| `checkin_coin_min` / `checkin_coin_max` | 每日基础金币含端点范围（`0–10000`，下限≤上限；可设相等或固定 0） | `50` / `100` |
+| `checkin_streak_step_days` | 连签奖励间隔（`1–365` 天；不改七日成就） | `7` |
+| `checkin_streak_coin_bonus` / `checkin_streak_coin_bonus_max` | 每档连签金币与累计上限；范围 `0–10000` / `0–100000` | `10` / `50` |
+| `checkin_streak_affection_bonus` / `checkin_streak_affection_bonus_max` | 每档连签好感度与累计上限；范围 `0–100` / `0–1000` | `0.10` / `0.50` |
 | `checkin_card_quality_tier` | 签到卡画质：`省流量` / `清晰` / `极致`；签到日历输出分辨率与背景画质完全跟随该档位；预览和刷新背景立即生效，普通重复签到保持当天档位 | `省流量` |
 | `checkin_greeting_mode` | 签到问候来源：`local` / `hitokoto` / `ai` | `hitokoto` |
 | `checkin_hitokoto_categories` | 一言类型中文多选；选择”全部”或留空时从全部分类随机 | `全部` |

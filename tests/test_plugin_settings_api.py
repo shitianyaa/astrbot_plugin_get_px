@@ -162,3 +162,26 @@ async def test_settings_api_registers_get_and_update_without_changing_font_contr
     assert (await update.get_json())["reload_required"] is True
     invalid = await client.post("/settings/update", json={"groups": {"runtime": {"_grouped_config_migrated": True}}})
     assert invalid.status_code == 400
+
+def test_coin_bounds_validate_merged_partial_patch_atomically():
+    target = plugin(Config(checkin_basic={"checkin_coin_min": 50, "checkin_coin_max": 100}))
+    before = deepcopy(target.config)
+    with pytest.raises(ValueError):
+        save_settings(target, {"checkin_basic": {"checkin_coin_min": 101, "checkin_enabled": False}})
+    assert target.config == before and target.config.saves == 0
+    save_settings(target, {"checkin_basic": {"checkin_coin_min": 100, "checkin_coin_max": 100}})
+    assert target.config["checkin_basic"]["checkin_coin_min"] == 100
+    save_settings(target, {"checkin_basic": {"checkin_coin_min": 0, "checkin_coin_max": 0}})
+    assert target.config["checkin_basic"]["checkin_coin_max"] == 0
+
+
+def test_coin_bounds_use_flat_fallback_and_bad_existing_pair_only_blocks_bound_edits():
+    flat = plugin(Config(checkin_coin_min=20, checkin_coin_max=40))
+    save_settings(flat, {"checkin_basic": {"checkin_coin_min": 30}})
+    assert flat.config["checkin_basic"]["checkin_coin_min"] == 30
+    bad = plugin(Config(checkin_basic={"checkin_coin_min": 200, "checkin_coin_max": 100}))
+    save_settings(bad, {"checkin_basic": {"checkin_enabled": False}})
+    with pytest.raises(ValueError):
+        save_settings(bad, {"checkin_basic": {"checkin_coin_max": 150}})
+    save_settings(bad, {"checkin_basic": {"checkin_coin_min": 80, "checkin_coin_max": 80}})
+    assert bad.config["checkin_basic"]["checkin_coin_min"] == 80
