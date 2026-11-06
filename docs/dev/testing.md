@@ -215,3 +215,7 @@ async def test_something_async():
 ## 插件下载临时目录回归
 
 `python -m pytest -q tests/test_downloader.py tests/test_plugin_api_cache.py` 验证指定目录落盘、未初始化不回退系统 tmp、错误时清理半成品，以及 Pages 不调用系统临时目录、只删除过期下载、保留活跃文件与无关文件。部署检查需确认日志中的 file URI 对协议端可见，共享 data 目录不等于两端绝对路径自动相同。
+
+### 跨用户图片读取回归
+
+`tests/test_delivery.py` 覆盖POSIX file模式设置0644、Windows与base64不改权限、合并转发嵌套图片、chmod异常不调用发送API。真实mkstemp 0600→0644断言仅在POSIX执行，Windows明确跳过；跨容器不同UID的读取仍需部署端验证。

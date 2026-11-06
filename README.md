@@ -187,7 +187,7 @@ AstrBot WebUI 插件页的「pluginCenter」可：
 
 本实验仅影响 `/p` 和自然语言发图。重载插件后，在“Pixiv 图源与下载”设置 `onebot_image_transport`：
 
-- `file`（默认）：直接调用 OneBot，将本地 `file:///` URI 传给协议端；AstrBot 与协议端必须能访问相同路径，同一机器的不同容器也需要正确的共享挂载。
+- `file`（默认）：直接调用 OneBot，将本地 `file:///` URI 传给协议端；POSIX 系统发送前将完整图片权限设为 `0644`，供不同 UID 的协议进程读取；AstrBot 与协议端必须能访问相同路径，同一机器的不同容器也需要正确的共享挂载。
 - `base64`：直接调用 OneBot，传输图片编码，适合跨机器或文件路径不可见的部署。
 - `astrbot`：使用原有 AstrBot 发送链路，便于对比或恢复。
 

@@ -13,6 +13,68 @@ from astrbot_plugin_get_px.pixiv.delivery import send_once, log_delivery_error  
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("transport", ["file", "base64"])
+@pytest.mark.parametrize("platform", ["posix", "nt"])
+async def test_file_sharing_permissions_are_posix_file_only(tmp_path, platform, transport):
+    from PIL import Image as PILImage
+    from astrbot.api.message_components import Image, Node, Nodes
+    from astrbot_plugin_get_px.pixiv import delivery
+
+    path = tmp_path / "download.png"
+    PILImage.new("RGB", (8, 8)).save(path)
+    content = [Nodes([Node(uin="123", name="fixture", content=[Image.fromFileSystem(str(path))])])]
+    chmod = Mock()
+    with patch.object(delivery, "os", SimpleNamespace(name=platform, chmod=chmod)):
+        segments = await delivery._onebot_segments(content, transport)
+    assert segments[0]["data"]["content"][0]["type"] == "image"
+    if platform == "posix" and transport == "file":
+        chmod.assert_called_once_with(path, 0o644)
+    else:
+        chmod.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_chmod_failure_is_logged_before_api_call(tmp_path):
+    from PIL import Image as PILImage
+    from astrbot.api.message_components import Image
+    from astrbot_plugin_get_px.pixiv import delivery
+
+    path = tmp_path / "download.png"
+    PILImage.new("RGB", (8, 8)).save(path)
+    event = SimpleNamespace(
+        get_platform_name=lambda: "aiocqhttp", get_group_id=lambda: "456",
+        get_sender_id=lambda: "789", bot=SimpleNamespace(call_action=AsyncMock()),
+        send=AsyncMock(),
+    )
+    with patch.object(delivery, "os", SimpleNamespace(name="posix", chmod=Mock(side_effect=PermissionError("denied")))), patch.object(delivery, "logger") as logger:
+        assert not await send_once(event, [Image.fromFileSystem(str(path))], context="test")
+    event.bot.call_action.assert_not_awaited()
+    event.send.assert_not_awaited()
+    assert 'error_type="PermissionError"' in logger.warning.call_args.args[0]
+    assert 'phase=build' in logger.warning.call_args.args[0]
+
+
+@pytest.mark.asyncio
+async def test_real_posix_mkstemp_image_becomes_cross_user_readable(tmp_path):
+    import os
+    import stat
+    import tempfile
+    from PIL import Image as PILImage
+    from astrbot.api.message_components import Image
+    from astrbot_plugin_get_px.pixiv.delivery import _onebot_segments
+
+    if os.name != "posix":
+        pytest.skip("requires POSIX permission bits")
+    fd, name = tempfile.mkstemp(dir=tmp_path, suffix=".png")
+    with os.fdopen(fd, "wb") as stream:
+        PILImage.new("RGB", (8, 8)).save(stream, format="PNG")
+    path = Path(name)
+    assert stat.S_IMODE(path.stat().st_mode) == 0o600
+    await _onebot_segments([Image.fromFileSystem(name)], "file")
+    assert stat.S_IMODE(path.stat().st_mode) == 0o644
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize("group", [True, False])
 @pytest.mark.parametrize("forward", [True, False])
 @pytest.mark.parametrize("transport", ["file", "base64", "astrbot"])

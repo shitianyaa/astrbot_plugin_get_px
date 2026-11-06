@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import os
 import re
 import time
 from pathlib import Path
@@ -23,6 +24,9 @@ async def _onebot_segments(content: list, transport: str) -> list[dict]:
                 path = Path(component.path)
                 if not component.path or not path.is_file():
                     raise ValueError("OneBot 本地图片文件不存在")
+                if os.name == "posix":
+                    # mkstemp 默认为 0600；共享目录中的协议端可能使用不同 UID。
+                    os.chmod(path, 0o644)
                 file = path.resolve().as_uri()
             segments.append({"type": "image", "data": {"file": file}})
         elif isinstance(component, Node):
