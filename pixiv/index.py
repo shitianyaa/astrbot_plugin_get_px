@@ -221,21 +221,6 @@ class ImageIndexStore:
         async with self._lock:
             return await asyncio.to_thread(self._get_custom_safety_terms_sync)
 
-    async def get_safety_snapshot(self) -> tuple[set[str], set[str]]:
-        """Read global terms and blacklist IDs from one SQLite statement snapshot."""
-        async with self._lock:
-            return await asyncio.to_thread(self._get_safety_snapshot_sync)
-
-    def _get_safety_snapshot_sync(self) -> tuple[set[str], set[str]]:
-        rows = self._get_conn().execute(
-            "SELECT 'term' AS kind, normalized_term AS value FROM content_safety_terms "
-            "UNION ALL SELECT 'illust', illust_id FROM image_blacklist"
-        ).fetchall()
-        return (
-            {str(row["value"]) for row in rows if row["kind"] == "term"},
-            {str(row["value"]) for row in rows if row["kind"] == "illust"},
-        )
-
     async def list_blacklist_illusts(self) -> list[dict[str, Any]]:
         async with self._lock:
             return await asyncio.to_thread(self._list_blacklist_illusts_sync)

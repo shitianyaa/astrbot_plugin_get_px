@@ -33,16 +33,6 @@ _FONT_PATH = (
 )
 _SEASON_SHARED_DIR = _PLUGIN_ROOT / "templates" / "checkin_themes" / "_shared"
 _SEASON_ART_MARKER = "<!--__CHECKIN_CARD_ARTWORK__-->"
-# 背景图以 base64 内联进模板后整体 POST 给 T2I 端点；原图过大时请求体可达
-# 10MB 以上，远端网关会直接 504，签到卡随后因拿不到 JPEG 而全部降档失败。
-# 因此超过阈值（边长或字节数）的艺术图先等比压缩再内联。
-# 卡片与日历的输出分辨率不同，调用方各自传入 max_edge。
-_DATA_URL_MAX_EDGE = 1920
-# 输入直传与重编码输出共用 1.5MB 背景预算，base64 部分最多约 2MB；非网关上限。
-_DATA_URL_MAX_SOURCE_BYTES = 1_500_000
-_DATA_URL_JPEG_QUALITY = 88
-# 解码前的像素预算：超过后放弃该背景（回退占位图），避免原图解码撑爆内存。
-_DATA_URL_MAX_PIXELS = 40_000_000
 
 
 @lru_cache(maxsize=16)
@@ -356,8 +346,7 @@ def _artwork_credit(view_model: CheckinCardViewModel) -> str:
     return f"今日作品：{title}{author}{pixiv}"
 
 
-def _file_to_data_url(path: str, *, max_edge: int = _DATA_URL_MAX_EDGE) -> str:
-    """验证背景并限制内联体积；处理失败时返回空背景。"""
+def _file_to_data_url(path: str) -> str:
     if not path:
         return ""
     file_path = Path(path)
@@ -375,110 +364,11 @@ def _file_to_data_url(path: str, *, max_edge: int = _DATA_URL_MAX_EDGE) -> str:
             if width <= 0 or height <= 0 or not mime_type.startswith("image/"):
                 return ""
             img.verify()
-        if (
-            len(source_bytes) <= _DATA_URL_MAX_SOURCE_BYTES
-            and max(width, height) <= max_edge
-        ):
-            data = base64.b64encode(source_bytes).decode("ascii")
-            return f"data:{mime_type};base64,{data}"
-        data, compressed_bytes = _compress_artwork_for_card(
-            source_bytes, max_edge=max_edge
-        )
-        logger.debug(
-            f"{LOG_PREFIX} 签到背景图片已压缩: "
-            f"original_bytes={len(source_bytes)} "
-            f"compressed_bytes={compressed_bytes} "
-            f"max_edge={max_edge}"
-        )
-        return data
+        data = base64.b64encode(source_bytes).decode("ascii")
+        return f"data:{mime_type};base64,{data}"
     except Exception as e:
         logger.warning(
             f"{LOG_PREFIX} 签到背景图片处理失败: "
             f"error_type={type(e).__name__}"
         )
         return ""
-
-
-def _artwork_keeps_alpha(img) -> bool:
-    """透明图（RGBA/LA/PA，或带 transparency 信息的 P/RGB/L）保留透明通道。"""
-    if img.mode in ("RGBA", "LA", "PA"):
-        return True
-    return "transparency" in img.info
-
-
-def _artwork_to_srgb(img, keeps_alpha: bool):
-    """重编码时应用 ICC 色彩配置，并保留已有 alpha。"""
-    output_mode = "RGBA" if keeps_alpha else "RGB"
-    profile = img.info.get("icc_profile")
-    if not profile:
-        return img.convert(output_mode)
-
-    from io import BytesIO
-
-    from PIL import ImageCms
-
-    alpha = img.getchannel("A") if keeps_alpha else None
-    if keeps_alpha:
-        color = img.convert("L" if img.mode == "LA" else "RGB")
-    else:
-        color = img.convert("RGB") if img.mode == "P" else img
-    prepared = ImageCms.profileToProfile(
-        color,
-        ImageCms.ImageCmsProfile(BytesIO(profile)),
-        ImageCms.createProfile("sRGB"),
-        outputMode="RGB",
-    )
-    if alpha is not None:
-        prepared.putalpha(alpha)
-    return prepared
-
-
-def _compress_artwork_for_card(
-    source_bytes: bytes, *, max_edge: int = _DATA_URL_MAX_EDGE
-) -> tuple[str, int]:
-    """按目标边长和字节预算重编码背景，保留透明度、方向和 ICC 颜色。"""
-    from io import BytesIO
-
-    from PIL import Image as PILImage
-    from PIL import ImageOps
-
-    with PILImage.open(BytesIO(source_bytes)) as img:
-        width, height = img.size
-        if width * height > _DATA_URL_MAX_PIXELS:
-            raise ValueError(f"artwork too large: {width}x{height}")
-        if str(img.format or "").upper() == "JPEG":
-            img.draft(img.mode, (max_edge, max_edge))
-        keeps_alpha = _artwork_keeps_alpha(img)
-        # 透明色必须先生成 alpha，否则重采样混色后不再匹配透明色。
-        if keeps_alpha and img.mode not in ("RGBA", "LA"):
-            img = img.convert("LA" if img.mode == "L" else "RGBA")
-        img.thumbnail((max_edge, max_edge), PILImage.LANCZOS)
-        img = ImageOps.exif_transpose(img)
-        prepared = _artwork_to_srgb(img, keeps_alpha)
-        mime = "png" if keeps_alpha else "jpeg"
-        while True:
-            buffer = BytesIO()
-            if keeps_alpha:
-                prepared.save(buffer, format="PNG", optimize=True)
-            else:
-                prepared.save(
-                    buffer,
-                    format="JPEG",
-                    quality=_DATA_URL_JPEG_QUALITY,
-                    optimize=True,
-                )
-            payload = buffer.getvalue()
-            if len(payload) <= _DATA_URL_MAX_SOURCE_BYTES:
-                break
-            if prepared.size == (1, 1):
-                raise ValueError("artwork cannot fit inline byte budget")
-            scale = (_DATA_URL_MAX_SOURCE_BYTES / len(payload)) ** 0.5
-            next_size = tuple(max(1, int(edge * scale)) for edge in prepared.size)
-            logger.debug(
-                f"{LOG_PREFIX} 签到背景图片超过编码预算，继续缩小: "
-                f"encoded_bytes={len(payload)} byte_budget={_DATA_URL_MAX_SOURCE_BYTES} "
-                f"target_width={next_size[0]} target_height={next_size[1]}"
-            )
-            prepared = prepared.resize(next_size, PILImage.LANCZOS)
-    encoded = base64.b64encode(payload).decode("ascii")
-    return f"data:image/{mime};base64,{encoded}", len(payload)

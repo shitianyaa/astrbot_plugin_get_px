@@ -12,7 +12,6 @@
 | `lolicon_image_proxy_origins` | `text` | 空 | 每行一个 http(s) origin，最多 5 个按序尝试；仅改写允许列表内 Pixiv 图片主机 |
 | `max_count` | `int` | `5` | 单次指令最多发送张数，范围 1–20 |
 | `p_coin_cost` | `int` | `20` | `/p` 成功发图每张金币，范围 0–200；0 免费 |
-| `onebot_image_transport` | `enum` | `file` | `file` 本地路径直调、`base64` 编码直调、`astrbot` 框架链路；仅 aiocqhttp 的 /p 和自然语言发图生效 |
 | `image_quality` | `enum` | `original` | `original`/`large`/`medium`；超阈值自动降级 |
 | `auto_downgrade_original_mb` | `float` | `3.0` | 原图超过此 MiB 时降级，范围 0–25；0 禁用降级 |
 | `forward_threshold` | `int` | `1` | 下载张数严格大于此值时合并转发（仅 aiocqhttp）；0 始终合并，范围 0–20 |

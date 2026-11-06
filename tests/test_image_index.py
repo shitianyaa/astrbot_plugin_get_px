@@ -25,25 +25,6 @@ class FrozenImageIndexStore(ImageIndexStore):
 
 
 class ImageIndexStoreTest(unittest.IsolatedAsyncioTestCase):
-    async def test_safety_snapshot_uses_one_read_for_both_global_rule_sets(self):
-        with tempfile.TemporaryDirectory() as tmp:
-            store = FrozenImageIndexStore(tmp)
-            try:
-                await store.add_safety_term("Blocked Word")
-                await store.add_blacklist_illust(illust_id="123")
-                statements = []
-                store._get_conn().set_trace_callback(statements.append)
-                terms, ids = await store.get_safety_snapshot()
-                self.assertEqual(terms, {"blockedword"})
-                self.assertEqual(ids, {"123"})
-                reads = [sql for sql in statements if sql.lstrip().upper().startswith("SELECT")]
-                self.assertEqual(len(reads), 1)
-                store._get_conn().set_trace_callback(None)
-                await store.remove_safety_term("Blocked Word")
-                self.assertEqual(await store.get_safety_snapshot(), (set(), {"123"}))
-            finally:
-                store.close()
-
     async def test_claim_usage_is_atomic_and_release_allows_reclaim(self):
         with tempfile.TemporaryDirectory() as tmp:
             store = FrozenImageIndexStore(tmp)
