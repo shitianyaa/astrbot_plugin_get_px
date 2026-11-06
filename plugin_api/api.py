@@ -23,6 +23,7 @@ try:
         normalized_builtin_terms,
     )
     from .web_api_compat import unregister_web_apis
+    from .settings import save_settings, settings_snapshot
 except ImportError:
     # Direct imports used by the test suite.
     from checkin import load_checkin_snapshot_json
@@ -35,6 +36,7 @@ except ImportError:
         normalized_builtin_terms,
     )
     from plugin_api.web_api_compat import unregister_web_apis
+    from plugin_api.settings import save_settings, settings_snapshot
 
 
 class PluginWebApi:
@@ -155,6 +157,8 @@ class PluginWebApi:
                 "Clear temporary cache storage",
             ),
             ("config", self.config, ["GET"], "Get management center configuration"),
+            ("settings", self.settings, ["GET"], "Get plugin settings for the management center"),
+            ("settings/update", self.settings_update, ["POST"], "Update plugin settings from the management center"),
         )
         for path, handler, methods, description in routes:
             route = f"/{self.plugin_name}/{path}"
@@ -789,6 +793,24 @@ class PluginWebApi:
                 "font_url": font_urls.get(font_source, ""),
             }
         )
+
+    async def settings(self):
+        try:
+            return jsonify(settings_snapshot(self.plugin))
+        except Exception as exc:
+            return self.internal_error("读取插件设置", exc)
+
+    async def settings_update(self):
+        try:
+            payload = await request.get_json(silent=True)
+            if not isinstance(payload, dict) or not isinstance(payload.get("groups"), dict):
+                raise ValueError("设置内容格式不正确")
+            save_settings(self.plugin, payload["groups"])
+            return jsonify({"success": True, "reload_required": True})
+        except ValueError as exc:
+            return jsonify({"success": False, "error": str(exc)}), 400
+        except Exception as exc:
+            return self.internal_error("保存插件设置", exc)
 
     async def cache_storage(self):
         try:

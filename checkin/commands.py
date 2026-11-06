@@ -24,18 +24,17 @@ except ImportError:  # Direct imports used by the test suite.
 from .models import (
     ACHIEVEMENTS,
     BOOST_MULTIPLIER,
-    STREAK_AFFECTION_BONUS,
-    STREAK_AFFECTION_BONUS_MAX,
-    STREAK_COIN_BONUS,
-    STREAK_COIN_BONUS_MAX,
-    STREAK_STEP_DAYS,
     CheckinProfile,
     CheckinRecord,
     CheckinResult,
 )
 from .rules import (
+    CheckinRewardSettings,
     affection_level,
     boost_status_text,
+    checkin_affection_bonus,
+    checkin_coin_bonus,
+    deterministic_base_coins,
     daily_base_reward,
     daily_note,
     is_boost_active,
@@ -201,6 +200,15 @@ class CheckinCommandMixin:
                 now=now,
                 username=username,
                 bot_name=bot_name,
+                affection_bonus_step_percent=(
+                    self._cfg_int("checkin_affection_bonus_step_percent", 5, 0, 25)
+                    if self._cfg_bool("checkin_affection_bonus_enabled", True)
+                    else 0
+                ),
+                affection_bonus_enabled=self._cfg_bool(
+                    "checkin_affection_bonus_enabled", True
+                ),
+                reward_settings=self._checkin_reward_settings(),
             )
         )
         content, user_title = await self._compose_checkin_content(
@@ -306,19 +314,30 @@ class CheckinCommandMixin:
         now: str,
         username: str,
         bot_name: str,
+        affection_bonus_step_percent: int = 0,
+        affection_bonus_enabled: bool = True,
+        reward_settings: CheckinRewardSettings | None = None,
     ) -> CheckinRecord:
         today = date.fromisoformat(date_key)
         previous_date = parse_date(profile.last_checkin_date)
         streak_days = (
             profile.streak_days + 1 if previous_date == today - timedelta(days=1) else 1
         )
+        policy = reward_settings or CheckinRewardSettings()
         base_coins, base_affection = daily_base_reward(profile.user_id, date_key)
-        streak_steps = streak_days // STREAK_STEP_DAYS
-        bonus_coins = min(streak_steps * STREAK_COIN_BONUS, STREAK_COIN_BONUS_MAX)
-        bonus_affection = min(
-            streak_steps * STREAK_AFFECTION_BONUS,
-            STREAK_AFFECTION_BONUS_MAX,
+        if (policy.coin_min, policy.coin_max) != (50, 100):
+            base_coins = deterministic_base_coins(
+                profile.user_id, date_key, policy.coin_min, policy.coin_max
+            )
+        bonus_coins = checkin_coin_bonus(
+            base_coins=base_coins,
+            streak_days=streak_days,
+            affection=profile.affection,
+            step_percent=affection_bonus_step_percent,
+            enabled=affection_bonus_enabled,
+            reward_settings=policy,
         )
+        bonus_affection = checkin_affection_bonus(streak_days, reward_settings=policy)
         boost_active = is_boost_active(profile, date_key)
         affection_reward = round(base_affection + bonus_affection, 2)
         if boost_active:
@@ -341,7 +360,16 @@ class CheckinCommandMixin:
             total_affection_after=round(profile.affection + affection_reward, 2),
             total_days_after=profile.total_days + 1,
             streak_days_after=streak_days,
-            note=daily_note(profile.user_id, date_key, streak_days),
+            note=(
+                daily_note(profile.user_id, date_key, streak_days)
+                if policy.streak_step_days == 7
+                else daily_note(
+                    profile.user_id,
+                    date_key,
+                    streak_days,
+                    interval=policy.streak_step_days,
+                )
+            ),
             background_mode="",
             background_source="",
             background_illust_id="",

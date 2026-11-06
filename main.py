@@ -44,6 +44,7 @@ from astrbot.api.star import Context, Star
 from astrbot.core.star.filter.command import GreedyStr
 from astrbot.core.star.star_tools import StarTools
 from .checkin import CheckinStore, UnversionedCheckinDatabaseError
+from .checkin.rules import normalize_reward_settings
 from .group_safety import GroupSafetyService
 from .checkin.application import CheckinApplicationMixin
 from .checkin.artwork import CheckinArtworkMixin
@@ -67,7 +68,7 @@ from .plugin_api import PluginWebApi
 
 LOG_PREFIX = "[GetPx]"
 PLUGIN_NAME = "astrbot_plugin_get_px"
-PLUGIN_VERSION = "v3.8.0"
+PLUGIN_VERSION = "v3.9.0"
 WEB_INTERNAL_ERROR_MESSAGE = "服务内部错误，请稍后重试"
 
 AUTO_TRIGGER_PATTERN = r"^/?(来\s*(.*?)(份|个|张|点))(.*?)(福利|色|瑟|涩|塞)?图$"
@@ -749,6 +750,15 @@ class GetPxPlugin(
         "checkin_bot_name": "checkin_basic",
         "checkin_card_quality_tier": "checkin_basic",
         "checkin_avatar_enabled": "checkin_basic",
+        "checkin_affection_bonus_enabled": "checkin_basic",
+        "checkin_affection_bonus_step_percent": "checkin_basic",
+        "checkin_coin_min": "checkin_basic",
+        "checkin_coin_max": "checkin_basic",
+        "checkin_streak_step_days": "checkin_basic",
+        "checkin_streak_coin_bonus": "checkin_basic",
+        "checkin_streak_coin_bonus_max": "checkin_basic",
+        "checkin_streak_affection_bonus": "checkin_basic",
+        "checkin_streak_affection_bonus_max": "checkin_basic",
         "checkin_greeting_mode": "checkin_basic",
         "checkin_hitokoto_categories": "checkin_basic",
         "checkin_ai_greeting_provider_id": "checkin_basic",
@@ -970,6 +980,27 @@ class GetPxPlugin(
                 f"persisted={persisted}"
             )
         return self._cfg_int("dedupe_days", 1, 0, 7)
+
+    def _checkin_reward_settings(self):
+        defaults = {
+            "coin_min": 50,
+            "coin_max": 100,
+            "streak_step_days": 7,
+            "streak_coin_bonus": 10,
+            "streak_coin_bonus_max": 50,
+            "streak_affection_bonus": 0.10,
+            "streak_affection_bonus_max": 0.50,
+        }
+        raw = {
+            suffix: self._cfg_get(f"checkin_{suffix}", default)
+            for suffix, default in defaults.items()
+        }
+        settings, invalid = normalize_reward_settings(raw)
+        warning = ",".join(invalid)
+        if warning and getattr(self, "_last_reward_config_warning", None) != warning:
+            logger.warning(f"{LOG_PREFIX} 签到奖励配置无效，使用默认值: fields={warning}")
+        self._last_reward_config_warning = warning
+        return settings
 
     def _cfg_str(self, key: str, default: str = "") -> str:
         val = self._cfg_get(key, default)

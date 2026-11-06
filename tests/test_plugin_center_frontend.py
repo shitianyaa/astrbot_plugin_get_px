@@ -77,6 +77,26 @@ def test_plugin_center_uses_relative_bridge_endpoints() -> None:
     assert "cache_cleanup" not in source
 
 
+def test_plugin_settings_view_wires_schema_editor_and_delegated_policies() -> None:
+    html = (PAGE_DIR / "index.html").read_text(encoding="utf-8")
+    app = (PAGE_DIR / "app.js").read_text(encoding="utf-8")
+    settings = (PAGE_DIR / "settings.mjs").read_text(encoding="utf-8")
+    assert 'data-view="settings"' in html
+    assert 'id="settingsView"' in html
+    assert 'id="settingsGroups"' in html
+    assert 'id="settingsSaveBtn"' in html
+    assert 'id="settingsReloadBtn"' in html
+    assert 'id="settingsStatus"' in html
+    assert 'aria-live="polite"' in html[html.index('id="settingsStatus"'):html.index('id="settingsStatus"') + 100]
+    assert 'import * as settingsModule from "./settings.mjs"' in app
+    assert 'apiGet("settings")' in settings
+    assert 'apiPost("settings/update"' in settings
+    assert 'button.dataset.navigate = field.view || "policies"' in settings
+    assert "重新载入会丢弃尚未保存的修改" in settings
+    assert "innerHTML" not in settings
+    assert "localStorage" not in settings
+
+
 def test_plugin_center_exposes_independent_group_safety_switches() -> None:
     html = (PAGE_DIR / "index.html").read_text(encoding="utf-8")
     source = (PAGE_DIR / "app.js").read_text(encoding="utf-8")
