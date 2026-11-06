@@ -50,13 +50,20 @@ class _FakeSession:
 
 
 def _downloader_with(resp) -> ImageDownloader:
-    downloader = ImageDownloader()
+    downloader = ImageDownloader(temp_dir=Path(tempfile.gettempdir()) / "get-px-test-downloads")
     # 替换 session 工厂，避免真实建立 aiohttp 连接
     downloader._ensure_session = lambda: _FakeSession(resp)  # type: ignore[assignment]
     return downloader
 
 
 class ImageDownloaderSizeLimitTest(unittest.IsolatedAsyncioTestCase):
+    async def test_uninitialized_directory_does_not_use_system_temp(self):
+        downloader = ImageDownloader()
+        with mock.patch.object(downloader, "_ensure_session") as session:
+            with self.assertRaisesRegex(RuntimeError, "临时下载目录尚未初始化"):
+                await downloader.download("http://x/a.png", timeout=5)
+            session.assert_not_called()
+
     def test_square_medium_url_keeps_square_medium_quality_metadata(self):
         self.assertEqual(
             dl._quality_from_url(
@@ -102,6 +109,7 @@ class ImageDownloaderSizeLimitTest(unittest.IsolatedAsyncioTestCase):
         try:
             self.assertTrue(os.path.isfile(path))
             self.assertTrue(path.endswith(".png"))
+            self.assertEqual(Path(path).parent, downloader.temp_dir)
             self.assertEqual(size, len(payload))
             with open(path, "rb") as handle:
                 self.assertEqual(handle.read(), payload)
@@ -112,7 +120,8 @@ class ImageDownloaderSizeLimitTest(unittest.IsolatedAsyncioTestCase):
     async def test_cleans_partial_temp_file_when_stream_exceeds_limit(self):
         created_paths = []
 
-        def fake_mkstemp(prefix, suffix):
+        def fake_mkstemp(prefix, suffix, dir):
+            self.assertEqual(dir, downloader.temp_dir)
             path = Path(tmp) / f"{prefix}partial{suffix}"
             fd = os.open(path, os.O_CREAT | os.O_EXCL | os.O_RDWR)
             created_paths.append(path)

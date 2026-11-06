@@ -17,8 +17,10 @@ from .themes import get_checkin_theme
 
 try:
     from ..pixiv.downloader import cleanup
+    from ..pixiv.safety import normalized_builtin_terms
 except ImportError:  # Direct imports used by the test suite.
     from pixiv.downloader import cleanup
+    from pixiv.safety import normalized_builtin_terms
 
 
 LOG_PREFIX = "[GetPx]"
@@ -183,7 +185,6 @@ class CheckinApplicationMixin:
         card_path: Path | None = None
         claim_held = False
         background_persisted = False
-        background_reselected = False
         profile_snapshot = self._checkin_profile_from_record(record)
         user_title = await self._get_checkin_user_title(record.user_id)
         preferred_tier = (
@@ -195,8 +196,18 @@ class CheckinApplicationMixin:
         cache_hit = False
         policy = await self._content_safety_policy(event)
         try:
+            policy, safety_identity = await self._checkin_safety_snapshot(policy)
             if result.duplicate:
                 background = self._checkin_background_from_record(record)
+                variant_key = self._checkin_card_cache_key(
+                    event, profile=profile_snapshot, record=record,
+                    background=background, bot_name=bot_name, user_title=user_title,
+                    render_tier=preferred_tier, safety_identity=safety_identity,
+                )
+                background = (
+                    await asyncio.to_thread(cache.get_background, record.date_key, variant_key)
+                    or background
+                )
             else:
                 background = await self._prepare_checkin_background(
                     event,
@@ -222,6 +233,7 @@ class CheckinApplicationMixin:
                 user_title=user_title,
                 preferred_tier=preferred_tier,
                 policy=policy,
+                safety_identity=safety_identity,
             )
             cache_hit = cached_path is not None
             if cached_path is None and result.duplicate:
@@ -229,42 +241,6 @@ class CheckinApplicationMixin:
                 background = await self._restore_checkin_background(
                     event, record, policy=policy
                 )
-                restored_quality = str(getattr(background, "quality", "") or "")
-                saved_quality = str(
-                    getattr(record, "background_quality", "") or ""
-                )
-                if (
-                    background.mode == "pixiv_daily"
-                    and restored_quality
-                    and restored_quality != saved_quality
-                ):
-                    try:
-                        await self.checkin_store.update_record_background(
-                            user_id=user_id,
-                            date_key=record.date_key,
-                            mode=background.mode,
-                            source=background.source,
-                            illust_id=background.illust_id,
-                            title=background.title,
-                            author=background.author,
-                            quality=restored_quality,
-                        )
-                    except asyncio.CancelledError:
-                        raise
-                    except Exception as exc:
-                        logger.warning(
-                            f"{LOG_PREFIX} 签到背景实际质量同步失败: "
-                            f"error_type={type(exc).__name__}"
-                        )
-                    else:
-                        record = replace(
-                            record,
-                            background_quality=restored_quality,
-                        )
-                        logger.debug(
-                            f"{LOG_PREFIX} 签到背景实际质量已同步: "
-                            f"quality={restored_quality}"
-                        )
                 if background.mode != "pixiv_daily" and (
                     record.background_mode == "pixiv_daily"
                 ):
@@ -284,7 +260,6 @@ class CheckinApplicationMixin:
                     )
                     if reselected is not None and reselected.mode == "pixiv_daily":
                         background = reselected
-                        background_reselected = True
                         # mode 已由重选分支保证为 pixiv_daily，仅查占用与 illust_id。
                         claim_held = bool(
                             background.illust_id
@@ -313,11 +288,10 @@ class CheckinApplicationMixin:
                     preferred_tier=preferred_tier,
                     cache=cache,
                     policy=policy,
+                    safety_identity=safety_identity,
                 )
 
-            if (
-                not result.duplicate or background_reselected
-            ) and background is not None:
+            if not result.duplicate and background is not None:
                 stage = "background_persist"
                 await self.checkin_store.update_record_background(
                     user_id=user_id,
@@ -358,6 +332,23 @@ class CheckinApplicationMixin:
                 await event.send(event.chain_result(content))
                 # 图片发送成功后不再释放 pending；即使升级正式记录失败，也要继续去重。
                 claim_held = False
+                if not cache_hit:
+                    try:
+                        # 用当天基础记录定位变体；跨群重选不覆盖基础背景。
+                        variant_key = self._checkin_card_cache_key(
+                            event, profile=profile_snapshot, record=record,
+                            background=self._checkin_background_from_record(record),
+                            bot_name=bot_name, user_title=user_title,
+                            render_tier=self._record_checkin_render_tier(record),
+                            safety_identity=safety_identity,
+                        )
+                        await asyncio.to_thread(
+                            cache.store_background, record.date_key, variant_key, background
+                        )
+                    except Exception as exc:
+                        logger.warning(
+                            f"{LOG_PREFIX} 签到背景缓存写入失败: error_type={type(exc).__name__}"
+                        )
                 try:
                     stage = "usage_record"
                     await self._record_checkin_background(event, background)
@@ -400,14 +391,6 @@ class CheckinApplicationMixin:
                                 author="",
                                 quality="",
                             )
-                            if cached_path is not None:
-                                try:
-                                    Path(cached_path).unlink(missing_ok=True)
-                                except OSError as exc:
-                                    logger.warning(
-                                        f"{LOG_PREFIX} 未发送签到卡缓存清理失败: "
-                                        f"error_type={type(exc).__name__}"
-                                    )
                             logger.debug(
                                 f"{LOG_PREFIX} 未发送签到背景持久化已撤销"
                             )
@@ -425,6 +408,14 @@ class CheckinApplicationMixin:
                                 f"error_type={type(exc).__name__}"
                             )
                     if can_release_claim:
+                        if cached_path is not None:
+                            try:
+                                Path(cached_path).unlink(missing_ok=True)
+                            except OSError as exc:
+                                logger.warning(
+                                    f"{LOG_PREFIX} 未发送签到卡缓存清理失败: "
+                                    f"error_type={type(exc).__name__}"
+                                )
                         await self._release_checkin_background_claim(
                             event, background
                         )
@@ -763,6 +754,7 @@ class CheckinApplicationMixin:
         user_title: str = "",
         render_tier: str | None = None,
         policy=None,
+        safety_identity=None,
     ) -> str:
         background = background or self._checkin_background_from_record(record)
         identity_background = CardBackground(
@@ -795,11 +787,14 @@ class CheckinApplicationMixin:
             render_tier or self._record_checkin_render_tier(record)
         )
         view_model["render_tier"] = render_spec.name
+        view_model["resource_version"] = 2
         view_model["render_quality"] = CHECKIN_JPEG_QUALITY
         view_model["background_quality"] = str(
             background.quality or render_spec.background_quality
         )
-        if policy is not None:
+        if safety_identity is not None:
+            view_model["content_safety_policy"] = safety_identity
+        elif policy is not None:
             view_model["content_safety_policy"] = policy.cache_identity()
         return self.checkin_cache.cache_key(
             date_key=record.date_key,
@@ -807,6 +802,37 @@ class CheckinApplicationMixin:
             template_version=get_checkin_theme(record.theme_id).template_version,
             view_model=view_model,
         )
+
+    async def _checkin_safety_identity(self, policy) -> dict[str, object]:
+        """Fingerprint effective rules rather than the requesting conversation."""
+        if policy.builtin_terms_enabled and self.image_index is not None:
+            try:
+                terms, blacklisted_ids = await self.image_index.get_safety_snapshot()
+            except Exception as exc:
+                logger.error(
+                    f"{LOG_PREFIX} 读取签到安全规则快照失败: error_type={type(exc).__name__}"
+                )
+                raise RuntimeError("内容安全服务暂不可用") from exc
+            terms = set(terms) | set(normalized_builtin_terms())
+        else:
+            terms = await self._safety_terms(policy)
+            blacklisted_ids = await self._blacklisted_illust_ids(policy)
+        return {
+            "general_only_enabled": policy.general_only_enabled,
+            "terms": sorted(terms),
+            "blacklisted_illust_ids": sorted(blacklisted_ids),
+        }
+
+    async def _checkin_safety_snapshot(self, policy):
+        identity = await self._checkin_safety_identity(policy)
+        # 固定本请求的实际列表，避免管理端改规则后选图与缓存指纹不一致。
+        snapshot = replace(
+            policy,
+            builtin_terms_enabled=False,
+            custom_terms=tuple(identity["terms"]),
+            blacklisted_illust_ids=tuple(identity["blacklisted_illust_ids"]),
+        )
+        return snapshot, identity
 
     async def _persist_checkin_render_tier(
         self,

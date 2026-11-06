@@ -20,13 +20,16 @@ async def test_cache_storage_and_clear():
 
         # Create a get_px_ temp file inside the test-owned tmp_root
         # so the glob never touches the real system temp directory
-        plugin_tmp = Path(tmp_root) / "plugin_tmp"
+        plugin_tmp = Path(tmp_root) / "temp"
         plugin_tmp.mkdir()
         temp_img = plugin_tmp / "get_px_test.jpg"
         temp_img.write_bytes(b"dummy_temp_image_data_67890")
+        unrelated = plugin_tmp / "keep.txt"
+        unrelated.write_text("not a download", encoding="utf-8")
 
         plugin = SimpleNamespace(
             checkin_cache=SimpleNamespace(root=cache_dir),
+            data_dir=Path(tmp_root),
             log_prefix="[Test]",
         )
         api = PluginWebApi(
@@ -38,7 +41,7 @@ async def test_cache_storage_and_clear():
 
         app = Quart(__name__)
         async with app.app_context():
-            with patch("plugin_api.api.tempfile.gettempdir", return_value=str(plugin_tmp)):
+            with patch("tempfile.gettempdir", side_effect=AssertionError("must not scan system temp")):
                 # 1. Test get stats
                 response = await api.cache_storage()
                 data = await response.get_json()
@@ -55,13 +58,17 @@ async def test_cache_storage_and_clear():
                 import os
                 stale_ts = 0
                 os.utime(temp_img, (stale_ts, stale_ts))
+                active = plugin_tmp / "get_px_active.jpg"
+                active.write_bytes(b"active download")
 
                 clear_response = await api.cache_storage_clear()
                 clear_data = await clear_response.get_json()
                 assert clear_data["success"] is True
                 assert clear_data["freed_bytes"] >= len(b"dummy_card_data_12345") + len(b"dummy_temp_image_data_67890")
                 assert clear_data["deleted_files"] >= 2
-                assert clear_data.get("skipped_active", 0) == 0
+                assert clear_data.get("skipped_active", 0) == 1
+                assert active.exists()
+                assert unrelated.exists()
                 assert not test_card.exists()
                 assert not temp_img.exists()
 
