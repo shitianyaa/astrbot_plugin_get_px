@@ -404,6 +404,7 @@ class CheckinArtworkMixin:
         user_title: str,
         preferred_tier: str,
         policy,
+        safety_identity=None,
     ) -> tuple[Path | None, str]:
         for spec in checkin_render_fallbacks(preferred_tier):
             cache_key = await asyncio.to_thread(
@@ -416,6 +417,7 @@ class CheckinArtworkMixin:
                 user_title=user_title,
                 render_tier=spec.name,
                 policy=policy,
+                safety_identity=safety_identity,
             )
             cached = await asyncio.to_thread(
                 self._cache_get_for_tier,
@@ -448,6 +450,7 @@ class CheckinArtworkMixin:
         preferred_tier: str,
         cache=None,
         policy=None,
+        safety_identity=None,
     ) -> tuple[Path, str]:
         last_error: Exception | None = None
         fallback_specs = checkin_render_fallbacks(preferred_tier)
@@ -504,6 +507,7 @@ class CheckinArtworkMixin:
                         user_title=user_title,
                         render_tier=spec.name,
                         policy=policy,
+                        safety_identity=safety_identity,
                     )
                     card_path = Path(
                         await self._cache_store_for_tier(

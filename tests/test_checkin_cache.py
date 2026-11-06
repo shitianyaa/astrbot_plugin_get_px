@@ -15,6 +15,7 @@ from PIL import Image
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 
 from astrbot_plugin_get_px.checkin.cache import CheckinCardCache  # noqa: E402
+from astrbot_plugin_get_px.checkin.card import CardBackground  # noqa: E402
 
 SHANGHAI_TZ = ZoneInfo("Asia/Shanghai")
 
@@ -40,6 +41,29 @@ class CheckinCardCacheTest(unittest.IsolatedAsyncioTestCase):
 
     def tearDown(self) -> None:
         self._tmp.cleanup()
+
+    def test_background_summary_atomic_write_keeps_old_summary_on_failure(self):
+        background = CardBackground(
+            mode="pixiv_daily", source="lolicon:random", illust_id="123:0",
+            title="Old", author="Artist", quality="large",
+            image_path="temporary/source.jpg", illust={"tags": ["not persisted"]},
+        )
+        self.cache.store_background(self.date_key, self.key, background)
+        with patch(
+            "astrbot_plugin_get_px.checkin.cache.os.replace", side_effect=OSError("interrupted")
+        ):
+            with self.assertRaises(OSError):
+                self.cache.store_background(
+                    self.date_key, self.key, CardBackground(title="New")
+                )
+        restored = self.cache.get_background(self.date_key, self.key)
+        self.assertEqual(restored.title, "Old")
+        self.assertEqual(restored.illust_id, "123:0")
+        self.assertEqual(restored.image_path, "")
+        self.assertIsNone(restored.illust)
+        self.assertEqual(list(self.root.rglob("*.tmp")), [])
+        self.cache.cleanup_expired(today=self.next_day, force=True)
+        self.assertIsNone(self.cache.get_background(self.date_key, self.key))
 
     def test_cache_key_is_stable_and_changes_with_each_identity_component(self):
         kwargs = {

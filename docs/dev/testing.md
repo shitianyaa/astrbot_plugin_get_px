@@ -79,6 +79,8 @@ python scripts/ci/check_plugin_lifecycle.py \
 
 头像与资源复用回归包含：QQ 头像内联、关闭头像及非 QQ 平台不下载、超时和无效响应使用昵称占位、取消时清理下载文件、三档仅准备一次资源、缓存命中不准备资源，以及所有主题注入动态数据后的外链检查。
 
+跨群签到缓存回归运行 `python -m pytest -q tests/test_main_error_handling.py tests/test_checkin_cache.py`：使用真实 SQLite 和 JPEG 缓存验证 A→B→A 的相同/不同安全规则、仅 Lolicon 无 Pixiv token、缓存重载与并发、全局词和黑名单更新、背景刷新及主题切换、摘要/JPEG 缺失或损坏、清理重建不重复发奖，以及摘要原子写入失败不覆盖已有文件。测试替代远端取图和 T2I，不代表 QQ 实机发送验证。
+
 ## 测试覆盖建议
 
 当前测试覆盖主要业务流程和边界情况：
