@@ -1,8 +1,8 @@
 name: astrbot_plugin_get_px
 display_name: 画境拾珍
-short_desc: Lolicon 优先、Pixiv 可选回退的分群安全发图与签到插件
-desc: 通过 Lolicon 标签搜索或随机获取插画，失败时可用 Pixiv refresh_token 回退到搜索或推荐作品。内容安全支持全局规则与群/用户独立规则互斥，以及按字段批量应用现有策略；同时提供每日签到、群签到排行、主题商店、万象画卷联动与 WebUI 管理中心。
-version: v3.8.0
+short_desc: 全量 WebUI 配置、可配置签到奖励与好感度加成，支持 Lolicon 优先和 Pixiv 回退
+desc: 通过 Lolicon 搜索或随机获取插画，失败时可用 Pixiv refresh_token 回退。提供完整的插件 WebUI 设置与会话安全策略；签到奖励支持基础金币范围、连签间隔/增量/上限及好感度等级金币加成，并保留签到商店、排行与万象画卷联动。
+version: v3.9.0
 author: Sham1k0
 repo: https://github.com/shitianyaa/astrbot_plugin_get_px
 astrbot_version: ">=4.16"

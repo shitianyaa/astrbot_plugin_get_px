@@ -4,10 +4,10 @@
 
 <img src="https://count.getloli.com/@astrbot-plugin-get-px?name=astrbot-plugin-get-px&theme=booru-jaypee&padding=6&offset=0&align=top&scale=1&pixelated=1&darkmode=auto" alt="count" />
 
-一个面向 AstrBot 的安全发图与签到插件：Lolicon 优先取图，失败时可用 Pixiv refresh_token 回退，并在 WebUI 管理群排行、成员数值、内容安全和签到数据。
+一个面向 AstrBot 的安全发图与签到插件：Lolicon 优先取图，失败时可用 Pixiv refresh_token 回退；提供完整插件 WebUI 设置、内容安全管理，以及可配置的签到金币、连签和好感度奖励。
 
 ![AstrBot](https://img.shields.io/badge/AstrBot-plugin-5865f2?style=flat-square)
-![Version](https://img.shields.io/badge/version-3.8.0-22c55e?style=flat-square)
+![Version](https://img.shields.io/badge/version-3.9.0-22c55e?style=flat-square)
 ![Python](https://img.shields.io/badge/Python-3.10%2B-3776ab?style=flat-square)
 ![Platform](https://img.shields.io/badge/platform-OneBot%20%2F%20aiocqhttp-f97316?style=flat-square)
 ![License](https://img.shields.io/badge/license-MIT-3b82f6?style=flat-square)
@@ -48,12 +48,12 @@
 ### WebUI 管理中心
 
 <div align="center">
-<img src="Webui.png" alt="插件管理中心界面" width="100%">
+<img src="Webui.png" alt="插件设置—签到基础（演示配置，真实界面截取）" width="100%">
 </div>
 
 <br>
 
-插件管理中心提供群排行与趋势图表、成员数值编辑、内容安全管理和签到数据备份功能，所有操作均通过可视化界面完成。
+插件管理中心包含完整常规设置页及群排行、成员数值、内容安全和签到数据备份；截图展示真实设置界面与演示配置，不含实际用户数据。
 
 ## 功能一览
 
@@ -62,7 +62,7 @@
 | 搜图发图 | Lolicon 标签搜索或随机取图，失败时回退 Pixiv 搜索/推荐，支持数量限制与原图自动降级 |
 | 图片来源 | Lolicon 为首选；`pixiv_refresh_token` 可选，仅作回退 |
 | 内容安全 | 普通分级与安全词按群/用户独立配置；内置词开启使用内置+全局列表，关闭仅使用会话独立列表 |
-| 每日签到 | H 纸张画册卡片、竖向随机背景、金币、好感度、连签、商店与主题 |
+| 每日签到 | H 纸张画册卡片、竖向随机背景、可配置基础金币/连签/好感度奖励、商店与主题 |
 | 万象联动 | 可选接入万象画卷，签到领生图额度、商店购买额度，总开关默认关闭 |
 | 管理中心 | 群排行与趋势、成员数值、安全词与黑名单、签到备份 |
 | 稳定性 | 0–7 个自然日去重、发送失败重试、临时文件自动清理 |
@@ -146,7 +146,12 @@
 
 ## WebUI 插件管理中心
 
-AstrBot WebUI 插件页的「pluginCenter」可：
+AstrBot WebUI 插件页的「pluginCenter」提供 6 组共 45 项可见设置，其中 43 项为普通可编辑设置、2 项群聊/私聊安全策略列表沿用原有策略编辑器：
+
+- 插件设置按 Pixiv、去重与安全、万象联动、签到基础、签到商店、运行参数分组，可编辑 schema 中全部可见常规配置
+- Pixiv refresh token 仅展示是否已配置；留空保留、输入新值替换、勾选清除才删除
+- 签到设置可配置基础金币范围（默认 50–100，含端点，支持固定 0）、连签间隔及金币/好感度增量和上限
+- 常规设置保存后建议重载插件，以使已有客户端或代理等缓存配置完整生效；签到奖励设置在下一次新签到使用
 
 - 按群查看今日 / 月度 / 连签 / 累计排行与 7/30 天趋势
 - 搜索成员并调整金币、好感度、累计与连续签到当前值
@@ -159,6 +164,9 @@ AstrBot WebUI 插件页的「pluginCenter」可：
 
 - 奖励全局一天一次；群榜按实际签到的群分别记录，不重复发金币。
 - 重复签到不重奖，重发当天缓存卡片。
+- 默认基础金币按用户和日期稳定抽取，范围为 50–100（含端点）。连签默认每 7 天 +10 金币（累计上限 50）及 +0.10 好感度（累计上限 0.50）；间隔、每档增量和上限均可配置，金币范围支持固定 0。
+- 默认好感度等级金币加成为排斥/陌生 0%、熟悉 5%、亲近 10%、信赖 15%、挚友 20%，按本次签到前等级对“基础金币 + 连签金币”加成并向下取整。关闭或每级设为 0% 即保留原金币公式；购买的双倍加持只翻倍好感度，不影响金币。
+- 配置只影响新签到，不追溯已保存的历史奖励；签到预览与实际入账采用同一规则。
 - 商店：加持 200/500/1000；背景刷新默认 100（可配）；非默认主题默认每套 1500（可配）。默认「米白」免费。
 
 细则（好感等级、卡片规格、问候 24/32 字、生日事件、称号、节假日等）见 [签到说明](docs/user/checkin.md)。
