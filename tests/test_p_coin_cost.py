@@ -375,12 +375,13 @@ async def test_record_usage_error_does_not_repeat_confirmed_delivery():
     harness.downloader = AsyncMock()
     harness.downloader.download_for_send.return_value = ("unused.jpg", "original", 1024)
     harness.image_index = AsyncMock()
-    harness.image_index.retention_days = 0
+    harness.image_index.retention_days = 1
     harness.image_index.record_usage.side_effect = RuntimeError("database unavailable")
     event = _FlowEvent()
     await _run_search(harness, event, "1")
     assert len([chain for chain in event.sent if isinstance(chain, list)]) == 1
     harness.checkin_store.spend_coins.assert_awaited_once()
+    harness.image_index.record_usage.assert_awaited_once()
 
 
 @pytest.mark.asyncio

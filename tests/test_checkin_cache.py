@@ -65,6 +65,18 @@ class CheckinCardCacheTest(unittest.IsolatedAsyncioTestCase):
         self.cache.cleanup_expired(today=self.next_day, force=True)
         self.assertIsNone(self.cache.get_background(self.date_key, self.key))
 
+    def test_forced_cleanup_defers_active_background_summary_write(self):
+        background = CardBackground(mode="pixiv_daily", illust_id="123:0")
+        with patch(
+            "astrbot_plugin_get_px.checkin.cache.os.fsync",
+            side_effect=lambda _: self.cache.cleanup_expired(today=self.next_day, force=True),
+        ):
+            self.cache.store_background(self.date_key, self.key, background)
+        self.assertEqual(self.cache.get_background(self.date_key, self.key), background)
+        self.assertEqual(self.cache._active_store_dates, {})
+        self.cache.cleanup_expired(today=self.next_day, force=True)
+        self.assertIsNone(self.cache.get_background(self.date_key, self.key))
+
     def test_cache_key_is_stable_and_changes_with_each_identity_component(self):
         kwargs = {
             "date_key": self.date_key,

@@ -281,6 +281,12 @@ def _plugin_for_checkin(tmp: str, result: CheckinResult, order, *, cache_hit=Fal
         get_custom_safety_terms=AsyncMock(return_value=set()),
         get_blacklisted_illust_ids=AsyncMock(return_value=set()),
     )
+    plugin.image_index.get_safety_snapshot = AsyncMock(
+        side_effect=lambda: (
+            plugin.image_index.get_custom_safety_terms.return_value,
+            plugin.image_index.get_blacklisted_illust_ids.return_value,
+        )
+    )
 
     async def record_usage(_event, background):
         if background and background.image_path:
@@ -342,8 +348,13 @@ class Issue24CacheTest(unittest.IsolatedAsyncioTestCase):
             plugin, selected = self.setup_plugin(tmp)
             first = await self.send_card(plugin, "a")
             snapshot = await plugin.checkin_store.get_today_record("10001")
-            self.assertEqual(await self.send_card(plugin, "b"), first)
-            self.assertEqual(await self.send_card(plugin, "a"), first)
+            with patch.object(
+                plugin, "_restore_checkin_background",
+                wraps=plugin._restore_checkin_background,
+            ) as restore:
+                self.assertEqual(await self.send_card(plugin, "b"), first)
+                self.assertEqual(await self.send_card(plugin, "a"), first)
+                restore.assert_not_awaited()
             self.assertEqual(len(selected), 1)
             self.assertEqual(plugin._render_checkin_card.await_count, 1)
             self.assertEqual(await plugin.checkin_store.get_today_record("10001"), snapshot)
@@ -362,7 +373,8 @@ class Issue24CacheTest(unittest.IsolatedAsyncioTestCase):
             plugin.image_index.get_blacklisted_illust_ids.return_value = {"110000"}
             self.assertIn("黑名单", blocked)
             self.assertEqual(identity["blacklisted_illust_ids"], ["110000"])
-            plugin.image_index.get_blacklisted_illust_ids.assert_awaited_once()
+            plugin.image_index.get_safety_snapshot.assert_awaited_once()
+            plugin.image_index.get_blacklisted_illust_ids.assert_not_awaited()
 
     async def test_disabled_independent_lists_do_not_split_identical_rules(self):
         with tempfile.TemporaryDirectory() as tmp:

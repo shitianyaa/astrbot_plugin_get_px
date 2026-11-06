@@ -193,13 +193,15 @@ class CheckinCardCache:
     ) -> None:
         """Atomically publish only the caption fields, never source paths or metadata."""
         path = _inside(self._cache_path(date_key, key).with_suffix(".json"), self.root)
-        path.parent.mkdir(parents=True, exist_ok=True)
         data = {
             field: getattr(background, field)
             for field in ("mode", "source", "illust_id", "title", "author", "quality")
         }
         temporary = None
+        with self._active_store_lock:
+            self._active_store_dates[date_key] = self._active_store_dates.get(date_key, 0) + 1
         try:
+            path.parent.mkdir(parents=True, exist_ok=True)
             with tempfile.NamedTemporaryFile(
                 mode="w", encoding="utf-8", dir=path.parent,
                 prefix=f".{key}.", suffix=".tmp", delete=False,
@@ -210,8 +212,11 @@ class CheckinCardCache:
                 os.fsync(stream.fileno())
             os.replace(temporary, path)
         finally:
-            if temporary is not None:
-                temporary.unlink(missing_ok=True)
+            try:
+                if temporary is not None:
+                    temporary.unlink(missing_ok=True)
+            finally:
+                self._end_store(date_key)
 
     def cleanup_expired(
         self,
