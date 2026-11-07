@@ -470,7 +470,7 @@ async def test_delivery_state_controls_charge_pending_and_file_lifetime(tmp_path
             await _run_search(harness, event, str(count))
         held = await index.get_used_illust_ids(scope, "lolicon:random")
         assert held == (set() if outcome in ("failed", "build_cancelled") else ids)
-        uncertain = outcome in ("timed_out", "protocol_timeout", "unknown", "cancelled")
+        uncertain = outcome in ("empty_receipt", "timed_out", "protocol_timeout", "unknown", "cancelled")
         assert all(path.exists() is uncertain for path in paths)
         assert len(downloader._cleanup_tasks) == (count if uncertain else 0)
         if outcome in ("confirmed", "empty_receipt", "timed_out", "protocol_timeout"):

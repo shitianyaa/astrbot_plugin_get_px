@@ -1,6 +1,6 @@
 """AstrBot 插件 — 安全插画发图与签到
 
-通过标签搜索插画并发送图片，支持 Lolicon 主源、Pixiv 回退、内容安全过滤、多页作品、自然语言自动触发和签到。
+通过标签搜索插画并发送图片，支持 Lolicon/Pixiv 图片源优先级与自动回退、内容安全过滤、多页作品、自然语言自动触发和签到。
 
 搜索指令：
     /p [标签] [数量]           搜索并发送图片
@@ -223,13 +223,9 @@ class GetPxPlugin(
             )
 
     def _init_client(self):
-        """初始化 Lolicon 主源和可选的 Pixiv 回退客户端。"""
-        lolicon_url = self._cfg_str(
-            "lolicon_api_url", "https://api.lolicon.app/setu/v2"
-        )
+        """初始化固定地址的 Lolicon 和可选的 Pixiv 客户端。"""
         if getattr(self, "lolicon_client", None) is None:
             self.lolicon_client = LoliconClient(
-                api_url=lolicon_url,
                 exclude_ai=self._cfg_bool("lolicon_exclude_ai", True),
                 request_timeout=self._cfg_float(
                     "request_timeout", 30.0, 5.0, 120.0
@@ -237,14 +233,15 @@ class GetPxPlugin(
             )
         token = self._cfg_str("pixiv_refresh_token")
         if not token:
-            logger.info(f"{LOG_PREFIX} 未配置 Pixiv refresh_token，仅使用 Lolicon 主源")
+            logger.info(f"{LOG_PREFIX} 图片源初始化完成: available_sources=lolicon reason=no_pixiv_token")
             return
 
-        self.client = PixivClient(
-            refresh_token=token,
-            request_timeout=self._cfg_float("request_timeout", 30.0, 5.0, 120.0),
-        )
-        logger.info(f"{LOG_PREFIX} Lolicon 主源和 Pixiv 回退客户端已初始化")
+        if getattr(self, "client", None) is None:
+            self.client = PixivClient(
+                refresh_token=token,
+                request_timeout=self._cfg_float("request_timeout", 30.0, 5.0, 120.0),
+            )
+        logger.info(f"{LOG_PREFIX} 图片源初始化完成: available_sources=lolicon,pixiv")
 
     def _web_api(self) -> PluginWebApi:
         service = getattr(self, "plugin_web_api", None)

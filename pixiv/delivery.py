@@ -14,6 +14,7 @@ from astrbot.api.message_components import Image, Plain, Node, Nodes
 
 class DeliveryStatus(Enum):
     CONFIRMED = "confirmed"
+    ACCEPTED = "accepted"
     FAILED = "failed"
     UNKNOWN = "unknown"
     TIMED_OUT = "timed_out"
@@ -77,12 +78,9 @@ async def _onebot_request(event, content: list, transport: str) -> tuple[str, di
     return action, params
 
 
-def _safe_error_text(value: object) -> str:
-    """保留诊断文本，移除地址、标识和凭据；限制异常回包撑大日志。"""
-    if not isinstance(value, str):
-        return ""
-    # 输出仅保留 512 字符；先限制输入，避免异常长回包拖慢事件循环。
-    text = value[:2048].replace(r"\/", "/")
+def _without_error_paths(text: str) -> str:
+    """排除地址和路径，避免其参与错误分类或泄露到日志。"""
+    text = text.replace(r"\/", "/")
     text = re.sub(r"https?://\S+|\[CQ:[^\]]*\]", "[redacted]", text)
     path_start = r"(?:file://|\\{2,}|[a-z]:[\\/]|/|\.\.?[\\/])"
     text = re.sub(
@@ -102,6 +100,15 @@ def _safe_error_text(value: object) -> str:
         "[path]",
         text,
     )
+    return text
+
+
+def _safe_error_text(value: object) -> str:
+    """保留诊断文本，移除地址、标识和凭据；限制异常回包撑大日志。"""
+    if not isinstance(value, str):
+        return ""
+    # 输出仅保留 512 字符；先限制输入，避免异常长回包拖慢事件循环。
+    text = _without_error_paths(value[:2048])
     text = re.sub(
         r"""(?i)((?:token|secret|password|authorization|api[_-]?key)["']?\s*[=:]\s*)(?:"[^"]*"|'[^']*'|[^\s,;]+)""",
         r"\1[redacted]",
@@ -156,10 +163,13 @@ def _is_timeout(error: BaseException) -> bool:
     seen = set()
     while error is not None and id(error) not in seen:
         seen.add(id(error))
-        text = _error_text(error).lower()
-        if isinstance(error, TimeoutError) or any(
-            marker in text for marker in ("timeout", "timed out", "超时")
-        ):
+        if isinstance(error, TimeoutError):
+            return True
+        result = getattr(error, "result", None)
+        messages = (result.get("message", ""), result.get("wording", "")) if isinstance(result, dict) else (str(error),)
+        # 排除路径、URL 和回包中无关字段，只匹配独立的超时标记。
+        if any(re.search(r"\btimeout\b|\btimed\s+out\b|超时", _without_error_paths(message), re.IGNORECASE)
+               for message in messages if isinstance(message, str)):
             return True
         error = error.__cause__ or error.__context__
     return False
@@ -206,7 +216,7 @@ async def send_once(event, content: list, *, context: str) -> DeliveryStatus:
             return DeliveryStatus.FAILED
         try:
             if direct:
-                await event.bot.call_action(action, **params)
+                receipt = await event.bot.call_action(action, **params)
             else:
                 await event.send(message)
         except Exception as exc:
@@ -227,10 +237,16 @@ async def send_once(event, content: list, *, context: str) -> DeliveryStatus:
                 )
                 continue
             return DeliveryStatus.UNKNOWN
+        status = DeliveryStatus.CONFIRMED
+        if direct and transport == "file" and (
+            not isinstance(receipt, dict) or not receipt.get("message_id")
+        ):
+            # 正常返回仍结算，但协议端可能只受理，保留文件读取窗口。
+            status = DeliveryStatus.ACCEPTED
         logger.info(
-            f"[GetPx] 作品发送调用成功: {attempt_context} delivery_status=confirmed duration_ms={int((time.monotonic() - started) * 1000)}"
+            f"[GetPx] 作品发送调用成功: {attempt_context} delivery_status={status.value} duration_ms={int((time.monotonic() - started) * 1000)}"
         )
-        return DeliveryStatus.CONFIRMED
+        return status
 
 
 class DeliveryMixin:

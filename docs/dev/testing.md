@@ -98,7 +98,7 @@ python scripts/ci/check_plugin_lifecycle.py \
 
 ### 发图测试
 
-- `test_lolicon.py`、`test_pixiv_client.py` - 图源规范化、请求与回退
+- `test_lolicon.py`、`test_pixiv_client.py` - 图源规范化、固定 API 地址、优先级与双向失败／空结果回退；覆盖无 Pixiv 客户端、分页游标和安全参数传递
 - `test_p_command_count.py` - 发图参数和数量
 - `test_p_coin_cost.py`、`test_delivery.py` - 发送、结算、去重状态和诊断
 - `test_downloader.py` - 图片下载、反代轮换、质量降级
@@ -213,7 +213,7 @@ async def test_something_async():
 
 ## 发送状态与异常日志回归
 
-运行 `python -m pytest -q tests/test_delivery.py tests/test_p_coin_cost.py`，验证 `CONFIRMED`、`TIMED_OUT`、`UNKNOWN`、`FAILED` 四种状态的结算与占用、取消、错误脱敏，以及群聊／私聊、单图／合并转发的消息构造。OneBot 自动采用 file，明确读取失败才重建为 base64；非 OneBot 使用框架发送，不再手动选择三种模式。
+运行 `python -m pytest -q tests/test_delivery.py tests/test_p_coin_cost.py`，验证 `CONFIRMED`、`ACCEPTED`、`TIMED_OUT`、`UNKNOWN`、`FAILED` 五种状态的结算与占用、取消、错误脱敏，以及群聊／私聊、单图／合并转发的消息构造。OneBot 自动采用 file，明确读取失败才重建为 base64；非 OneBot 使用框架发送，不再手动选择三种模式。
 
 真实部署检查 file URI 的路径可见性，记录 `transport`、耗时和脱敏回包；在隔离环境模拟明确路径读取失败，确认 base64 重试一次；遇到发送超时确认没有补发。模拟测试不等于 QQ 实际送达验证。
 
@@ -252,12 +252,12 @@ python -m pytest -q tests/test_checkin_cache.py tests/test_checkin_calendar.py t
 
 ## 配置升级回归
 
-运行 `python -m pytest -q tests/test_config_upgrade.py tests/test_group_safety_config.py tests/test_checkin_group_safety.py`。`tests/fixtures/config_v3_8_0_grouped.json` 是按 v3.8.0 分组格式构造的合成配置，不含用户数据。使用已安装 AstrBot 的真实 `AstrBotConfig` 加载、裁剪、保存、重载，核对六组自定义值、去重天数、群／私聊独立列表与元数据保留，确认分组空列表不复活顶层旧策略，以及新安装默认值正常。
+运行 `python -m pytest -q tests/test_config_upgrade.py tests/test_group_safety_config.py tests/test_checkin_group_safety.py`。`tests/fixtures/config_v3_8_0_grouped.json` 是按 v3.8.0 分组格式构造的合成配置，不含用户数据。使用已安装 AstrBot 的真实 `AstrBotConfig` 加载、裁剪、保存、重载，核对六组自定义值、首选图源默认与保存重载、旧 Lolicon 地址裁剪、去重天数、群／私聊独立列表与元数据保留，确认分组空列表不复活顶层旧策略，以及新安装默认值正常。
 
 这些用例不调用 v3.8.0 的旧迁移代码，不证明更早版本可直接升级；它们验证已完成分组迁移的配置与当前 schema 的兼容性。本机验证框架为 AstrBot 4.27.3，不替代生产升级或其他框架版本验证。
 
 ## OneBot 自动传输与超时结算
 
-运行 `python -m pytest -q tests/test_delivery.py tests/test_p_coin_cost.py tests/test_downloader.py`。覆盖群聊/私聊、单图/转发、空回执正常结算、1200 NTEvent 超时仍扣费且去重、不发异常提示、不重发、文件读取失败换 base64 的两次诊断日志、超时文件保留 600 秒、非超时未知状态及取消处理，以及旧传输配置清理/保存失败回滚。测试使用模拟协议回包，不代表 QQ 实际延迟验证。
+运行 `python -m pytest -q tests/test_delivery.py tests/test_p_coin_cost.py tests/test_downloader.py`。覆盖群聊/私聊、单图/转发、空回执正常结算并保留 file 图片、路径含 timeout 不误判、1200 NTEvent 超时仍扣费且去重、不发异常提示、不重发、文件读取失败换 base64 的两次诊断日志、超时文件保留 600 秒、非超时未知状态及取消处理，以及旧传输配置清理/保存失败回滚。测试使用模拟协议回包，不代表 QQ 实际延迟验证。
 
 签到卡发送回归运行 `python -m pytest -q tests/test_main_error_handling.py tests/test_delivery.py tests/test_checkin_cache.py`：验证每日签到与付费刷新超时不补文本、背景/缓存/占用保留、重复签到复用同图且不重复奖励、路径失败切 base64 的诊断日志，以及无缓存刷新卡片的延迟清理；非超时失败继续回归原有撤销流程。

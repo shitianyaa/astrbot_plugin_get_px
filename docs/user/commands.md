@@ -11,7 +11,7 @@
 
 发图调用正常返回或发送超时，均按张扣除 `p_coin_cost` 金币（`0` 表示免费）；超时不重发，即使最终未出图也不退款。金币不足时仅提醒、不进入取图；下载／构建失败和其他发送异常不扣币。构建及发送异常只记日志，不补发聊天失败提示，正常结算消息保留。详见 [OneBot 图片发送](../../README.md#onebot-图片发送)。
 
-发图默认请求 Lolicon；请求失败或无结果时，有标签回退 Pixiv 搜索，无标签回退 Pixiv 推荐作品。Pixiv 回退仅在配置 `pixiv_refresh_token` 后可用。
+发图按 `preferred_image_source` 下拉选项优先请求 Lolicon（默认）或 Pixiv；请求失败或无结果时尝试另一源。Lolicon 有标签时搜索、无标签时随机；Pixiv 有标签时搜索、无标签时推荐。Pixiv 需配置 `pixiv_refresh_token`，留空时直接使用 Lolicon。候选被过滤、去重或下载失败不触发换源。Lolicon 请求地址固定，不再提供地址配置。
 
 普通发图、正式签到和刷新背景共享图片去重索引。`dedupe_days` 可设置最近 `0–7` 个北京时间自然日，`1` 只覆盖当天，不是滚动 24 小时；同群成员共享，不同群、私聊用户、标签和图片源相互隔离。因此跨会话或跨标签再次抽到同图属于当前规则允许的情况，详细边界见 [缓存与去重](../project/cache-and-dedupe.md)。Lolicon 图片地址不可用时，可在 `lolicon_image_proxy_origins` 中按行配置多个图片反代 origin；该配置不代理 Lolicon API 或 Pixiv 登录。
 

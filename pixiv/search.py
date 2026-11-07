@@ -110,66 +110,60 @@ class SearchMixin:
         use_page_cursor: bool = True,
         policy: ContentSafetyPolicy = STRICT_CONTENT_SAFETY_POLICY,
     ) -> tuple[list[dict], int, str]:
-        """优先请求 Lolicon，失败后按有无标签回退 Pixiv。"""
-        lolicon_client = getattr(self, "lolicon_client", None)
-        if lolicon_client and lolicon_client.available:
+        """按首选图片源顺序取图，请求失败或无结果时尝试另一源。"""
+        preferred = self._cfg_str("preferred_image_source", "Lolicon").lower()
+        if preferred not in ("lolicon", "pixiv"):
+            logger.warning(f"{LOG_PREFIX} 首选图片源配置无效，使用默认顺序: preferred_source=lolicon")
+            preferred = "lolicon"
+        sources = ("pixiv", "lolicon") if preferred == "pixiv" else ("lolicon", "pixiv")
+        if getattr(self, "lolicon_client", None) is None and getattr(self, "client", None) is None:
+            self._init_client()
+        for source in sources:
+            source_key = self._source_key(tag, source)
+            if source == "pixiv" and not tag:
+                source_key = "pixiv:recommended"
+            client = getattr(self, "lolicon_client" if source == "lolicon" else "client", None)
+            if client is None or (source == "lolicon" and not client.available):
+                logger.debug(f"{LOG_PREFIX} 图片源不可用，跳过请求: source={source}")
+                continue
             try:
-                if tag:
-                    illusts = await lolicon_client.search(
-                        tag,
-                        count=count,
-                        aspect_ratio=aspect_ratio,
-                        r18=0 if policy.general_only_enabled else 2,
-                    )
-                    source_key = self._source_key(tag, "lolicon")
+                if source == "lolicon":
+                    if tag:
+                        illusts = await client.search(
+                            tag, count=count, aspect_ratio=aspect_ratio,
+                            r18=0 if policy.general_only_enabled else 2,
+                        )
+                    else:
+                        illusts = await client.random(
+                            count=count, aspect_ratio=aspect_ratio,
+                            r18=0 if policy.general_only_enabled else 2,
+                        )
                 else:
-                    illusts = await lolicon_client.random(
-                        count=count,
-                        aspect_ratio=aspect_ratio,
-                        r18=0 if policy.general_only_enabled else 2,
-                    )
-                    source_key = "lolicon:random"
+                    page_offset = offset
+                    if use_page_cursor and page_offset == 0 and self.image_index is not None:
+                        try:
+                            page_offset = await self.image_index.get_page_offset(
+                                self._event_scope(event), source_key
+                            )
+                        except Exception as exc:
+                            logger.warning(
+                                f"{LOG_PREFIX} 读取 Pixiv 分页游标失败: "
+                                f"error_type={type(exc).__name__}"
+                            )
+                    if tag:
+                        illusts = await client.search(tag, offset=page_offset)
+                    else:
+                        illusts = await client.recommended(offset=page_offset)
                 if illusts:
                     return illusts, len(illusts), source_key
-            except Exception as exc:
-                logger.info(
-                    f"{LOG_PREFIX} Lolicon 请求失败，尝试 Pixiv 回退: "
-                    f"tag_configured={'yes' if tag else 'no'} "
-                    f"error_type={type(exc).__name__}"
-                )
-
-        pixiv_source_key = self._source_key(tag, "pixiv") if tag else "pixiv:recommended"
-        page_offset = offset
-        if use_page_cursor and page_offset == 0 and self.image_index is not None:
-            try:
-                page_offset = await self.image_index.get_page_offset(
-                    self._event_scope(event), pixiv_source_key
-                )
+                logger.info(f"{LOG_PREFIX} 图片源无结果，继续尝试可用来源: source={source}")
             except Exception as exc:
                 logger.warning(
-                    f"{LOG_PREFIX} 读取 Pixiv 回退分页游标失败: "
+                    f"{LOG_PREFIX} 图片源请求失败，继续尝试可用来源: "
+                    f"source={source} tag_configured={'yes' if tag else 'no'} "
                     f"error_type={type(exc).__name__}"
                 )
-
-        if self.client is None:
-            self._init_client()
-        if self.client is None:
-            return [], 0, pixiv_source_key
-        try:
-            if tag:
-                illusts = await self.client.search(tag, offset=page_offset)
-                source_key = pixiv_source_key
-            else:
-                illusts = await self.client.recommended(offset=page_offset)
-                source_key = pixiv_source_key
-        except Exception as exc:
-            logger.warning(
-                f"{LOG_PREFIX} Pixiv 回退请求失败: "
-                f"tag_configured={'yes' if tag else 'no'} "
-                f"error_type={type(exc).__name__}"
-            )
-            return [], 0, pixiv_source_key
-        return illusts, len(illusts), source_key
+        return [], 0, source_key
 
     async def _record_image_usage(
         self,
@@ -205,7 +199,7 @@ class SearchMixin:
         tag: str,
         count_str: str,
     ):
-        """搜索并发送图片；Lolicon 失败时按需回退 Pixiv。"""
+        """搜索并发送图片，按配置顺序尝试图片源。"""
         # 频率限制
         wait = self._check_rate_limit(event.get_sender_id())
         if wait > 0:
@@ -249,7 +243,7 @@ class SearchMixin:
         downgrade_limit_bytes = int(downgrade_limit_mb * 1024 * 1024)
         filter_manga = self._cfg_bool("filter_manga", True)
 
-        # 获取作品列表：Lolicon 主源，Pixiv 搜索/推荐回退。
+        # 获取作品列表：按首选图片源顺序取图与回退。
         illusts, raw_count, source_key = await self._fetch_source_candidates(
             event, tag, count=max_count, policy=policy
         )
@@ -346,8 +340,8 @@ class SearchMixin:
                 raise
             if status is DeliveryStatus.UNKNOWN:
                 retain_unknown()
-            if status in (DeliveryStatus.CONFIRMED, DeliveryStatus.TIMED_OUT):
-                if status is DeliveryStatus.TIMED_OUT and file_transport:
+            if status in (DeliveryStatus.CONFIRMED, DeliveryStatus.ACCEPTED, DeliveryStatus.TIMED_OUT):
+                if status in (DeliveryStatus.ACCEPTED, DeliveryStatus.TIMED_OUT) and file_transport:
                     retained_paths.update(path for _, path, *_ in images)
                 sent_illust_ids.update(ids)
                 for illust, *_ in images:

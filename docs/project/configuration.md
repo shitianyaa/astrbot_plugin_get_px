@@ -6,8 +6,8 @@
 
 | 字段 | 类型 | 默认值 | 说明 |
 | --- | --- | --- | --- |
-| `pixiv_refresh_token` | `string` | 空 | Lolicon 主源失败时用于 Pixiv 搜索或推荐作品回退；留空不影响 Lolicon 发图 |
-| `lolicon_api_url` | `string` | `https://api.lolicon.app/setu/v2` | 首选图片源地址；留空停用 Lolicon，仅 Pixiv 回退 |
+| `pixiv_refresh_token` | `string` | 空 | 使用 Pixiv 作为首选或回退时需要填写；留空直接使用 Lolicon |
+| `preferred_image_source` | `enum` | `Lolicon` | 下拉选择 `Lolicon` / `Pixiv`；首选请求失败或无结果时尝试另一源 |
 | `lolicon_exclude_ai` | `bool` | `true` | 仅向 Lolicon API 传递 excludeAI=true/false；R18 与普通混合由当前会话强制普通分级决定 |
 | `lolicon_image_proxy_origins` | `text` | 空 | 每行一个 http(s) origin，最多 5 个按序尝试；仅改写允许列表内 Pixiv 图片主机 |
 | `max_count` | `int` | `5` | 单次指令最多发送张数，范围 1–20 |
@@ -17,13 +17,17 @@
 | `forward_threshold` | `int` | `1` | 下载张数严格大于此值时合并转发（仅 aiocqhttp）；0 始终合并，范围 0–20 |
 | `auto_trigger_enabled` | `bool` | `false` | 群内自然语言（「来份/张图」）自动触发发图 |
 
-OneBot 发图默认使用本地 `file:///` 路径；仅在明确文件读取失败时，将同一条消息回退到 base64 编码重试一次，超时不回退、不重发。base64 是图片编码，与 AstrBot 4.27.3 的 OneBot 默认发图编码相同；回退仍直接调用 OneBot，不额外尝试 AstrBot 框架发送。旧 `onebot_image_transport`（顶层及 `pixiv_source` 内）在启动时清理并保存，保存失败恢复原值，下次启动重试。发送异常仅记日志，详见 [OneBot 图片发送](../../README.md#onebot-图片发送)。
+`preferred_image_source` 保存并重载后生效，普通发图、签到背景与日历背景共用请求顺序。Lolicon 有标签时搜索、无标签时随机；Pixiv 有标签时搜索、无标签时推荐。无 Pixiv token 时直接使用 Lolicon；两源均失败或无结果时按各入口现有失败路径处理。已有候选被过滤、去重或下载失败不触发换源；有效缓存及已保存背景继续复用，不因切换优先级强制重选。无效选项记录日志并使用默认 Lolicon 优先。
+
+Lolicon 请求地址固定为 `https://api.lolicon.app/setu/v2`。旧 `lolicon_api_url` 从 schema 删除，由 AstrBot 加载时裁剪；简单 dict 中的残留值也不参与请求，旧自定义地址和留空停用不再生效。图片反代 origin 配置仍只代理图片，不代理 API。
+
+OneBot 发图默认使用本地 `file:///` 路径；仅在明确文件读取失败时，将同一条消息回退到 base64 编码重试一次，超时不回退、不重发。base64 是图片编码，与 AstrBot 4.27.3 的 OneBot 默认发图编码相同；回退仍直接调用 OneBot，不额外尝试 AstrBot 框架发送。file 发送正常返回但没有有效 `message_id` 时仍扣费，并保留图片 10 分钟供协议端读取，不重发。旧 `onebot_image_transport`（顶层及 `pixiv_source` 内）由 AstrBot 在加载时按 schema 裁剪；插件不依赖旧键，也不能恢复框架已裁剪的值。发送异常仅记日志，详见 [OneBot 图片发送](../../README.md#onebot-图片发送)。
 
 ## 2. 图片筛选与去重（`content_dedupe`）
 
 | 字段 | 类型 | 默认值 | 说明 |
 | --- | --- | --- | --- |
-| `filter_manga` | `bool` | `true` | 过滤 Pixiv 回退结果中的 manga；Lolicon 返回按插画处理 |
+| `filter_manga` | `bool` | `true` | 过滤 Pixiv 结果中的 manga；Lolicon 返回按插画处理 |
 | `dedupe_days` | `int` | `1` | 最近 0–7 个北京时间自然日；1 仅当天，非滚动 24 小时；同群共享，不同会话、标签和图源隔离；0 关闭并清空使用记录 |
 | `group_content_safety_policies` | `template_list` | `[]` | 群聊内容安全策略：强制普通分级、内置安全词开关、独立自定义屏蔽词与独立作品 ID 黑名单，按群 ID 生效；建议在管理中心维护 |
 | `private_content_safety_policies` | `template_list` | `[]` | 私聊内容安全策略：字段同群聊策略，按用户 ID 独立生效；建议在管理中心维护 |
@@ -57,7 +61,7 @@ OneBot 发图默认使用本地 `file:///` 路径；仅在明确文件读取失�
 | `checkin_ai_greeting_timeout` | `float` | `8.0` | AI 问候超时，1–30 秒 |
 | `checkin_hitokoto_timeout` | `float` | `5.0` | 一言请求超时，1–15 秒 |
 | `checkin_background_mode` | `enum` | `pixiv_daily` | `pixiv_daily`(每日自动选背景)/`custom`(固定背景文件) |
-| `checkin_background_tag` | `string` | 空 | 多标签随机排列逐个尝试，使用记录按最终标签隔离；留空 Lolicon 随机取图，失败回退 Pixiv 推荐 |
+| `checkin_background_tag` | `string` | 空 | 多标签随机排列逐个尝试，使用记录按最终标签隔离；留空按所选优先级请求 Lolicon 随机或 Pixiv 推荐作品 |
 | `checkin_custom_background` | `string` | 空 | 管理员本地背景路径，推荐 3:4 竖图 |
 
 ## 5. 签到商店与定价（`checkin_shop`）
@@ -104,5 +108,5 @@ v3.8.7 的配置升级基线为已成功完成迁移的 v3.8.0，配置只保留
 - `forward_threshold` 按下载张数判断，仅 aiocqhttp 合并转发；旧 `send_as_forward` 仅在新字段缺失时兼容（`true`→0，`false`→20）。
 - `dedupe_days` 缩短天数会在重载时清理超期记录，增加天数无法恢复已清理历史。
 - `image_quality` 不影响签到背景，签到卡/日历背景画质由 `checkin_card_quality_tier` 独立控制。
-- `pixiv_refresh_token` 留空时 Lolicon 失败直接报错，不进行 Pixiv 回退。
+- `pixiv_refresh_token` 留空时跳过 Pixiv，仅请求 Lolicon；失败或无结果时不再有可用回退源。
 - schema 顶层仅定义六个正式分组，不再复制隐藏兼容键。策略服务只读写 `content_dedupe` 的正式模板；分组中的空列表不得恢复已停用的顶层策略。

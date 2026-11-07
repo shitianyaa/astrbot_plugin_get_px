@@ -4,7 +4,7 @@
 
 <img src="https://count.getloli.com/@astrbot-plugin-get-px?name=astrbot-plugin-get-px&theme=booru-jaypee&padding=6&offset=0&align=top&scale=1&pixelated=1&darkmode=auto" alt="count" />
 
-一个面向 AstrBot 的安全发图与签到插件：Lolicon 优先取图，失败时可用 Pixiv refresh_token 回退，并在 WebUI 管理群排行、成员数值、内容安全和签到数据。
+一个面向 AstrBot 的安全发图与签到插件：Lolicon/Pixiv 图片源优先级可选，请求失败或无结果时自动回退，并在 WebUI 管理群排行、成员数值、内容安全和签到数据。
 
 ![AstrBot](https://img.shields.io/badge/AstrBot-plugin-5865f2?style=flat-square)
 ![Version](https://img.shields.io/badge/version-3.8.7-22c55e?style=flat-square)
@@ -62,8 +62,8 @@
 
 | 场景 | 能力 |
 | --- | --- |
-| 搜图发图 | Lolicon 标签搜索或随机取图，失败时回退 Pixiv 搜索/推荐，支持数量限制与原图自动降级 |
-| 图片来源 | Lolicon 为首选；`pixiv_refresh_token` 可选，仅作回退 |
+| 搜图发图 | 按配置优先请求 Lolicon 或 Pixiv，请求失败或无结果时尝试另一个，支持数量限制与原图自动降级 |
+| 图片来源 | 下拉选择 `Lolicon`（默认）或 `Pixiv` 优先；使用 Pixiv 需填写 `pixiv_refresh_token` |
 | 内容安全 | 普通分级与安全词按群/用户独立配置；内置词开启使用内置+全局列表，关闭仅使用会话独立列表 |
 | 每日签到 | H 纸张画册卡片、竖向随机背景、金币、好感度、连签、商店与主题 |
 | 万象联动 | 可选接入万象画卷，签到领生图额度、商店购买额度，总开关默认关闭 |
@@ -77,7 +77,7 @@
 1. 在 AstrBot WebUI 插件页安装本插件：
    - 下载本仓库 zip 后选择「导入压缩包」
    - 或粘贴仓库地址：`https://github.com/shitianyaa/astrbot_plugin_get_px`
-2. 默认使用 Lolicon API，无需 Token；需要 Pixiv 作为备用时再填写 `pixiv_refresh_token`（[如何获取](#获取-pixiv-token)）。
+2. 默认使用 Lolicon API，无需 Token；在「首选图片源」选择 `Lolicon` 或 `Pixiv`，使用 Pixiv 作为首选或回退时填写 `pixiv_refresh_token`（[如何获取](#获取-pixiv-token)）。
 3. 直接试试：
 
 ```text
@@ -194,15 +194,15 @@ AstrBot WebUI 插件页的「pluginCenter」可：
 
 - 默认直接调用 OneBot，使用本地 `file:///` URI；POSIX 图片发送前设置 `0644` 权限。
 - 明确报文件不存在或无法读取时，将同一条消息回退到 base64 编码，再尝试一次。日志保留脱敏异常、切换原因及重试结果。
-- 发送调用正常返回即按已发送扣费和记录去重，不要求回执包含 `message_id`。
+- 发送调用正常返回即按已发送扣费和记录去重，不要求回执包含 `message_id`；file 路径发送缺少该字段时保留图片 10 分钟，不重发。
 - 发送超时（包括协议返回的 `Timeout: NTEvent … sendMsg`）仍按已发送扣费和记录去重，不自动重发。图可能稍后出现；即使最终未出图，该次仍扣费。
 - 下载或构建失败不扣费；其他发送异常保留未知状态，不扣费、不重发。发送异常与构建失败只记日志，不向聊天补发失败或不扣费提示。正常的金币结算消息保留。
 
 base64 是图片编码，与 AstrBot 4.27.3 的 OneBot 默认发图编码相同；本插件回退时仍直接调用 OneBot，不额外尝试 AstrBot 框架发送。
 
-旧配置中的 `onebot_image_transport` 启动时自动清理，统一使用自动策略；保存失败会恢复原配置值并记录日志，下次启动重试。其他平台沿用 AstrBot 发送链路。每日签到与付费刷新生成的签到卡也复用自动传输和超时判断：超时仅记日志，不补纯文字，保留已保存的背景、签到卡缓存和去重占用；签到奖励与刷新价格规则不变。签到测试预览、主题预览和日历仍沿用各自的框架发送流程。
+旧 `onebot_image_transport` 已从 schema 删除，由 AstrBot 在加载配置时裁剪，运行时统一使用自动策略；插件不依赖旧键，也不能恢复框架已裁剪的值。其他平台沿用 AstrBot 发送链路。每日签到与付费刷新生成的签到卡也复用自动传输和超时判断：超时仅记日志，不补纯文字，保留已保存的背景、签到卡缓存和去重占用；签到奖励与刷新价格规则不变。签到测试预览、主题预览和日历仍沿用各自的框架发送流程。
 
-下载临时文件位于 `StarTools.get_data_dir("astrbot_plugin_get_px")` 下的 `temp/`。正常返回或构建失败后及时删除；OneBot 超时、其他未知状态或提交期间取消时保留 10 分钟，让协议端完成读取，再自动清理。插件重启后恢复剩余保护时间；Pages 清理也跳过最近 10 分钟的下载文件。分容器部署建议共享相同绝对路径，读不到文件时由 base64 回退处理。
+下载临时文件位于 `StarTools.get_data_dir("astrbot_plugin_get_px")` 下的 `temp/`。带有效 `message_id` 的正常返回、base64 正常返回或构建失败后及时删除；OneBot file 正常返回但缺少 `message_id`、发送超时、其他未知状态或提交期间取消时保留 10 分钟，让协议端完成读取，再自动清理。插件重启后恢复剩余保护时间；Pages 清理也跳过最近 10 分钟的下载文件。分容器部署建议共享相同绝对路径，读不到文件时由 base64 回退处理。
 
 ### Docker 文件互通排查
 
@@ -214,7 +214,8 @@ base64 是图片编码，与 AstrBot 4.27.3 的 OneBot 默认发图编码相同�
 
 | 配置 | 建议 |
 | --- | --- |
-| `pixiv_refresh_token` | 可选，作为 Lolicon 失败后的 Pixiv 回退 |
+| `preferred_image_source` | 默认 `Lolicon`；有 Pixiv Token 时可改选 `Pixiv` 优先 |
+| `pixiv_refresh_token` | 使用 Pixiv 作为首选或回退时填写；留空直接使用 Lolicon |
 | `image_quality` | 省流量用 `large`，优先原图用 `original` |
 | `forward_threshold` | 仅 aiocqhttp：`0` 始终合并转发；`1` 表示超过 1 张图才合并转发 |
 | `checkin_card_quality_tier` | 默认 `省流量`，日常推荐 `清晰`；签到卡三档为 960×540／1248×702／1728×972，日历三档为 1600×900／2080×1170／2880×1620 |
@@ -229,11 +230,11 @@ WebUI 配置页按以下 6 组折叠展示，分组细节与维护规则见 [doc
 
 | 配置 | 说明 | 默认值 |
 | --- | --- | --- |
-| `pixiv_refresh_token` | Pixiv refresh_token，可选回退 | 空 |
-| `lolicon_api_url` | Lolicon 首选图片源地址；留空时停用 Lolicon | `https://api.lolicon.app/setu/v2` |
+| `pixiv_refresh_token` | 使用 Pixiv 作为首选或回退时需要填写；留空直接使用 Lolicon | 空 |
+| `preferred_image_source` | 下拉选择 `Lolicon` / `Pixiv`；请求失败或无结果时尝试另一源 | `Lolicon` |
 | `lolicon_exclude_ai` | 请求 Lolicon 时排除 AI 作品；R18/普通混合由当前会话强制普通分级决定 | `true` |
 | `lolicon_image_proxy_origins` | 可选 Lolicon 图片反代 origin，多行按顺序轮换；不代理 API 或 Pixiv 登录 | 空 |
-| `filter_manga` | 过滤 Pixiv 回退结果中的漫画作品 | `true` |
+| `filter_manga` | 过滤 Pixiv 结果中的漫画作品 | `true` |
 | `max_count` | 单次最大发送数量，范围 1-20 | `5` |
 | `p_coin_cost` | 普通发图每张金币，范围 `0–200`；`0` 免费；正常返回与发送超时均结算，其他发送异常不扣费 | `20` |
 | `dedupe_days` | 最近 `0–7` 个北京时间自然日去重；同群共享，不同会话、标签和图源隔离；`0` 关闭并清空使用记录 | `1` |
@@ -253,7 +254,7 @@ WebUI 配置页按以下 6 组折叠展示，分组细节与维护规则见 [doc
 | `checkin_omnidraw_quota_cost` | 签到商店购买生图额度的单张价格；范围 `0–300`，`0` 为免费；购买时指定张数，实际花费 = 单价 × 张数 | `75` |
 | `checkin_omnidraw_quota_default` | 商店购买生图额度不指定张数时的默认购买张数；范围 `1–50` | `1` |
 | `checkin_omnidraw_quota_daily_max` | 每人每天商店购买生图额度上限，范围 `0–30`；`0` 不限，签到赠送不受此限 | `10` |
-| `checkin_background_tag` | 签到背景标签；留空时 Lolicon 随机取图，失败后使用 Pixiv 推荐作品 | 空 |
+| `checkin_background_tag` | 签到背景标签；留空按所选优先级请求 Lolicon 随机或 Pixiv 推荐作品 | 空 |
 | `checkin_custom_background` | 本地图片路径；默认主题按竖向作品相框完整显示 | 空 |
 | `checkin_avatar_enabled` | 签到卡片显示用户头像 | `true` |
 | `checkin_card_quality_tier` | 签到卡画质：`省流量` / `清晰` / `极致`；日历使用同名档位，但输出尺寸不同；预览和刷新背景立即生效，普通重复签到保持当天档位 | `省流量` |
@@ -267,6 +268,10 @@ WebUI 配置页按以下 6 组折叠展示，分组细节与维护规则见 [doc
 | `webui_font_source` | WebUI 字体来源：`mirror`、`official`、`none` | `mirror` |
 
 </details>
+
+`preferred_image_source` 保存并重载后生效，普通发图、签到与日历背景共用此顺序。首选请求失败或返回空结果时尝试另一源；已有候选被过滤、去重或下载失败不触发换源。有效的签到／日历缓存与已保存背景仍按原规则复用，不因切换优先级强制重选。
+
+Lolicon 请求地址固定为 `https://api.lolicon.app/setu/v2`，旧 `lolicon_api_url` 已删除；旧自定义地址及留空停用不再生效。图片反代配置仍保留，但不代理 API 请求。
 
 ## 会话内容安全策略
 
@@ -335,8 +340,8 @@ lunar-python
 
 ## 致谢
 
-- 首选图片源由 [Lolicon API](https://api.lolicon.app/) 提供
-- Pixiv 回退基于 [pixivpy-async](https://github.com/Mikubill/pixivpy-async)
+- 默认图片源由 [Lolicon API](https://api.lolicon.app/) 提供
+- Pixiv 图片源基于 [pixivpy-async](https://github.com/Mikubill/pixivpy-async)
 - Pixiv `refresh_token` 获取方案来自 [piglig/pixiv-token](https://github.com/piglig/pixiv-token)，感谢 [piglig](https://github.com/piglig) 提供基于 Playwright 的 OAuth 自动取码工具
 - 作品黑名单缩略图生成基于 [Pillow](https://python-pillow.org/)
 - 签到每日一言由 [Hitokoto API](https://github.com/hitokoto-osc/hitokoto-api) 提供，感谢一言开源社区和公共 API 服务

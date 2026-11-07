@@ -1001,7 +1001,7 @@ class CheckinArtworkMixin:
                 f"error_type={type(exc).__name__}"
             )
             return CardBackground(mode="fallback", source="fallback")
-        # Pixiv 回退路径不经过 API 端筛选，本地按 16:9±0.1 复核。
+        # Pixiv 路径不经过 API 端筛选，本地按 16:9±0.1 复核。
         illusts = filter_illusts_by_aspect_ratio(
             illusts, _CALENDAR_BG_RATIO, _CALENDAR_BG_RATIO_TOLERANCE
         )

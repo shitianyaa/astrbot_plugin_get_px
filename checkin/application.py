@@ -350,7 +350,7 @@ class CheckinApplicationMixin:
                         content.append(Plain(quota_line))
                 stage = "card_send"
                 delivery_status = await send_once(event, content, context="feature=checkin")
-                if delivery_status not in (DeliveryStatus.CONFIRMED, DeliveryStatus.TIMED_OUT):
+                if delivery_status not in (DeliveryStatus.CONFIRMED, DeliveryStatus.ACCEPTED, DeliveryStatus.TIMED_OUT):
                     raise RuntimeError("签到卡发送未完成")
                 # 正常返回或超时后保留背景与缓存；后续记录失败也不能撤销占用。
                 claim_held = False

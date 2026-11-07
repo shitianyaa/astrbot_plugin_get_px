@@ -8,13 +8,17 @@
         "description": "Pixiv refresh_token",
         "type": "string",
         "default": "",
-        "hint": "可选。Lolicon 主源失败时用于 Pixiv 搜索或推荐作品回退；留空不影响 Lolicon 发图。"
+        "hint": "可选。使用 Pixiv 作为首选或回退图片源时需要填写；留空时直接使用 Lolicon。"
       },
-      "lolicon_api_url": {
-        "description": "Lolicon API 地址",
+      "preferred_image_source": {
+        "description": "首选图片源",
         "type": "string",
-        "default": "https://api.lolicon.app/setu/v2",
-        "hint": "首选图片源地址。留空会停用 Lolicon，仅在配置 refresh_token 时使用 Pixiv 回退。"
+        "default": "Lolicon",
+        "options": [
+          "Lolicon",
+          "Pixiv"
+        ],
+        "hint": "先请求所选图片源，请求失败或无结果时尝试另一个。Pixiv 未配置 refresh_token 时直接使用 Lolicon。普通发图、签到与日历背景共用此顺序；保存并重载插件后生效。"
       },
       "lolicon_exclude_ai": {
         "description": "Lolicon 排除 AI 作品",
@@ -101,7 +105,7 @@
         "description": "过滤漫画",
         "type": "bool",
         "default": true,
-        "hint": "开启后过滤 Pixiv 回退结果中的 manga；Lolicon 返回项按插画处理。"
+        "hint": "开启后过滤 Pixiv 结果中的 manga；Lolicon 返回项按插画处理。"
       },
       "dedupe_days": {
         "description": "图片去重天数",
@@ -391,7 +395,7 @@
         "description": "签到背景标签",
         "type": "string",
         "default": "",
-        "hint": "签到背景使用的搜索标签；多个标签可用逗号、顿号、分号或换行分隔，每次签到随机确定尝试顺序。留空时由 Lolicon 随机取图，失败后用 Pixiv 推荐作品回退。"
+        "hint": "签到背景使用的搜索标签；多个标签可用逗号、顿号、分号或换行分隔，每次签到随机确定尝试顺序。留空时按首选图片源顺序取图：Lolicon 随机或 Pixiv 推荐，请求失败或无结果时尝试另一个。"
       },
       "checkin_custom_background": {
         "description": "签到自定义背景",

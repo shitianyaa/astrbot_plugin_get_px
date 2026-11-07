@@ -26,7 +26,7 @@ checkin/
 │  ├─ artwork.py         卡片渲染与背景作品选择
 │  └─ holiday.py         联网节假日数据更新与查询
 pixiv/
-│  ├─ search.py          Lolicon 主源与 Pixiv 搜索/推荐回退流程
+│  ├─ search.py          可选 Lolicon/Pixiv 优先级与双向请求回退流程
 │  ├─ delivery.py        消息发送错误处理
 │  ├─ filters.py         普通分级、漫画和安全策略过滤
 │  ├─ safety.py          内置安全词与文本规范化
@@ -85,7 +85,7 @@ python -m pytest -q tests
 
 `SessionSafetyService` 分别维护 `group_content_safety_policies` 与 `private_content_safety_policies` 两个配置命名空间。旧 `group_content_safety` SQLite 表只作为群策略的一次性迁移来源；配置保存成功后才备份并将数据库 schema 收敛回 v2，同时永久保留旧表与历史行；保存或收敛失败时保留 v3。新建 v2 数据库不创建旧表。私聊写入不会修改群配置或迁移标记，任一作用域保存失败只回滚该作用域。
 
-每次搜索、签到背景选择、日历背景或已保存在线背景恢复时，入口只解析一次不可变 `ContentSafetyPolicy`，随后传给 Lolicon 取源、Pixiv 回退、本地候选过滤和最终复核。群消息只查询群 ID，私聊只查询发送者用户 ID；缺失记录、无效 ID 或读取异常均使用严格策略，且不跨作用域回退。管理页黑名单缩略图没有会话上下文，因此始终采用严格策略。
+每次搜索、签到背景选择、日历背景或已保存在线背景恢复时，入口只解析一次不可变 `ContentSafetyPolicy`，随后传给 Lolicon/Pixiv 取源、本地候选过滤和最终复核。群消息只查询群 ID，私聊只查询发送者用户 ID；缺失记录、无效 ID 或读取异常均使用严格策略，且不跨作用域回退。管理页黑名单缩略图没有会话上下文，因此始终采用严格策略。
 
 会话策略服务隔离群聊与私聊命名空间，通用策略身份同时包含会话类型和标识。签到卡单独使用实际生效的普通分级开关、屏蔽词与作品黑名单生成缓存指纹，不纳入群号或私聊用户标识；未生效的独立列表不影响该指纹。
 
@@ -101,9 +101,9 @@ python -m pytest -q tests
 
 ## 发图送达状态
 
-`pixiv/delivery.py` 的 `send_once()` 返回四种状态：消息构建失败为 `FAILED`；调用正常返回为 `CONFIRMED`，包括没有 `message_id` 的正常返回；发送异常链包含超时（异常类型、timeout/timed out/超时文本）为 `TIMED_OUT`；其余提交异常为 `UNKNOWN`。超时包括 OneBot 1200 回包中的 `Timeout: NTEvent … sendMsg`，不能仅凭 1200 判定超时。
+`pixiv/delivery.py` 的 `send_once()` 返回五种状态：消息构建失败为 `FAILED`；调用正常返回为 `CONFIRMED`，但 OneBot file 正常返回且无有效 `message_id` 时为 `ACCEPTED`（已受理，需保留文件）；发送异常链包含超时为 `TIMED_OUT`；其余提交异常为 `UNKNOWN`。超时按 `TimeoutError` 类型或 message/wording 中独立的 timeout/timed out/超时文本判断，先排除路径、URL 和无关回包字段；包括 OneBot 1200 回包中的 `Timeout: NTEvent … sendMsg`，不能仅凭 1200 判定超时。
 
-`search.py` 对 `CONFIRMED` 与 `TIMED_OUT` 均记录 normal 使用记录并结算金币；超时不补发，即使最终没有出图也扣费。`FAILED` 与构建期间取消释放未提交图片占用；`UNKNOWN` 与提交期间取消保留 normal_pending 占用，不扣费。OneBot 超时、未知及提交期间取消保留文件读取窗口。构建和发送异常只记日志，不补发异常提示；正常金币结算消息保留。
+`search.py` 对 `CONFIRMED`、`ACCEPTED` 与 `TIMED_OUT` 均记录 normal 使用记录并结算金币；超时不补发，即使最终没有出图也扣费。`FAILED` 与构建期间取消释放未提交图片占用；`UNKNOWN` 与提交期间取消保留 normal_pending 占用，不扣费。OneBot `ACCEPTED`、超时、未知及提交期间取消保留文件读取窗口。构建和发送异常只记日志，不补发异常提示；正常金币结算消息保留。
 
 异常日志只提取 `error_type`、`retcode`、`status`、脱敏 `message/wording`，并包含 `send_mode`、可用的作品 ID、`phase`、`delivery_status` 和 `duration_ms`。错误文本先截取前 2048 字符再脱敏，输出最多 512 字符，限制异常回包的正则处理开销与日志体积；地址、本地路径及 Windows UNC 共享路径、凭据和长数字标识会被遮蔽，不输出完整请求与回包。路径按盘符、UNC、file URI、位于词边界的根目录或点目录起点，以及带文件扩展名的相对路径识别；`NodeIKernelMsgService/sendMsg` 等服务名/方法名保留，不单凭标识内部的斜杠判定路径。file/path/filename 字段支持无引号的空格路径，以后续字段或分隔符为界；引号路径按对应引号闭合，兼容转义斜杠和相对路径后的方括号。编码切换、使用记录、去重占位释放失败分别记录，不重发已确认图片。
 
@@ -111,11 +111,11 @@ python -m pytest -q tests
 
 `send_once()` 在 aiocqhttp 且事件存在 bot 时直接调用已有客户端的 call_action()，不另建连接。单图调用 send_group_msg/send_private_msg，合并转发调用 send_group_forward_msg/send_private_forward_msg，保留 self_id 路由。默认 file URI；构建或提交明确报文件不存在、权限不足、ENOENT/copyfile 等读取问题时，记录本次异常和 file → base64 切换，再重建同一消息尝试一次。第二次失败也独立记录；发送超时优先分类，绝不触发换编码。其他平台继续使用框架链路。
 
-`onebot_image_transport` 已从 schema 和配置映射移除。分组迁移入口清理根配置及 pixiv_source 内的旧键并保存；保存失败恢复原值，运行时始终使用自动策略。
+`onebot_image_transport` 已从 schema 和配置映射移除，真实 AstrBot 加载时按 schema 先裁剪旧键，运行时不依赖其存在。`_cleanup_retired_transport_config()` 只处理未经框架裁剪的残留配置（例如直接传入 dict），删除后尝试保存，保存失败恢复原值；不承担框架裁剪前的迁移，也不能恢复已被裁剪的值。
 
 ## 签到卡发送
 
-每日签到（`checkin/application.py`）和付费背景刷新（`checkin/shop.py`）复用 `send_once()`。正常返回或发送超时均继续完成背景使用记录，不补发纯文字，不撤销背景持久化、卡片缓存或去重占用。签到卡在当天缓存中保留，不使用普通 /p 临时文件的 600 秒删除策略；付费刷新未启用卡片缓存时，超时的渲染文件交给下载器延迟清理。仅编码时读取的背景源下载文件仍正常清理，不影响已内联的背景与卡片。
+每日签到（`checkin/application.py`）和付费背景刷新（`checkin/shop.py`）复用 `send_once()`。正常返回或发送超时均继续完成背景使用记录，不补发纯文字，不撤销背景持久化、卡片缓存或去重占用。签到卡在当天缓存中保留，不使用普通 /p 临时文件的 600 秒删除策略；付费刷新未启用卡片缓存时，`ACCEPTED` 或超时的渲染文件交给下载器延迟清理；这是框架 T2I 临时产物，不纳入插件 temp/get_px_* 的重启清理恢复，存活时间仍受框架临时目录策略影响。仅编码时读取的背景源下载文件仍正常清理，不影响已内联的背景与卡片。
 
 明确文件读取失败时使用共享的 file → base64 重试和脱敏诊断日志；发送日志使用 `feature=checkin/checkin_refresh` 标识来源，不在共享发送层声明扣费。非超时发送失败保留原来的纯文字回退与清理流程。奖励在签到写入时发放，付费刷新在发送前完成购买，均不因发送超时回滚。签到测试预览、主题预览及日历发送不在这条持久化卡片流程内。
 
@@ -123,7 +123,7 @@ python -m pytest -q tests
 
 initialize 获取插件数据目录后，将 `data_dir / "temp"` 注入共享 ImageDownloader。下载器直接在该目录创建 `get_px_*` 文件，未初始化时明确报错，不回退系统临时目录。/p、背景、头像与黑名单缩略图共用该下载器；卡片缓存继续使用 checkin_card_cache，框架 T2I 自行产生的临时文件不在此变更范围。
 
-确认成功与确定构建失败仍及时清理文件；超时、未知或提交期间取消的 OneBot 发送保留 600 秒，与 Pages 原有的最近10分钟保护保持一致。保留时更新 mtime，并由下载器持有延迟删除任务。close 取消任务但不提前删文件；initialize 在服务开始前扫描插件 temp 的 get_px_*，按 mtime 恢复剩余清理时间，已过期残余立即安排清理，未使用系统临时目录。Pages 仍可清理过期下载文件，不影响数据库。该时间窗口用于读取保护，不代表确认送达。
+带有效 `message_id` 的正常返回、base64 正常返回与确定构建失败仍及时清理文件；file 返回 `ACCEPTED`、超时、未知或提交期间取消的 OneBot 发送保留 600 秒，与 Pages 原有的最近10分钟保护保持一致。保留时更新 mtime，并由下载器持有延迟删除任务。close 取消任务但不提前删文件；initialize 在服务开始前扫描插件 temp 的 get_px_*，按 mtime 恢复剩余清理时间，已过期残余立即安排清理，未使用系统临时目录。Pages 仍可清理过期下载文件，不影响数据库。该时间窗口用于读取保护，不代表确认送达。
 
 ### OneBot 路径传输的跨用户读权限
 

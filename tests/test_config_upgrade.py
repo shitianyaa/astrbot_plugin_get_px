@@ -6,7 +6,7 @@ import json
 from pathlib import Path
 import sys
 from types import SimpleNamespace
-from unittest.mock import AsyncMock
+from unittest.mock import AsyncMock, Mock
 
 import pytest
 from astrbot.api import AstrBotConfig
@@ -27,7 +27,7 @@ finally:
 
 SCHEMA = json.loads((ROOT / "_conf_schema.json").read_text(encoding="utf-8"))
 FIXTURE = ROOT / "tests/fixtures/config_v3_8_0_grouped.json"
-RETIRED = {"dedupe_ttl_hours", "dedupe_days_migrated", "_grouped_config_migrated"}
+RETIRED = {"dedupe_ttl_hours", "dedupe_days_migrated", "_grouped_config_migrated", "lolicon_api_url"}
 
 
 def test_schema_contains_only_formal_groups_and_required_policy_marker():
@@ -47,7 +47,7 @@ async def test_v3_8_0_grouped_config_survives_framework_load_save_and_reload(tmp
     old = json.loads(FIXTURE.read_text(encoding="utf-8"))
     config = AstrBotConfig(config_path=str(path), schema=deepcopy(SCHEMA))
     expected = {
-        group: {key: old[group][key] for key in spec["items"]}
+        group: {key: old[group].get(key, field["default"]) for key, field in spec["items"].items()}
         for group, spec in SCHEMA.items()
     }
     assert dict(config) == expected
@@ -78,7 +78,10 @@ async def test_v3_8_0_grouped_config_survives_framework_load_save_and_reload(tmp
     await service.upsert_group_policy(
         "10002", general_only_enabled=True, builtin_terms_enabled=True
     )
+    config["pixiv_source"]["preferred_image_source"] = "Pixiv"
+    config.save_config()
     reloaded = AstrBotConfig(config_path=str(path), schema=deepcopy(SCHEMA))
+    assert reloaded["pixiv_source"]["preferred_image_source"] == "Pixiv"
     reopened = SessionSafetyService(reloaded)
     await reopened.initialize(legacy)
     assert await reopened.get_group_policy("10001") == group_before
@@ -119,3 +122,22 @@ def test_new_install_has_grouped_defaults_without_retired_keys(tmp_path):
     assert config["content_dedupe"][CONFIG_KEY] == []
     assert config["content_dedupe"][PRIVATE_CONFIG_KEY] == []
     assert config["runtime"]["request_timeout"] == 30.0
+    assert config["pixiv_source"]["preferred_image_source"] == "Lolicon"
+    assert SCHEMA["pixiv_source"]["items"]["preferred_image_source"]["options"] == ["Lolicon", "Pixiv"]
+
+
+def test_init_client_ignores_retired_url_and_reuses_pixiv_client(monkeypatch):
+    plugin = object.__new__(GetPxPlugin)
+    plugin.config = {"pixiv_source": {
+        "lolicon_api_url": "https://example.invalid/setu/v2",
+        "pixiv_refresh_token": "fixture-token",
+    }}
+    pixiv = SimpleNamespace()
+    factory = Mock(return_value=pixiv)
+    monkeypatch.setattr(sys.modules[GetPxPlugin.__module__], "PixivClient", factory)
+    plugin._init_client()
+    lolicon = plugin.lolicon_client
+    plugin._init_client()
+    assert plugin.lolicon_client is lolicon and lolicon.available
+    assert plugin.client is pixiv
+    factory.assert_called_once_with(refresh_token="fixture-token", request_timeout=30.0)

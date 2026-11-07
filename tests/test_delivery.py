@@ -144,7 +144,7 @@ async def test_automatic_onebot_delivery(tmp_path, group, forward, outcome):
     content = [Plain("fixture"), Image.fromFileSystem(str(path))]
     if forward:
         content = [Nodes([Node(uin="123", name="fixture", content=content)])]
-    missing = ActionFailed({"status": "failed", "retcode": 1200, "message": "ENOENT copyfile"})
+    missing = ActionFailed({"status": "failed", "retcode": 1200, "message": "ENOENT copyfile /shared/timeout/image.jpg"})
     timeout = ActionFailed({"status": "failed", "retcode": 1200, "message": "Timeout: NTEvent NodeIKernelMsgService/sendMsg"})
     side_effect = {
         "success": [dict(message_id=1)], "empty": [None],
@@ -158,6 +158,7 @@ async def test_automatic_onebot_delivery(tmp_path, group, forward, outcome):
         bot=SimpleNamespace(call_action=AsyncMock(side_effect=side_effect)), send=AsyncMock(),
     )
     expected = (DeliveryStatus.TIMED_OUT if outcome == "timeout" else
+                DeliveryStatus.ACCEPTED if outcome == "empty" else
                 DeliveryStatus.UNKNOWN if outcome in ("retry_error", "rejected") else DeliveryStatus.CONFIRMED)
     with patch("astrbot_plugin_get_px.pixiv.delivery.logger") as logger:
         assert await send_once(event, content, context="test") is expected
@@ -264,6 +265,10 @@ def test_protocol_error_details_are_allowlisted_and_redacted():
     ("Timeout: NTEvent sendMsg ENOENT copyfile", True),
     ("retcode=1200 res_id failed", False),
     ("operation timed out", True),
+    ("x" * 2100 + " operation timed out", True),
+    (r"ENOENT copyfile C:\shared\timeout\image.jpg", False),
+    ("ENOENT copyfile /shared/timeout/image.jpg", False),
+    ("ENOENT copyfile /shared/超时/image.jpg", False),
 ])
 def test_timeout_classification_includes_wrapped_cause(message, expected):
     from astrbot_plugin_get_px.pixiv.delivery import _is_timeout

@@ -359,9 +359,9 @@ class Issue24CacheTest(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(event.sent, [])
             plugin._release_checkin_background_claim.assert_not_awaited()
 
-    async def test_refresh_timeout_keeps_new_background_charge_and_card(self):
-        for cache_enabled in (True, False):
-            with self.subTest(cache=cache_enabled), tempfile.TemporaryDirectory() as tmp:
+    async def test_refresh_timeout_or_empty_receipt_keeps_new_background_charge_and_card(self):
+        for cache_enabled, empty_receipt in ((True, False), (False, False), (False, True)):
+            with self.subTest(cache=cache_enabled, empty_receipt=empty_receipt), tempfile.TemporaryDirectory() as tmp:
                 plugin, _ = self.setup_plugin(tmp)
                 await self.send_card(plugin, "456")
                 await plugin.checkin_store.update_checkin_member(
@@ -378,7 +378,9 @@ class Issue24CacheTest(unittest.IsolatedAsyncioTestCase):
                 if not cache_enabled:
                     plugin.checkin_cache = None
                 event = _FakeEvent(group_id="456")
-                event.bot = SimpleNamespace(call_action=AsyncMock(side_effect=TimeoutError()))
+                event.bot = SimpleNamespace(call_action=AsyncMock(
+                    return_value=None, side_effect=None if empty_receipt else TimeoutError(),
+                ))
                 self.assertEqual(await _collect(plugin._handle_refresh_checkin_background(event)), [])
                 event.bot.call_action.assert_awaited_once()
                 self.assertEqual(event.sent, [])

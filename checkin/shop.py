@@ -498,10 +498,10 @@ class CheckinShopMixin:
             if background.pixiv_caption:
                 content.append(Plain(background.pixiv_caption))
             delivery_status = await send_once(event, content, context="feature=checkin_refresh")
-            if delivery_status not in (DeliveryStatus.CONFIRMED, DeliveryStatus.TIMED_OUT):
+            if delivery_status not in (DeliveryStatus.CONFIRMED, DeliveryStatus.ACCEPTED, DeliveryStatus.TIMED_OUT):
                 raise RuntimeError("刷新签到卡发送未完成")
             claim_held = False
-            if delivery_status is DeliveryStatus.TIMED_OUT and cache is None:
+            if delivery_status in (DeliveryStatus.ACCEPTED, DeliveryStatus.TIMED_OUT) and cache is None:
                 self.downloader.defer_cleanup(str(card_path))
                 card_path = None
             try:
