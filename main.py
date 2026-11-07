@@ -36,7 +36,6 @@ from pathlib import Path
 import re
 import time
 import weakref
-from copy import deepcopy
 
 from astrbot.api import logger
 from astrbot.api.all import AstrBotConfig, Image
@@ -68,7 +67,7 @@ from .plugin_api import PluginWebApi
 
 LOG_PREFIX = "[GetPx]"
 PLUGIN_NAME = "astrbot_plugin_get_px"
-PLUGIN_VERSION = "v3.8.6"
+PLUGIN_VERSION = "v3.8.7"
 WEB_INTERNAL_ERROR_MESSAGE = "服务内部错误，请稍后重试"
 
 AUTO_TRIGGER_PATTERN = r"^/?(来\s*(.*?)(份|个|张|点))(.*?)(福利|色|瑟|涩|塞)?图$"
@@ -144,8 +143,8 @@ class GetPxPlugin(
         data_dir = StarTools.get_data_dir(PLUGIN_NAME)
         self.data_dir = Path(data_dir)
         self.downloader.temp_dir = self.data_dir / "temp"
-        self._migrate_grouped_config()
-        dedupe_days = self._migrate_dedupe_config()
+        self._cleanup_retired_transport_config()
+        dedupe_days = self._cfg_int("dedupe_days", 1, 0, 7)
         self._init_client()
         # SQLite DDL/迁移是同步操作，放入线程池避免阻塞事件循环
         self.image_index = await asyncio.to_thread(
@@ -711,8 +710,7 @@ class GetPxPlugin(
 
     # ──────────────────────────────────────────────────────────────
     # 配置读取（带类型校验）
-    # ponytail: schema 改 object 分组后存盘为嵌套，_cfg_get 先遍历分组取值、
-    # 找不到再回退扁平 key（兼容旧扁平配置 / 测试用的扁平 dict）。
+    # 正式配置按六个分组加载；读取层保留简单 dict 支持，不承担旧配置迁移。
     # ──────────────────────────────────────────────────────────────
 
     _CONFIG_GROUP_KEYS = (
@@ -723,51 +721,6 @@ class GetPxPlugin(
         "checkin_shop",
         "runtime",
     )
-
-    # 扁平 key -> 分组。用于把旧扁平配置迁移到 object 嵌套结构，
-    # 让 WebUI 配置页能读到用户已配的值（WebUI 按 schema 结构读，不走 _cfg_get 兑底）。
-    _CONFIG_KEY_TO_GROUP = {
-        "pixiv_refresh_token": "pixiv_source",
-        "lolicon_api_url": "pixiv_source",
-        "lolicon_exclude_ai": "pixiv_source",
-        "lolicon_image_proxy_origins": "pixiv_source",
-        "max_count": "pixiv_source",
-        "p_coin_cost": "pixiv_source",
-        "image_quality": "pixiv_source",
-        "auto_downgrade_original_mb": "pixiv_source",
-        "forward_threshold": "pixiv_source",
-        "auto_trigger_enabled": "pixiv_source",
-        "filter_manga": "content_dedupe",
-        "dedupe_days": "content_dedupe",
-        "dedupe_ttl_hours": "content_dedupe",
-        "dedupe_days_migrated": "content_dedupe",
-        "group_content_safety_policies": "content_dedupe",
-        "private_content_safety_policies": "content_dedupe",
-        "group_content_safety_policies_migrated": "content_dedupe",
-        "checkin_omnidraw_link_enabled": "checkin_omnidraw",
-        "checkin_omnidraw_quota_cost": "checkin_omnidraw",
-        "checkin_omnidraw_quota_default": "checkin_omnidraw",
-        "checkin_omnidraw_quota_daily_max": "checkin_omnidraw",
-        "checkin_enabled": "checkin_basic",
-        "checkin_bot_name": "checkin_basic",
-        "checkin_card_quality_tier": "checkin_basic",
-        "checkin_avatar_enabled": "checkin_basic",
-        "checkin_greeting_mode": "checkin_basic",
-        "checkin_hitokoto_categories": "checkin_basic",
-        "checkin_ai_greeting_provider_id": "checkin_basic",
-        "checkin_ai_greeting_prompt": "checkin_basic",
-        "checkin_ai_greeting_timeout": "checkin_basic",
-        "checkin_hitokoto_timeout": "checkin_basic",
-        "checkin_background_mode": "checkin_basic",
-        "checkin_background_tag": "checkin_basic",
-        "checkin_custom_background": "checkin_basic",
-        "checkin_background_refresh_cost": "checkin_shop",
-        "checkin_theme_cost": "checkin_shop",
-        "request_timeout": "runtime",
-        "rate_limit_seconds": "runtime",
-        "webui_font_source": "runtime",
-        "_grouped_config_migrated": "runtime",
-    }
 
     def _cfg_get(self, key: str, default=None):
         config = getattr(self, "config", None)
@@ -811,26 +764,8 @@ class GetPxPlugin(
         except Exception:
             return False
 
-    def _cfg_set(self, key: str, value) -> None:
-        config = getattr(self, "config", None)
-        if config is None:
-            return
-        for group_key in self._CONFIG_GROUP_KEYS:
-            try:
-                group = config.get(group_key)
-            except Exception:
-                group = None
-            if isinstance(group, dict) and key in group:
-                group[key] = value
-                return
-        config[key] = value
-
-    def _migrate_grouped_config(self) -> None:
-        """把旧扁平配置值搬到 object 分组嵌套结构，避免 WebUI 配置页显示为空。
-
-        WebUI 按 schema 结构读 config[组][键]，旧扁平值不在组里会被显示为默认值，
-        保存后还可能被 AstrBot 当成“schema 不存在”的键清理掉。这里把扁平值搬进
-        对应组，留 _grouped_config_migrated 标志避免重复搬。"""
+    def _cleanup_retired_transport_config(self) -> None:
+        """清理已停用的传输开关；旧扁平配置迁移已结束。"""
         config = getattr(self, "config", None)
         if config is None:
             return
@@ -851,145 +786,6 @@ class GetPxPlugin(
                 for container, value in removed:
                     container[retired_key] = value
                 logger.warning(f"{LOG_PREFIX} 图片传输配置迁移保存失败: error_type={type(exc).__name__}")
-        policy_keys = {"group_content_safety_policies",
-                       "private_content_safety_policies",
-                       "group_content_safety_policies_migrated"}
-        if self._cfg_bool("_grouped_config_migrated", False):
-            # Repair old invisible policy templates transactionally. AstrBot may
-            # pre-materialize schema defaults, or omit the three keys entirely.
-            group_present = isinstance(config.get("content_dedupe"), dict)
-            group = config.get("content_dedupe") if group_present else None
-            nested_snapshot = {}
-            if group_present:
-                for key in policy_keys:
-                    present = key in group
-                    value = group.get(key)
-                    nested_snapshot[key] = (present, value, deepcopy(value))
-            runtime = config.get("runtime")
-            runtime_marker_present = isinstance(runtime, dict) and "_grouped_config_migrated" in runtime
-            runtime_marker = (runtime.get("_grouped_config_migrated") if runtime_marker_present else None)
-            tracked = (*policy_keys, "_grouped_config_migrated")
-            root_snapshot = {
-                key: (key in config, config.get(key), deepcopy(config.get(key)))
-                for key in tracked
-            }
-            moved = []
-            try:
-                if not group_present:
-                    group = {}
-                    config["content_dedupe"] = group
-                for key in policy_keys:
-                    legacy = config.get(key)
-                    nested = group.get(key)
-                    if key == "group_content_safety_policies_migrated":
-                        if bool(legacy) and not bool(nested):
-                            group[key] = True
-                            moved.append(key)
-                    elif (not nested and isinstance(legacy, list) and
-                          any(isinstance(item, dict) and item.get("__template_key")
-                              for item in legacy)):
-                        group[key] = deepcopy(legacy)
-                        moved.append(key)
-                if moved:
-                    saver = getattr(config, "save_config", None)
-                    if not callable(saver):
-                        raise RuntimeError("config.save_config is required")
-                    saver()
-            except Exception as exc:
-                if group_present:
-                    for key, (present, value, value_copy) in nested_snapshot.items():
-                        if present:
-                            current = group.get(key)
-                            if isinstance(value, list):
-                                value[:] = deepcopy(value_copy)
-                                group[key] = value
-                            else:
-                                group[key] = deepcopy(value_copy)
-                        else:
-                            group.pop(key, None)
-                else:
-                    config.pop("content_dedupe", None)
-                if isinstance(runtime, dict):
-                    if runtime_marker_present:
-                        runtime["_grouped_config_migrated"] = runtime_marker
-                    else:
-                        runtime.pop("_grouped_config_migrated", None)
-                for key, (present, value, value_copy) in root_snapshot.items():
-                    if present:
-                        current = config.get(key)
-                        if isinstance(current, list) and isinstance(value, list):
-                            current[:] = deepcopy(value_copy)
-                            config[key] = current
-                        else:
-                            config[key] = deepcopy(value_copy)
-                    else:
-                        config.pop(key, None)
-                logger.warning(f"{LOG_PREFIX} 会话策略兼容迁移保存失败: error_type={type(exc).__name__}")
-            return
-        moved = []
-        for key, group_key in self._CONFIG_KEY_TO_GROUP.items():
-            if key == "_grouped_config_migrated":
-                continue
-            try:
-                flat_val = config.get(key, None)
-            except Exception:
-                flat_val = None
-            if flat_val is None:
-                continue
-            group = config.get(group_key)
-            if not isinstance(group, dict):
-                group = {}
-                config[group_key] = group
-            # 策略模板同时有 invisible 扁平兼容键；仅在嵌套值为空时
-            # 迁移非空旧值，避免框架默认的 [] 覆盖现有分组策略。
-            if key in policy_keys:
-                if group.get(key) and not flat_val:
-                    continue
-            group[key] = flat_val
-            moved.append(key)
-        self._cfg_set("_grouped_config_migrated", True)
-        save_config = getattr(config, "save_config", None)
-        persisted = False
-        if callable(save_config):
-            try:
-                save_config()
-                persisted = True
-            except Exception as exc:
-                logger.warning(
-                    f"{LOG_PREFIX} 分组配置迁移保存失败: "
-                    f"error_type={type(exc).__name__}"
-                )
-        logger.info(
-            f"{LOG_PREFIX} 已迁移扁平配置到分组: "
-            f"count={len(moved)} persisted={persisted}"
-        )
-
-    def _migrate_dedupe_config(self) -> int:
-        config = getattr(self, "config", None)
-        if config is None:
-            return 1
-        if not self._cfg_bool("dedupe_days_migrated", False):
-            legacy_value = self._cfg_float("dedupe_ttl_hours", 24.0, 0.0, 24.0)
-            self._cfg_set("dedupe_days", 0 if legacy_value <= 0 else 1)
-            self._cfg_set("dedupe_days_migrated", True)
-            persisted = False
-            save_config = getattr(config, "save_config", None)
-            if callable(save_config):
-                try:
-                    save_config()
-                    persisted = True
-                except Exception as exc:
-                    logger.warning(
-                        f"{LOG_PREFIX} 保存去重配置迁移结果失败: "
-                        f"error_type={type(exc).__name__}"
-                    )
-            logger.info(
-                f"{LOG_PREFIX} 已迁移旧去重配置: "
-                f"dedupe_ttl_hours={legacy_value:g} -> "
-                f"dedupe_days={self._cfg_int('dedupe_days', 1, 0, 7)}, "
-                f"persisted={persisted}"
-            )
-        return self._cfg_int("dedupe_days", 1, 0, 7)
 
     def _cfg_str(self, key: str, default: str = "") -> str:
         val = self._cfg_get(key, default)

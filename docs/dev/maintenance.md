@@ -127,8 +127,8 @@
 
 - 群聊与私聊策略是配置文件中的 config-backed 模板列表，字段定义必须同步维护 `_conf_schema.json`、README、配置文档和 WebUI。
 - 修改签到数据库 schema 时递增 `CHECKIN_DB_SCHEMA_VERSION`，兼容已知旧版本，并在执行 DDL 前使用 SQLite backup API 写入 `checkin_migration_backups/`。临时配置迁移表不递增正式版本；schema3 收敛必须在配置保存成功后备份并只更新 `user_version`，不得删除历史表或行。
-- 配置 schema 由 `pixiv_source`、`content_dedupe`、`checkin_omnidraw`、`checkin_basic`、`checkin_shop`、`runtime` 六组组成；旧扁平键通过 `_CONFIG_KEY_TO_GROUP` 迁移，内容安全策略模板正式位于 `content_dedupe.items`，顶层仅保留 invisible 兼容键。
-- 会话策略服务以根配置对象调用 `save_config()`，但优先读写 `content_dedupe` 嵌套容器；迁移、重载、批量保存失败时必须恢复嵌套对象身份和兼容键内容。
+- 配置 schema 顶层仅定义 `pixiv_source`、`content_dedupe`、`checkin_omnidraw`、`checkin_basic`、`checkin_shop`、`runtime` 六组，不复制旧扁平兼容键；升级基线是已完成迁移的 v3.8.0。旧小时去重与分组迁移已结束，SQLite 群策略迁移仍保留。
+- 会话策略服务以根配置对象调用 `save_config()`，正式读写 `content_dedupe` 嵌套容器；迁移、重载、批量保存失败时必须恢复嵌套对象及列表身份。分组空列表不得恢复已停用的顶层策略。
 - 内容安全调用链必须复用一次请求解析得到的 `ContentSafetyPolicy`：策略开启“启用内置安全词”时使用内置安全词、内容安全页的全局自定义屏蔽词与作品 ID 黑名单，并忽略当前会话的独立列表；关闭时停止前三类全局约束，仅使用当前会话的独立自定义屏蔽词与独立作品 ID 黑名单。
 - 独立列表分别归属于每条群聊或私聊策略；批量应用只覆盖对应字段、只作用于当前已有策略，并在一次保存中完成，任一失败都回滚本次批量变更。
 - 没有会话上下文、策略缺失或读取策略异常时严格默认普通分级与内置安全词均开启。

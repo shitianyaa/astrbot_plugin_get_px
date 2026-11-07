@@ -7,7 +7,7 @@
 一个面向 AstrBot 的安全发图与签到插件：Lolicon 优先取图，失败时可用 Pixiv refresh_token 回退，并在 WebUI 管理群排行、成员数值、内容安全和签到数据。
 
 ![AstrBot](https://img.shields.io/badge/AstrBot-plugin-5865f2?style=flat-square)
-![Version](https://img.shields.io/badge/version-3.8.6-22c55e?style=flat-square)
+![Version](https://img.shields.io/badge/version-3.8.7-22c55e?style=flat-square)
 ![Python](https://img.shields.io/badge/Python-3.10%2B-3776ab?style=flat-square)
 ![Platform](https://img.shields.io/badge/platform-OneBot%20%2F%20aiocqhttp-f97316?style=flat-square)
 ![License](https://img.shields.io/badge/license-MIT-3b82f6?style=flat-square)
@@ -89,18 +89,20 @@
 /签到帮助
 ```
 
-默认分支仍不提供用于 Pixiv 登录、API 请求或图片下载的 HTTP/SOCKS 出站代理；这类网络代理请使用 [`proxy` 分支](https://github.com/shitianyaa/astrbot_plugin_get_px/tree/proxy)。如果只是 Lolicon 返回的图片地址不可用，可在 `lolicon_image_proxy_origins` 中按行填写图片反代 origin，插件只改写 Lolicon 图片 URL，不代理 API 或 Pixiv 登录。
+标准版本不提供用于 Pixiv 登录、API 请求或图片下载的 HTTP/SOCKS 出站代理；这类网络代理请使用 [`proxy` 分支](https://github.com/shitianyaa/astrbot_plugin_get_px/tree/proxy)。如果只是 Lolicon 返回的图片地址不可用，可在 `lolicon_image_proxy_origins` 中按行填写图片反代 origin，插件只改写 Lolicon 图片 URL，不代理 API 或 Pixiv 登录。
 
-**v3.8.6 升级说明：** 已发布版本包含签到大背景、头像渲染和跨群签到缓存修复，详见 [v3.8.6 更新日志](CHANGELOG.md#v386-2026-11-06)。签到缓存可能在升级后重建一次，不重复发放奖励，不修改数据库结构。
-
-**当前分支待发布变更：** OneBot 发图默认使用本地路径，仅在明确文件读取失败时回退到 base64 编码重试一次，旧 `onebot_image_transport` 不再需要设置。普通发图调用正常返回或发送超时均结算，超时不重发；签到与付费刷新卡片发送超时保留背景、缓存和占用。分容器部署建议共享相同绝对路径，详见 [OneBot 图片发送](#onebot-图片发送) 和 [待发布变更](CHANGELOG.md#待发布)。
+**v3.8.7 升级说明：** OneBot 发图默认使用本地路径，仅在明确文件读取失败时回退到 base64 编码重试一次，无需设置 `onebot_image_transport`。普通发图调用正常返回或发送超时均结算，超时不重发，即使最终未出图也扣费；签到与付费刷新卡片超时保留背景、缓存和占用。配置以已完成迁移的 v3.8.0 为升级基线，不再保留旧扁平兼容键；升级前请备份并阅读下方注意事项。详见 [OneBot 图片发送](#onebot-图片发送) 和 [v3.8.7 更新日志](CHANGELOG.md#v387-2026-11-07)。
 
 > [!WARNING]
-> **跨版本升级与签到数据**
+> **跨版本升级与配置／签到数据**
 >
-> 从旧版本直接升级后如果发现签到数据缺失，请先安装 [v3.0.0](https://github.com/shitianyaa/astrbot_plugin_get_px/releases/tag/v3.0.0)，启动插件一次并确认旧签到数据迁移完成，再升级到最新版本。操作前请备份 AstrBot 插件数据目录中的 `checkin.sqlite3` 和 `checkin_backups/`，不要删除或覆盖原数据目录。
+> - **先备份**插件配置 JSON 和数据目录，包括 `checkin.sqlite3`、`image_index.sqlite3` 与 `checkin_backups/`；不要删除或覆盖原数据目录。
+> - **v3.8.0 及之后版本**：确认自定义配置、群聊／私聊策略已保存到六个分组后可直接升级。v3.8.7 移除旧扁平兼容键及旧去重迁移字段，AstrBot 加载 schema 时可能删除旧键，最新版无法在裁剪后补迁移。
+> - **早于 v3.8.0**：先安装 [v3.8.0](https://github.com/shitianyaa/astrbot_plugin_get_px/releases/tag/v3.8.0)，成功启动并确认分组配置保存，再升级到 v3.8.7。
+> - **v2.8.x 或已有数据但数据库没有 schema 版本号**：先使用 [v3.0.0](https://github.com/shitianyaa/astrbot_plugin_get_px/releases/tag/v3.0.0) 完成签到数据迁移，再经过 v3.8.0 完成配置迁移；不要直接跳到最新版。
+> - **数据库 schema3**：v3.8.7 保留旧群策略迁移。插件先保存配置，再备份数据库并将 `user_version` 收敛为 2，保留 `group_content_safety` 表与历史行；配置保存或备份失败时不修改旧数据库。
 >
-> 若日志出现 `unsupported check-in database schema: 3`，请使用包含 schema3 兼容收敛逻辑的版本启动一次。插件会先把旧群策略迁移到配置并保存，随后备份数据库、仅将 `user_version` 收敛为 2，并保留 `group_content_safety` 表及历史行；配置保存或备份失败时不会修改旧数据库。
+> 签到卡缓存可能在升级后重建，不重复发奖，也不会因此清空签到记录。
 
 > [!IMPORTANT]
 > **关于 T2I 渲染服务**
@@ -215,7 +217,7 @@ base64 是图片编码，与 AstrBot 4.27.3 的 OneBot 默认发图编码相同�
 | `pixiv_refresh_token` | 可选，作为 Lolicon 失败后的 Pixiv 回退 |
 | `image_quality` | 省流量用 `large`，优先原图用 `original` |
 | `forward_threshold` | 仅 aiocqhttp：`0` 始终合并转发；`1` 表示超过 1 张图才合并转发 |
-| `checkin_card_quality_tier` | 默认 `省流量`；日常推荐 `清晰`，高分辨率显示可选 `极致`；签到卡与日历完全同档（省流量 1600×900、清晰 2080×1170、极致 2880×1620） |
+| `checkin_card_quality_tier` | 默认 `省流量`，日常推荐 `清晰`；签到卡三档为 960×540／1248×702／1728×972，日历三档为 1600×900／2080×1170／2880×1620 |
 | `dedupe_days` | 默认 `1`，只去重北京时间当天；`2–7` 扩大自然日窗口，`0` 关闭；不同会话、标签和图源仍隔离 |
 | `lolicon_image_proxy_origins` | 图片地址无法访问时再配置；每行一个 http(s) origin |
 | `auto_trigger_enabled` | 需要「来张图」时再开 |
@@ -254,9 +256,9 @@ WebUI 配置页按以下 6 组折叠展示，分组细节与维护规则见 [doc
 | `checkin_background_tag` | 签到背景标签；留空时 Lolicon 随机取图，失败后使用 Pixiv 推荐作品 | 空 |
 | `checkin_custom_background` | 本地图片路径；默认主题按竖向作品相框完整显示 | 空 |
 | `checkin_avatar_enabled` | 签到卡片显示用户头像 | `true` |
-| `checkin_card_quality_tier` | 签到卡画质：`省流量` / `清晰` / `极致`；签到日历输出分辨率与背景画质完全跟随该档位；预览和刷新背景立即生效，普通重复签到保持当天档位 | `省流量` |
+| `checkin_card_quality_tier` | 签到卡画质：`省流量` / `清晰` / `极致`；日历使用同名档位，但输出尺寸不同；预览和刷新背景立即生效，普通重复签到保持当天档位 | `省流量` |
 | `checkin_greeting_mode` | 签到问候来源：`local` / `hitokoto` / `ai` | `hitokoto` |
-| `checkin_hitokoto_categories` | 一言类型中文多选；选择”全部”或留空时从全部分类随机 | `全部` |
+| `checkin_hitokoto_categories` | 一言类型中文多选；选择“全部”或留空时从全部分类随机 | `全部` |
 | `checkin_ai_greeting_provider_id` | 签到问候文本模型；留空时尝试当前会话模型，仍不可用则使用本地文案 | 空 |
 | `checkin_ai_greeting_prompt` | 自定义角色和语气；固定安全约束由插件以 system prompt 追加 | 见配置页 |
 | `checkin_ai_greeting_timeout` | 单次问候模型调用超时秒数；失败后回退本地文案 | `8.0` |

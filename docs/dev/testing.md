@@ -246,6 +246,16 @@ python -m pytest -q tests/test_checkin_cache.py tests/test_checkin_calendar.py t
 
 `tests/test_delivery.py` 覆盖 POSIX file 序列化设置 `0644`、Windows 与 base64 不改权限、合并转发嵌套图片，以及 chmod 权限失败记录构建错误后切换 base64。真实 mkstemp `0600→0644` 断言仅在 POSIX 执行，Windows 明确跳过；跨容器不同 UID 的读取仍需部署端验证。
 
+## 发布信息回归
+
+运行 `python -m pytest -q tests/test_release_metadata.py`，核对 metadata、运行时常量、README 徽章、CHANGELOG 首个正式版本及日期一致，更新日志链接指向对应版本，用户和项目文档没有分支临时措辞。版本段前插入“待发布”标题会导致测试失败，不再跳过该标题继续匹配历史版本。发布触发与风险见 [发布前检查](contributing.md#发布前检查)。
+
+## 配置升级回归
+
+运行 `python -m pytest -q tests/test_config_upgrade.py tests/test_group_safety_config.py tests/test_checkin_group_safety.py`。`tests/fixtures/config_v3_8_0_grouped.json` 是按 v3.8.0 分组格式构造的合成配置，不含用户数据。使用已安装 AstrBot 的真实 `AstrBotConfig` 加载、裁剪、保存、重载，核对六组自定义值、去重天数、群／私聊独立列表与元数据保留，确认分组空列表不复活顶层旧策略，以及新安装默认值正常。
+
+这些用例不调用 v3.8.0 的旧迁移代码，不证明更早版本可直接升级；它们验证已完成分组迁移的配置与当前 schema 的兼容性。本机验证框架为 AstrBot 4.27.3，不替代生产升级或其他框架版本验证。
+
 ## OneBot 自动传输与超时结算
 
 运行 `python -m pytest -q tests/test_delivery.py tests/test_p_coin_cost.py tests/test_downloader.py`。覆盖群聊/私聊、单图/转发、空回执正常结算、1200 NTEvent 超时仍扣费且去重、不发异常提示、不重发、文件读取失败换 base64 的两次诊断日志、超时文件保留 600 秒、非超时未知状态及取消处理，以及旧传输配置清理/保存失败回滚。测试使用模拟协议回包，不代表 QQ 实际延迟验证。

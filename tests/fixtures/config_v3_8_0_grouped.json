@@ -1,0 +1,82 @@
+{
+  "pixiv_source": {
+    "pixiv_refresh_token": "fixture-token",
+    "lolicon_api_url": "https://example.invalid/setu/v2",
+    "lolicon_exclude_ai": false,
+    "lolicon_image_proxy_origins": "https://example.invalid",
+    "max_count": 9,
+    "p_coin_cost": 35,
+    "image_quality": "medium",
+    "auto_downgrade_original_mb": 0,
+    "forward_threshold": 0,
+    "auto_trigger_enabled": true
+  },
+  "content_dedupe": {
+    "filter_manga": false,
+    "dedupe_days": 7,
+    "dedupe_ttl_hours": 0,
+    "dedupe_days_migrated": true,
+    "group_content_safety_policies": [
+      {
+        "__template_key": "group_policy",
+        "group_id": "10001",
+        "general_only_enabled": false,
+        "builtin_terms_enabled": false,
+        "custom_terms": ["fixture-group"],
+        "blacklisted_illust_ids": ["11"],
+        "updated_at": "2026-09-12T00:00:00+00:00",
+        "updated_by": "web"
+      }
+    ],
+    "private_content_safety_policies": [
+      {
+        "__template_key": "private_policy",
+        "user_id": "20001",
+        "general_only_enabled": true,
+        "builtin_terms_enabled": false,
+        "custom_terms": ["fixture-private"],
+        "blacklisted_illust_ids": ["22"],
+        "updated_at": "2026-09-12T00:00:00+00:00",
+        "updated_by": "web"
+      }
+    ],
+    "group_content_safety_policies_migrated": true
+  },
+  "checkin_omnidraw": {
+    "checkin_omnidraw_link_enabled": true,
+    "checkin_omnidraw_quota_cost": 0,
+    "checkin_omnidraw_quota_default": 3,
+    "checkin_omnidraw_quota_daily_max": 0
+  },
+  "checkin_basic": {
+    "checkin_enabled": false,
+    "checkin_bot_name": "fixture-bot",
+    "checkin_card_quality_tier": "清晰",
+    "checkin_avatar_enabled": false,
+    "checkin_greeting_mode": "ai",
+    "checkin_hitokoto_categories": ["动画"],
+    "checkin_ai_greeting_provider_id": "fixture-provider",
+    "checkin_ai_greeting_prompt": "fixture-prompt",
+    "checkin_ai_greeting_timeout": 12,
+    "checkin_hitokoto_timeout": 9,
+    "checkin_background_mode": "custom",
+    "checkin_background_tag": "fixture-tag",
+    "checkin_custom_background": "fixture-background.jpg"
+  },
+  "checkin_shop": {
+    "checkin_background_refresh_cost": 0,
+    "checkin_theme_cost": 0
+  },
+  "runtime": {
+    "request_timeout": 55,
+    "rate_limit_seconds": 0,
+    "_grouped_config_migrated": true,
+    "webui_font_source": "none"
+  },
+  "pixiv_refresh_token": "stale-fixture-token",
+  "dedupe_days": 1,
+  "group_content_safety_policies": [],
+  "private_content_safety_policies": [],
+  "group_content_safety_policies_migrated": false,
+  "_grouped_config_migrated": true
+}

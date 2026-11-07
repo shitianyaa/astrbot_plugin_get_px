@@ -218,57 +218,27 @@ class SessionSafetyService:
 
     def _get_config(self, key: str, default=None):
         container = self._container()
-        if key in container:
-            nested = container.get(key, default)
-            # AstrBot may materialize invisible flat compatibility defaults.
-            # A non-empty legacy value still needs one-time migration into the
-            # grouped container when the nested template is empty.
-            if container is not self.config and not nested:
-                legacy = self.config.get(key, default)
-                if legacy:
-                    return legacy
-            return nested
-        return self.config.get(key, default)
+        # 分组配置是唯一正式来源；空列表不能恢复已停用的顶层策略。
+        return container.get(key, default)
 
     def _set_config(self, key: str, value) -> None:
         self._container()[key] = value
 
     def _snapshot_config(self):
         container = self._container()
-        return (
-            container,
-            deepcopy(container),
-            {key: (key in self.config, self.config.get(key),
-                   deepcopy(self.config.get(key))) for key in
-             (CONFIG_KEY, PRIVATE_CONFIG_KEY, MIGRATION_KEY)},
-        )
+        return container, deepcopy(container)
 
     def _restore_config(self, snapshot) -> None:
-        container, container_copy, root_snapshot = snapshot
-        existing_refs = {key: self.config.get(key) for key in
-                        (CONFIG_KEY, PRIVATE_CONFIG_KEY, MIGRATION_KEY)}
-        nested_refs = {key: container.get(key) for key in
-                       (CONFIG_KEY, PRIVATE_CONFIG_KEY, MIGRATION_KEY)}
+        container, container_copy = snapshot
+        refs = {key: container.get(key) for key in
+                (CONFIG_KEY, PRIVATE_CONFIG_KEY, MIGRATION_KEY)}
         restored = deepcopy(container_copy)
-        refs = nested_refs if container is not self.config else existing_refs
         for key, ref in refs.items():
             if isinstance(ref, list) and key in restored:
                 ref[:] = deepcopy(restored[key])
                 restored[key] = ref
         container.clear()
         container.update(restored)
-        if container is self.config:
-            return
-        for key, (present, value, value_copy) in root_snapshot.items():
-            if present:
-                current = self.config.get(key)
-                if isinstance(current, list) and isinstance(value, list):
-                    current[:] = deepcopy(value_copy)
-                    self.config[key] = current
-                else:
-                    self.config[key] = deepcopy(value_copy)
-            else:
-                self.config.pop(key, None)
 
     def _save_scope(self, *, private: bool, candidate, migrated=None):
         config_key, _, _ = self._scope(private)

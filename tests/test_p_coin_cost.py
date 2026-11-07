@@ -384,9 +384,8 @@ async def test_record_usage_error_does_not_repeat_confirmed_delivery():
     harness.image_index.record_usage.assert_awaited_once()
 
 
-@pytest.mark.parametrize("already_migrated", [True, False])
 @pytest.mark.parametrize("save_fails", [True, False])
-def test_retired_transport_config_is_removed_with_save_rollback(already_migrated, save_fails):
+def test_retired_transport_config_is_removed_with_save_rollback(save_fails):
     import json
     from astrbot_plugin_get_px.main import GetPxPlugin
     class Config(dict):
@@ -395,9 +394,8 @@ def test_retired_transport_config_is_removed_with_save_rollback(already_migrated
                 raise OSError("disk unavailable")
     plugin = object.__new__(GetPxPlugin)
     group = {"onebot_image_transport": "base64"}
-    plugin.config = Config({"pixiv_source": group, "onebot_image_transport": "astrbot",
-                            "_grouped_config_migrated": already_migrated})
-    plugin._migrate_grouped_config()
+    plugin.config = Config({"pixiv_source": group, "onebot_image_transport": "astrbot"})
+    plugin._cleanup_retired_transport_config()
     assert plugin.config["pixiv_source"] is group
     assert ("onebot_image_transport" in group) is save_fails
     assert ("onebot_image_transport" in plugin.config) is save_fails

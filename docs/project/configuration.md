@@ -25,8 +25,6 @@ OneBot 发图默认使用本地 `file:///` 路径；仅在明确文件读取失�
 | --- | --- | --- | --- |
 | `filter_manga` | `bool` | `true` | 过滤 Pixiv 回退结果中的 manga；Lolicon 返回按插画处理 |
 | `dedupe_days` | `int` | `1` | 最近 0–7 个北京时间自然日；1 仅当天，非滚动 24 小时；同群共享，不同会话、标签和图源隔离；0 关闭并清空使用记录 |
-| `dedupe_ttl_hours` | `float` | `24.0` | 旧版去重配置（迁移用，隐藏） |
-| `dedupe_days_migrated` | `bool` | `false` | 去重配置迁移标记（隐藏） |
 | `group_content_safety_policies` | `template_list` | `[]` | 群聊内容安全策略：强制普通分级、内置安全词开关、独立自定义屏蔽词与独立作品 ID 黑名单，按群 ID 生效；建议在管理中心维护 |
 | `private_content_safety_policies` | `template_list` | `[]` | 私聊内容安全策略：字段同群聊策略，按用户 ID 独立生效；建议在管理中心维护 |
 | `group_content_safety_policies_migrated` | `bool` | `false` | 会话策略迁移标记（隐藏） |
@@ -91,14 +89,20 @@ OneBot 发图默认使用本地 `file:///` 路径；仅在明确文件读取失�
 
 独立列表支持分别应用到所有群聊策略、所有私聊策略或全部策略；批量操作只覆盖对应字段，并在一次保存中完成，失败时回滚。缺少会话上下文、策略不存在或读取异常时严格启用普通分级和内置安全词。
 
+## 升级基线
+
+v3.8.7 的配置升级基线为已成功完成迁移的 v3.8.0，配置只保留六个分组。顶层旧扁平兼容键、`content_dedupe.dedupe_ttl_hours`、`content_dedupe.dedupe_days_migrated` 和 `runtime._grouped_config_migrated` 已移除；正式字段的默认值与策略模板不变。`group_content_safety_policies_migrated` 仍用于 SQLite 旧群策略迁移，不能作为无用标记删除。
+
+升级前备份插件配置 JSON 和数据目录。早于 v3.8.0 的版本须先安装 v3.8.0、成功启动，并确认自定义值及群／私聊策略已保存到对应分组后再升级。仅存在于顶层的值不属于支持范围；AstrBot 4.27.3 在插件初始化前删除 schema 外的键，插件无法在裁剪后找回旧值。若来自 v2.8.x 或已有数据但数据库无 schema 版本号，先使用 v3.0.0 完成签到数据迁移，再经过 v3.8.0 完成配置迁移。不要先升级再依赖回退旧版本恢复配置。
+
 ## 配置维护规则
 
 - README 配置表必须和 `_conf_schema.json` 保持一致。
-- 运行时通过 `main.py` 的 `_cfg_str`/`_cfg_int`/`_cfg_float`/`_cfg_bool` 读取，这些方法先遍历分组取值、找不到再回退扁平 key（兼容旧扁平配置与测试）。不要在业务流程散落 `self.config.get(...)`。
+- 运行时通过 `main.py` 的 `_cfg_str`/`_cfg_int`/`_cfg_float`/`_cfg_bool` 读取。正式配置由 AstrBot 按分组加载；读取层保留简单 dict 支持，但不承担旧扁平配置迁移。不要在业务流程散落 `self.config.get(...)`。
 - 分组后存盘为嵌套 `config[组][键]`；新增配置项时加入对应组的 `items`，读取层无需改动。
 - 删除、重命名或改字段类型时必须说明兼容影响。
 - `forward_threshold` 按下载张数判断，仅 aiocqhttp 合并转发；旧 `send_as_forward` 仅在新字段缺失时兼容（`true`→0，`false`→20）。
 - `dedupe_days` 缩短天数会在重载时清理超期记录，增加天数无法恢复已清理历史。
 - `image_quality` 不影响签到背景，签到卡/日历背景画质由 `checkin_card_quality_tier` 独立控制。
 - `pixiv_refresh_token` 留空时 Lolicon 失败直接报错，不进行 Pixiv 回退。
-- schema 顶层保留兼容迁移用的 `invisible` 旧扁平键。AstrBot 4.27+ 在加载插件配置时会删除 schema 之外的键，这些 invisible 键让旧扁平值在框架裁剪前存活，`_migrate_grouped_config` 随后搬到对应分组。迁移完成后下一版本可删除这些顶层键。
+- schema 顶层仅定义六个正式分组，不再复制隐藏兼容键。策略服务只读写 `content_dedupe` 的正式模板；分组中的空列表不得恢复已停用的顶层策略。

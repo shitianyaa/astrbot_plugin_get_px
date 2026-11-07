@@ -834,8 +834,7 @@ class MainErrorHandlingTest(unittest.IsolatedAsyncioTestCase):
         order = []
         plugin.config = {}
         plugin.context = SimpleNamespace()
-        plugin._migrate_grouped_config = Mock()
-        plugin._migrate_dedupe_config = Mock(return_value=1)
+        plugin._cleanup_retired_transport_config = Mock()
         plugin._init_client = Mock()
         plugin._cfg_bool = Mock(return_value=False)
 
@@ -913,8 +912,7 @@ class MainErrorHandlingTest(unittest.IsolatedAsyncioTestCase):
         plugin.downloader = SimpleNamespace(temp_dir=None, resume_cleanup=AsyncMock())
         plugin.config = {}
         plugin.context = SimpleNamespace()
-        plugin._migrate_grouped_config = Mock()
-        plugin._migrate_dedupe_config = Mock(return_value=1)
+        plugin._cleanup_retired_transport_config = Mock()
         plugin._init_client = Mock()
         plugin._cfg_bool = Mock(return_value=False)
         order = []
@@ -960,8 +958,7 @@ class MainErrorHandlingTest(unittest.IsolatedAsyncioTestCase):
         plugin.downloader = SimpleNamespace(temp_dir=None, resume_cleanup=AsyncMock())
         plugin.config = {}
         plugin.context = SimpleNamespace()
-        plugin._migrate_grouped_config = Mock()
-        plugin._migrate_dedupe_config = Mock(return_value=1)
+        plugin._cleanup_retired_transport_config = Mock()
         plugin._init_client = Mock()
         plugin._cfg_bool = Mock(return_value=False)
         plugin.plugin_web_api = SimpleNamespace(register=Mock())
