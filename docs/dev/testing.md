@@ -7,12 +7,14 @@
 | Python 语法检查 | 插件目录 | `python -m compileall -q main.py checkin pixiv plugin_api scripts/ci tests` |
 | JSON schema 检查 | 插件目录 | `python -m json.tool _conf_schema.json` |
 | JavaScript 语法检查 | 插件目录 | `node --check pages/pluginCenter/app.js` |
-| pytest 全部测试 | 插件目录 | `python -m pytest -v` |
-| pytest 快速测试 | 插件目录 | `python -m pytest -q` |
+| pytest 全部测试 | 插件目录 | `python -m pytest -v tests` |
+| pytest 快速测试 | 插件目录 | `python -m pytest -q tests` |
 | pytest 特定模块 | 插件目录 | `python -m pytest tests/test_checkin_*.py -v` |
 
 > [!TIP]
 > 这些是测试与检查命令，不是插件的独立运行命令。实际集成验证入口见 [`setup.md`](./setup.md#本地集成验证)。
+
+本地全量测试显式指定 `tests`，避免收集被 Git 忽略的 `REFERENCE/` 等参考工程。当前质量门禁脚本仍调用无目录参数的 pytest；本地存在嵌套参考工程时应使用上表命令，不能把参考插件的导入错误当成本插件测试失败。
 
 ## PR 快速 CI
 
@@ -48,7 +50,7 @@ python scripts/ci/check_plugin_lifecycle.py \
 | Python 业务逻辑 | 语法检查、相关测试 | 命令路径手工验证 | 不要只跑被改函数附近的测试。 |
 | 签到卡片渲染 | 语法检查、相关测试 | `/签到` 手工生成卡片 | 关注 T2I、主题、背景选择。 |
 | 配置 schema | 语法检查、JSON 格式检查 | README 与配置文档同步核对 | 旧配置是否还能被容忍。 |
-| 发图逻辑 | 语法检查、相关测试 | `/来点图`、`/p`、`/pid` 手工验证 | 质量、去重、过滤、降级。 |
+| 发图逻辑 | 语法检查、相关测试 | `/p 标签 2`、`/p 2`；开启自动触发后发送「来张图」 | 质量、去重、过滤、降级。 |
 | 下载器 | 语法检查、下载器测试 | 实际下载验证 | 反代轮换、大小计算、降级。 |
 | 前端页面 | JavaScript 语法检查 | 打开 Plugin Pages 验证 | API 调用、数据展示、操作反馈。 |
 
@@ -87,18 +89,21 @@ python scripts/ci/check_plugin_lifecycle.py \
 
 ### 签到测试
 
-- `test_checkin_application.py` - 签到流程、奖励计算、连签
-- `test_checkin_rules.py` - 金币和好感度规则
-- `test_checkin_store.py` - 数据存储和查询
-- `test_checkin_shop.py` - 商店购买和加持
+- `test_checkin.py` - 签到存储、奖励、连签与加持
+- `test_main_error_handling.py` - 签到流程、跨群缓存、失败／超时与占用处理
+- `test_checkin_feature_commands.py` - 商店、主题、生日和刷新入口
+- `test_checkin_cache.py` - JPEG／摘要缓存、并发、校验与过期
+- `test_checkin_background_selection.py` - 背景选择、预览避重与预占用
 - `test_checkin_ranking.py` - 群排行和趋势
 
 ### 发图测试
 
-- `test_pixiv_search.py` - Lolicon 搜索和 Pixiv 回退
+- `test_lolicon.py`、`test_pixiv_client.py` - 图源规范化、请求与回退
+- `test_p_command_count.py` - 发图参数和数量
+- `test_p_coin_cost.py`、`test_delivery.py` - 发送、结算、去重状态和诊断
 - `test_downloader.py` - 图片下载、反代轮换、质量降级
-- `test_image_index.py` - 去重索引和黑名单
-- `test_filters.py` - 内容安全过滤
+- `test_image_index.py` - 去重索引、并发占用和黑名单
+- `test_filtering.py` - 内容安全过滤
 
 ### API 测试
 
@@ -113,7 +118,7 @@ python scripts/ci/check_plugin_lifecycle.py \
 ```bash
 python -m pytest tests/test_downloader.py -v
 # 手工验证：实际下载一张图片
-# /来点图
+# /p 1
 ```
 
 ### 签到改动
@@ -152,8 +157,8 @@ python -m compileall -q main.py checkin pixiv plugin_api scripts/ci tests
 python -m json.tool _conf_schema.json > /dev/null
 node --check pages/pluginCenter/app.js
 
-# 2. 运行全部测试
-python -m pytest -v
+# 2. 只运行本插件的全部测试
+python -m pytest -v tests
 
 # 3. 检查是否有遗漏的文档更新
 # 手工核对 README.md、docs/project/configuration.md 和 _conf_schema.json
@@ -208,9 +213,28 @@ async def test_something_async():
 
 ## 发送状态与异常日志回归
 
-运行 `python -m pytest -q tests/test_delivery.py tests/test_p_coin_cost.py`，验证三态计费与去重、SDK 回执、取消、错误脱敏，以及群聊/私聊、单图/合并转发的 file/base64/astrbot 路由和图片内容。状态用例覆盖共享逻辑，额外验证 base64 的文件清理差异，不展开所有维度的笛卡尔积。
+运行 `python -m pytest -q tests/test_delivery.py tests/test_p_coin_cost.py`，验证 `CONFIRMED`、`TIMED_OUT`、`UNKNOWN`、`FAILED` 四种状态的结算与占用、取消、错误脱敏，以及群聊／私聊、单图／合并转发的消息构造。OneBot 自动采用 file，明确读取失败才重建为 base64；非 OneBot 使用框架发送，不再手动选择三种模式。
 
-真实部署按三种传输方式发送同一作品，对比 transport、耗时和回包；file 模式检查协议端的路径可见性。
+真实部署检查 file URI 的路径可见性，记录 `transport`、耗时和脱敏回包；在隔离环境模拟明确路径读取失败，确认 base64 重试一次；遇到发送超时确认没有补发。模拟测试不等于 QQ 实际送达验证。
+
+## 缓存复用与去重回归
+
+机制与身份见 [缓存复用、图片去重与幂等](../project/cache-and-dedupe.md)，本节只维护测试入口。
+
+| 范围 | 测试文件 | 关注点 |
+| --- | --- | --- |
+| 图片使用索引 | `tests/test_image_index.py` | 原子占用、释放不删成功记录、自然日清理、分页游标与黑名单持久化 |
+| 选图与预览 | `tests/test_checkin_background_selection.py` | 已用候选过滤、分页、5 分钟预览列表、下载取消释放 |
+| 卡片缓存 | `tests/test_checkin_cache.py`、`tests/test_main_error_handling.py` | JPEG／摘要校验、并发、跨群有效规则、恢复／重选、刷新／主题变化与超时保留 |
+| 日历与单次资源 | `tests/test_checkin_calendar.py`、`tests/test_checkin_card.py` | 记录／事件／画质 key、背景获取、头像内联与三档资源复用 |
+| 外部资料 | `tests/test_holiday_calendar.py`、`tests/test_checkin_greeting.py`、`tests/test_checkin_omnidraw_bridge.py` | 初始化刷新条件、失败重试窗口、问候回退与额度幂等 |
+| Pages 清理 | `tests/test_plugin_api_cache.py` | 不触碰数据库、跳过受保护下载文件、只清理受管缓存 |
+
+跨会话／标签允许重复、图源 ID 表示差异曾用临时模拟核对，不是上述持久测试已经完整覆盖的承诺。以后修改去重范围须补专门用例，同时核对查询、原子占用、成功记录、释放与旧行兼容；不要只改候选排序。
+
+```bash
+python -m pytest -q tests/test_checkin_cache.py tests/test_checkin_calendar.py tests/test_checkin_card.py tests/test_checkin_background_selection.py tests/test_image_index.py tests/test_main_error_handling.py tests/test_holiday_calendar.py tests/test_checkin_greeting.py tests/test_plugin_api_cache.py tests/test_checkin_omnidraw_bridge.py
+```
 
 ## 插件下载临时目录回归
 
@@ -220,10 +244,10 @@ async def test_something_async():
 
 ### 跨用户图片读取回归
 
-`tests/test_delivery.py` 覆盖POSIX file模式设置0644、Windows与base64不改权限、合并转发嵌套图片、chmod异常不调用发送API。真实mkstemp 0600→0644断言仅在POSIX执行，Windows明确跳过；跨容器不同UID的读取仍需部署端验证。
+`tests/test_delivery.py` 覆盖 POSIX file 序列化设置 `0644`、Windows 与 base64 不改权限、合并转发嵌套图片，以及 chmod 权限失败记录构建错误后切换 base64。真实 mkstemp `0600→0644` 断言仅在 POSIX 执行，Windows 明确跳过；跨容器不同 UID 的读取仍需部署端验证。
 
 ## OneBot 自动传输与超时结算
 
-运行 `python -m pytest -q tests/test_delivery.py tests/test_p_coin_cost.py tests/test_downloader.py`。覆盖群聊/私聊、单图/转发、空回执正常结算、1200 NTEvent 超时仍扣费且去重、不发异常提示、不重发、文件读取失败换 base64 的两次诊断日志、超时文件保留 600 秒、非超时未知状态及取消处理，以及旧传输配置清理/保存失败回滚。测试使用模拟协议回包，不代表晚间 QQ 实际延迟验证。
+运行 `python -m pytest -q tests/test_delivery.py tests/test_p_coin_cost.py tests/test_downloader.py`。覆盖群聊/私聊、单图/转发、空回执正常结算、1200 NTEvent 超时仍扣费且去重、不发异常提示、不重发、文件读取失败换 base64 的两次诊断日志、超时文件保留 600 秒、非超时未知状态及取消处理，以及旧传输配置清理/保存失败回滚。测试使用模拟协议回包，不代表 QQ 实际延迟验证。
 
 签到卡发送回归运行 `python -m pytest -q tests/test_main_error_handling.py tests/test_delivery.py tests/test_checkin_cache.py`：验证每日签到与付费刷新超时不补文本、背景/缓存/占用保留、重复签到复用同图且不重复奖励、路径失败切 base64 的诊断日志，以及无缓存刷新卡片的延迟清理；非超时失败继续回归原有撤销流程。

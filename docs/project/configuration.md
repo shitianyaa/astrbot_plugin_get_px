@@ -11,25 +11,27 @@
 | `lolicon_exclude_ai` | `bool` | `true` | 仅向 Lolicon API 传递 excludeAI=true/false；R18 与普通混合由当前会话强制普通分级决定 |
 | `lolicon_image_proxy_origins` | `text` | 空 | 每行一个 http(s) origin，最多 5 个按序尝试；仅改写允许列表内 Pixiv 图片主机 |
 | `max_count` | `int` | `5` | 单次指令最多发送张数，范围 1–20 |
-| `p_coin_cost` | `int` | `20` | `/p` 每张金币，范围 0–200；0 免费；正常返回与发送超时均扣费，下载或构建失败不扣费 |
+| `p_coin_cost` | `int` | `20` | `/p` 每张金币，范围 0–200；0 免费；正常返回与发送超时均扣费，下载／构建失败及其他发送异常不扣费 |
 | `image_quality` | `enum` | `original` | `original`/`large`/`medium`；超阈值自动降级 |
 | `auto_downgrade_original_mb` | `float` | `3.0` | 原图超过此 MiB 时降级，范围 0–25；0 禁用降级 |
 | `forward_threshold` | `int` | `1` | 下载张数严格大于此值时合并转发（仅 aiocqhttp）；0 始终合并，范围 0–20 |
 | `auto_trigger_enabled` | `bool` | `false` | 群内自然语言（「来份/张图」）自动触发发图 |
 
-OneBot 传输自动采用路径 → 明确文件读取失败后 base64 重试；超时不重试。旧 `onebot_image_transport`（顶层及 `pixiv_source` 内）在启动时清理并保存，保存失败恢复原值，下次启动重试。发送异常仅记日志，详见 README 的“OneBot 图片发送”。
+OneBot 发图默认使用本地 `file:///` 路径；仅在明确文件读取失败时，将同一条消息回退到 base64 编码重试一次，超时不回退、不重发。base64 是图片编码，与 AstrBot 4.27.3 的 OneBot 默认发图编码相同；回退仍直接调用 OneBot，不额外尝试 AstrBot 框架发送。旧 `onebot_image_transport`（顶层及 `pixiv_source` 内）在启动时清理并保存，保存失败恢复原值，下次启动重试。发送异常仅记日志，详见 [OneBot 图片发送](../../README.md#onebot-图片发送)。
 
 ## 2. 图片筛选与去重（`content_dedupe`）
 
 | 字段 | 类型 | 默认值 | 说明 |
 | --- | --- | --- | --- |
 | `filter_manga` | `bool` | `true` | 过滤 Pixiv 回退结果中的 manga；Lolicon 返回按插画处理 |
-| `dedupe_days` | `int` | `1` | 按北京时间自然日去重，0–7；0 关闭并清空记录。同群共享，缩短天数会在重载时清理超期记录 |
+| `dedupe_days` | `int` | `1` | 最近 0–7 个北京时间自然日；1 仅当天，非滚动 24 小时；同群共享，不同会话、标签和图源隔离；0 关闭并清空使用记录 |
 | `dedupe_ttl_hours` | `float` | `24.0` | 旧版去重配置（迁移用，隐藏） |
 | `dedupe_days_migrated` | `bool` | `false` | 去重配置迁移标记（隐藏） |
 | `group_content_safety_policies` | `template_list` | `[]` | 群聊内容安全策略：强制普通分级、内置安全词开关、独立自定义屏蔽词与独立作品 ID 黑名单，按群 ID 生效；建议在管理中心维护 |
 | `private_content_safety_policies` | `template_list` | `[]` | 私聊内容安全策略：字段同群聊策略，按用户 ID 独立生效；建议在管理中心维护 |
 | `group_content_safety_policies_migrated` | `bool` | `false` | 会话策略迁移标记（隐藏） |
+
+`dedupe_days` 不控制签到 JPEG、日历或预览缓存的有效期。窗口缩短会清理超期使用记录，扩大不能恢复已删除历史；配置保存后重载生效。查询、预占用及不同入口的复用规则见 [缓存与去重](cache-and-dedupe.md#2-正式图片去重)。
 
 ## 3. 万象画卷联动（`checkin_omnidraw`）
 
@@ -48,7 +50,7 @@ OneBot 传输自动采用路径 → 明确文件读取失败后 base64 重试；
 | --- | --- | --- | --- |
 | `checkin_enabled` | `bool` | `true` | 签到开关 |
 | `checkin_bot_name` | `string` | `neko` | 签到卡片 bot 角色名 |
-| `checkin_card_quality_tier` | `enum` | `省流量` | `省流量`(960×540+medium)/`清晰`(1248×702+large)/`极致`(1728×972+large)；签到日历同档 |
+| `checkin_card_quality_tier` | `enum` | `省流量` | `省流量`(960×540+medium)/`清晰`(1248×702+large)/`极致`(1728×972+large)；日历同档但尺寸分别为 1600×900／2080×1170／2880×1620；普通重复签到保持当天记录档位 |
 | `checkin_avatar_enabled` | `bool` | `true` | QQ 平台尝试在卡片显示用户头像 |
 | `checkin_greeting_mode` | `enum` | `hitokoto` | `local`(本地事件)/`hitokoto`(一言 API)/`ai`(文本模型) |
 | `checkin_hitokoto_categories` | `list` | `["全部"]` | 一言类型多选 |
@@ -57,7 +59,7 @@ OneBot 传输自动采用路径 → 明确文件读取失败后 base64 重试；
 | `checkin_ai_greeting_timeout` | `float` | `8.0` | AI 问候超时，1–30 秒 |
 | `checkin_hitokoto_timeout` | `float` | `5.0` | 一言请求超时，1–15 秒 |
 | `checkin_background_mode` | `enum` | `pixiv_daily` | `pixiv_daily`(每日自动选背景)/`custom`(固定背景文件) |
-| `checkin_background_tag` | `string` | 空 | 背景搜索标签，多标签分隔；留空 Lolicon 随机取图 |
+| `checkin_background_tag` | `string` | 空 | 多标签随机排列逐个尝试，使用记录按最终标签隔离；留空 Lolicon 随机取图，失败回退 Pixiv 推荐 |
 | `checkin_custom_background` | `string` | 空 | 管理员本地背景路径，推荐 3:4 竖图 |
 
 ## 5. 签到商店与定价（`checkin_shop`）

@@ -27,6 +27,7 @@
 
 - 任何改动前先看：`docs/dev/maintenance.md`
 - 架构与业务流转：`docs/project/architecture.md`
+- 缓存、去重与幂等：`docs/project/cache-and-dedupe.md`
 - 配置项核对：`_conf_schema.json`、`README.md`、`docs/project/configuration.md`
 - 测试与工程规范：`docs/dev/testing.md`、`docs/dev/engineering-principles.md`
 
@@ -52,5 +53,5 @@
 python -m json.tool _conf_schema.json
 python -m compileall -q main.py checkin pixiv plugin_api tests
 node --check pages/pluginCenter/app.js
-pytest -v
+python -m pytest -v tests
 ```
