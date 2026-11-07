@@ -50,8 +50,8 @@ python scripts/ci/check_plugin_lifecycle.py \
 | Python 业务逻辑 | 语法检查、相关测试 | 命令路径手工验证 | 不要只跑被改函数附近的测试。 |
 | 签到卡片渲染 | 语法检查、相关测试 | `/签到` 手工生成卡片 | 关注 T2I、主题、背景选择。 |
 | 配置 schema | 语法检查、JSON 格式检查 | README 与配置文档同步核对 | 旧配置是否还能被容忍。 |
-| 发图逻辑 | 语法检查、相关测试 | `/p 标签 2`、`/p 2`；开启自动触发后发送「来张图」 | 质量、去重、过滤、降级。 |
-| 下载器 | 语法检查、下载器测试 | 实际下载验证 | 反代轮换、大小计算、降级。 |
+| 发图逻辑 | 语法检查、相关测试 | `/p 标签 2`、`/p 2`；开启自动触发后发送「来张图」 | 固定画质、大小筛选、换图补足、去重、过滤。 |
+| 下载器 | 语法检查、下载器测试 | 实际下载验证 | 同画质反代轮换、大小边界、背景画质回退。 |
 | 前端页面 | JavaScript 语法检查 | 打开 Plugin Pages 验证 | API 调用、数据展示、操作反馈。 |
 
 ## 高风险改动清单
@@ -101,7 +101,7 @@ python scripts/ci/check_plugin_lifecycle.py \
 - `test_lolicon.py`、`test_pixiv_client.py` - 图源规范化、固定 API 地址、优先级与双向失败／空结果回退；覆盖无 Pixiv 客户端、分页游标和安全参数传递
 - `test_p_command_count.py` - 发图参数和数量
 - `test_p_coin_cost.py`、`test_delivery.py` - 发送、结算、去重状态和诊断
-- `test_downloader.py` - 图片下载、反代轮换、质量降级
+- `test_downloader.py` - 图片下载、大小上限、固定画质与背景回退
 - `test_image_index.py` - 去重索引、并发占用和黑名单
 - `test_filtering.py` - 内容安全过滤
 
@@ -263,3 +263,11 @@ python -m pytest -q tests/test_checkin_cache.py tests/test_checkin_calendar.py t
 签到卡发送回归运行 `python -m pytest -q tests/test_main_error_handling.py tests/test_delivery.py tests/test_checkin_cache.py`：验证每日签到与付费刷新超时／送达未知不补文本，提交期间取消保留背景、卡片和占用，构建期取消释放未提交资源；覆盖重复签到复用、路径失败切 base64、无缓存刷新延迟清理，以及真实超时诊断和畸形回执分类。
 
 日历缓存回归运行 `python -m pytest -q tests/test_checkin_calendar.py`，用实际事件快照验证备份导入编辑名称／日期、在线节假日更新均改变缓存 key，相同内容仍复用 JPEG；同一快照传给渲染，避免 key 与内容错配。
+
+### 大小上限与候选补选
+
+`tests/test_downloader.py` 覆盖原图／大图／中图超限后清理且不降档、等于阈值与 0 关闭软上限、同画质反代重试、缺失所选画质拒绝、背景下载保留回退。`tests/test_p_coin_cost.py` 使用真实下载器与 SQLite 索引验证超限后同批补足、淘汰图释放占用且不扣费，并覆盖跨来源补取成功／下载取消、重复候选不重复下载、3 批／20 张上限，以及补取失败仍发送并结算已有图片。网络与协议回包使用测试替身，不代表真实图源和 QQ 验证。
+
+软上限回归验证声明长度超限不读取正文、未知长度超限后停止迭代并清理半文件；时间预算回归用短时测试替身验证下载与候选补取超时取消网络操作，发送并结算已有图片。
+
+多图时间预算回归用模拟时钟验证 1／5／20 张及 5／30 秒超时配置不会被固定 90 秒截断；超限拒绝测试走真实下载器并验证清理及错误类型分类。

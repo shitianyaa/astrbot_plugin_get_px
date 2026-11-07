@@ -532,3 +532,184 @@ async def test_mixed_single_batch_charges_success_and_timeout_but_not_build_fail
     finally:
         await downloader.close()
         index.close()
+
+
+@pytest.mark.asyncio
+async def test_oversized_work_is_replaced_without_charge_or_pending_usage(tmp_path):
+    from types import MethodType
+    from astrbot_plugin_get_px.pixiv.downloader import ImageDownloader
+    from astrbot_plugin_get_px.pixiv.filters import FiltersMixin
+    from astrbot_plugin_get_px.pixiv.index import ImageIndexStore
+
+    harness = _SearchFlowHarness(illusts=[_illust(i) for i in (1, 2, 3)])
+    harness._dedupe_days_cfg = 1
+    harness.checkin_store, _ = _settle_store()
+    harness._pick_illusts = MethodType(FiltersMixin._pick_illusts, harness)
+    paths = {str(i): tmp_path / f"get_px_{i}.jpg" for i in (1, 2, 3)}
+    for item in harness.illusts:
+        item["meta_single_page"] = {"original_image_url": f"https://img/{item['id']}.jpg"}
+    index = ImageIndexStore(tmp_path, retention_days=1)
+    harness.image_index = index
+    downloader = ImageDownloader(temp_dir=tmp_path)
+
+    async def download(url, timeout, size_limit_bytes=0):
+        ident = url.rsplit("/", 1)[1].split(".")[0]
+        path = paths[ident]
+        if ident == "1":
+            from astrbot_plugin_get_px.pixiv.downloader import ImageSizeLimitError
+            raise ImageSizeLimitError("图片超过大小上限")
+        path.write_bytes(b"fixture")
+        return str(path), 1024
+
+    downloader.download = AsyncMock(side_effect=download)
+    harness.downloader = downloader
+    event = _FlowEvent()
+    try:
+        with patch("astrbot_plugin_get_px.pixiv.filters.random.sample", side_effect=lambda seq, n: list(seq)[:n]):
+            await _run_search(harness, event, "2")
+        assert downloader.download.await_count == 3
+        assert await index.get_used_illust_ids(harness._event_scope(event), "lolicon:random") == {"2", "3"}
+        assert all(not path.exists() for path in paths.values())
+        harness.checkin_store.spend_coins.assert_awaited_once_with(user_id="10001", cost=40)
+    finally:
+        await downloader.close()
+        index.close()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("cancelled", [False, True])
+async def test_replenishment_tracks_source_and_releases_skipped_claims(tmp_path, cancelled):
+    import asyncio
+    from types import MethodType
+    from astrbot_plugin_get_px.pixiv.filters import FiltersMixin
+    from astrbot_plugin_get_px.pixiv.index import ImageIndexStore
+
+    harness = _SearchFlowHarness()
+    harness._dedupe_days_cfg = 1
+    harness.checkin_store, _ = _settle_store()
+    harness._pick_illusts = MethodType(FiltersMixin._pick_illusts, harness)
+    harness._fetch_source_candidates = AsyncMock(side_effect=[
+        ([_illust(1)], 1, "lolicon:random"),
+        ([_illust(1)], 1, "lolicon:random"),
+        ([_illust(2)], 1, "pixiv:recommended"),
+    ])
+    harness.downloader = AsyncMock()
+    harness.downloader.download_for_send.side_effect = [
+        RuntimeError("图片超过大小上限"),
+        asyncio.CancelledError() if cancelled else ("unused.jpg", "original", 1024),
+    ]
+    index = ImageIndexStore(tmp_path, retention_days=1)
+    harness.image_index = index
+    event = _FlowEvent()
+    try:
+        if cancelled:
+            with pytest.raises(asyncio.CancelledError):
+                await _run_search(harness, event, "1")
+        else:
+            await _run_search(harness, event, "1")
+        assert harness._fetch_source_candidates.await_count == 3
+        assert harness.downloader.download_for_send.await_count == 2
+        scope = harness._event_scope(event)
+        assert await index.get_used_illust_ids(scope, "lolicon:random") == set()
+        assert await index.get_used_illust_ids(scope, "pixiv:recommended") == (set() if cancelled else {"2"})
+        if cancelled:
+            harness.checkin_store.spend_coins.assert_not_awaited()
+        else:
+            harness.checkin_store.spend_coins.assert_awaited_once_with(user_id="10001", cost=20)
+        assert all(call.kwargs["allow_quality_fallback"] is False for call in harness.downloader.download_for_send.await_args_list)
+    finally:
+        index.close()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("repeat_batch", [False, True])
+async def test_candidate_replacement_stops_at_download_or_batch_budget(repeat_batch):
+    harness = _SearchFlowHarness(illusts=[_illust(1), _illust(1)] if repeat_batch else [_illust(i) for i in range(1, 26)])
+    harness.checkin_store, _ = _settle_store()
+    harness._fetch_source_candidates = AsyncMock(return_value=(harness.illusts, len(harness.illusts), "lolicon:random"))
+    harness.downloader = AsyncMock()
+    harness.downloader.download_for_send.side_effect = RuntimeError("图片超过大小上限")
+    outputs = await _run_search(harness, _FlowEvent(), "2" if repeat_batch else "1")
+    assert harness.downloader.download_for_send.await_count == (1 if repeat_batch else 20)
+    assert harness._fetch_source_candidates.await_count == (3 if repeat_batch else 1)
+    harness.checkin_store.spend_coins.assert_not_awaited()
+    assert outputs and "失败" in outputs[-1]
+
+
+@pytest.mark.asyncio
+async def test_replenishment_failure_still_sends_and_charges_available_images():
+    harness = _SearchFlowHarness(illusts=[_illust(1), _illust(2)])
+    harness.checkin_store, _ = _settle_store()
+    harness._should_use_forward = lambda **kwargs: True
+    harness._fetch_source_candidates = AsyncMock(side_effect=[
+        (harness.illusts, 2, "lolicon:random"), RuntimeError("source unavailable"),
+    ])
+    harness.downloader = AsyncMock()
+    harness.downloader.download_for_send.side_effect = [
+        ("unused.jpg", "original", 1024), RuntimeError("图片超过大小上限"),
+    ]
+    event = _FlowEvent(platform="aiocqhttp")
+    await _run_search(harness, event, "2")
+    harness.checkin_store.spend_coins.assert_awaited_once_with(user_id="10001", cost=20)
+    assert "少 1 张" in str(event.sent[0][0].nodes[-1].content)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("blocked_stage", ["download", "replenishment"])
+async def test_total_time_budget_cancels_network_and_sends_available_image(tmp_path, blocked_stage):
+    import asyncio
+    harness = _SearchFlowHarness(illusts=[_illust(1), _illust(2)])
+    harness.config["request_timeout"] = 0.01  # 测试替身压缩时间，生产下限仍为 5 秒。
+    harness.checkin_store, _ = _settle_store()
+    harness.downloader = AsyncMock()
+    path = tmp_path / "get_px_ready.jpg"
+    path.write_bytes(b"fixture")
+    cancelled = []
+    async def blocked(*args, **kwargs):
+        try:
+            await asyncio.Event().wait()
+        finally:
+            cancelled.append(True)
+    calls = 0
+    async def download(*args, **kwargs):
+        nonlocal calls
+        calls += 1
+        if calls == 1:
+            assert kwargs["size_limit_bytes"] == 10 * 1024 * 1024
+            return str(path), "original", 1024
+        if blocked_stage == "download":
+            return await blocked()
+        raise RuntimeError("fixture")
+    harness.downloader.download_for_send.side_effect = download
+    fetch_calls = 0
+    async def fetch(*args, **kwargs):
+        nonlocal fetch_calls
+        fetch_calls += 1
+        if fetch_calls == 1:
+            return harness.illusts, 2, "lolicon:random"
+        return await blocked()
+    harness._fetch_source_candidates = fetch
+    await asyncio.wait_for(_run_search(harness, _FlowEvent(), "2"), timeout=1)
+    assert cancelled == [True]
+    assert calls == 2
+    assert not path.exists()
+    harness.checkin_store.spend_coins.assert_awaited_once_with(user_id="10001", cost=20)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("count, timeout", [(1, 30), (5, 5), (5, 30), (20, 30)])
+async def test_total_budget_scales_with_requested_count(count, timeout):
+    from types import SimpleNamespace
+    clock = [0.0]
+    harness = _SearchFlowHarness(illusts=[_illust(i) for i in range(count)])
+    harness.config.update(max_count=count, request_timeout=timeout)
+    harness.checkin_store, _ = _settle_store()
+    harness.downloader = AsyncMock()
+    async def download(*args, **kwargs):
+        clock[0] += timeout * 0.9
+        return "unused.jpg", "original", 1024
+    harness.downloader.download_for_send.side_effect = download
+    with patch("astrbot_plugin_get_px.pixiv.search.time", SimpleNamespace(monotonic=lambda: clock[0])):
+        await _run_search(harness, _FlowEvent(), str(count))
+    assert harness.downloader.download_for_send.await_count == count
+    harness.checkin_store.spend_coins.assert_awaited_once_with(user_id="10001", cost=20 * count)

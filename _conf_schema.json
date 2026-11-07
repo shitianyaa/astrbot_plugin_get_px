@@ -64,18 +64,18 @@
           "large",
           "medium"
         ],
-        "hint": "original=原图（最大，下载慢）, large=大图（推荐）, medium=中图（最小，下载快）。若原图超过自动降级阈值会降级到更低质量，指定质量不可用也会自动降级。"
+        "hint": "original=原图（最大，下载慢）, large=大图（推荐）, medium=中图（最小，下载快）。普通发图固定使用所选质量；超过大小上限、地址缺失或下载失败时更换作品，不降低质量。"
       },
       "auto_downgrade_original_mb": {
-        "description": "原图自动降级阈值（MiB）",
+        "description": "图片大小上限（MiB）",
         "type": "float",
-        "default": 3.0,
+        "default": 10.0,
         "slider": {
           "min": 0,
           "max": 25,
           "step": 0.5
         },
-        "hint": "当实际下载到的原图超过该大小时，自动改用 large/medium 等低质量图片。设为 0 可禁用自动降级。"
+        "hint": "普通发图按所选质量下载，超过该大小就更换作品，默认 10 MiB；0 关闭此限制。签到与日历不受影响。"
       },
       "forward_threshold": {
         "description": "合并转发阈值",

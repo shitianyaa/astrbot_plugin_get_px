@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import time
 
 from astrbot.api import logger
 from astrbot.api.all import Image, Plain
@@ -14,7 +15,10 @@ from .safety import ContentSafetyPolicy, STRICT_CONTENT_SAFETY_POLICY
 
 
 LOG_PREFIX = "[GetPx]"
-DEFAULT_AUTO_DOWNGRADE_ORIGINAL_LIMIT_MB = 3.0
+DEFAULT_IMAGE_SIZE_LIMIT_MB = 10.0
+SEARCH_BATCH_SIZE = 20
+SEARCH_BATCH_ATTEMPTS = 3
+SEARCH_DOWNLOAD_ATTEMPTS = 20
 
 
 def _search_quality_label(value: object) -> str:
@@ -234,18 +238,18 @@ class SearchMixin:
             return
         timeout_sec = self._cfg_float("request_timeout", 30.0, 5.0, 120.0)
         quality = self._cfg_str("image_quality", "original")
-        downgrade_limit_mb = self._cfg_float(
+        size_limit_mb = self._cfg_float(
             "auto_downgrade_original_mb",
-            DEFAULT_AUTO_DOWNGRADE_ORIGINAL_LIMIT_MB,
+            DEFAULT_IMAGE_SIZE_LIMIT_MB,
             0.0,
             25.0,
         )
-        downgrade_limit_bytes = int(downgrade_limit_mb * 1024 * 1024)
+        size_limit_bytes = int(size_limit_mb * 1024 * 1024)
         filter_manga = self._cfg_bool("filter_manga", True)
 
         # 获取作品列表：按首选图片源顺序取图与回退。
         illusts, raw_count, source_key = await self._fetch_source_candidates(
-            event, tag, count=max_count, policy=policy
+            event, tag, count=SEARCH_BATCH_SIZE, policy=policy
         )
         logger.info(
             f"{LOG_PREFIX} 搜索候选获取完成: "
@@ -303,7 +307,6 @@ class SearchMixin:
                 "当前去重范围内没有未发送过的图片了，换个标签或稍后再试"
             )
             return
-        pick_count = len(chosen)
         pending_illust_ids: set[str] = set()
         sent_illust_ids: set[str] = set()
         unknown_illust_ids: set[str] = set()
@@ -320,6 +323,13 @@ class SearchMixin:
         # 下载所有图片
         downloaded: list[tuple[dict, str, str, int]] = []
         temp_paths: list[str] = []
+        image_sources = {str(illust.get("id") or ""): source_key for illust in chosen}
+        attempted_ids: set[str] = set()
+        batch_attempts = 1
+        download_attempts = 0
+        transient_offset = raw_count
+        queue = list(chosen)
+        deadline = time.monotonic() + timeout_sec * max(3, count)
 
         async def deliver_images(content, images, *, context: str) -> None:
             """按实际提交阶段维护计费、去重占用和文件读取窗口。"""
@@ -346,41 +356,112 @@ class SearchMixin:
                 sent_illust_ids.update(ids)
                 for illust, *_ in images:
                     await self._record_image_usage(
-                        event, source_key, illust, feature="normal",
+                        event, image_sources[str(illust.get("id") or "")], illust, feature="normal",
                         user_id=str(event.get_sender_id() or ""),
                     )
 
         try:
-            for idx, illust in enumerate(chosen, 1):
+            while len(downloaded) < count and download_attempts < SEARCH_DOWNLOAD_ATTEMPTS:
+                if time.monotonic() >= deadline:
+                    logger.info(f"{LOG_PREFIX} 发图取图总时间预算耗尽: downloaded_count={len(downloaded)}")
+                    break
+                if not queue:
+                    remaining = [
+                        item for item in illusts
+                        if str(item.get("id") or "") not in attempted_ids
+                    ]
+                    if remaining:
+                        queue = await self._pick_illusts(
+                            event, remaining, min(count - len(downloaded), len(remaining)),
+                            source_key=source_key, dedupe_enabled=dedupe_days > 0,
+                            raw_count=0,
+                        )
+                    if not queue:
+                        if batch_attempts >= SEARCH_BATCH_ATTEMPTS:
+                            break
+                        try:
+                            if self.image_index is not None:
+                                await self.image_index.advance_page_offset(
+                                    self._event_scope(event), source_key, raw_count
+                                )
+                            illusts, raw_count, source_key = await asyncio.wait_for(
+                                self._fetch_source_candidates(
+                                    event, tag, count=SEARCH_BATCH_SIZE,
+                                    offset=transient_offset if self.image_index is None else 0,
+                                    policy=policy,
+                                ),
+                                timeout=max(0, deadline - time.monotonic()),
+                            )
+                            if filter_manga:
+                                illusts = self._filter_manga(illusts)
+                            illusts = await self._filter_blacklisted_illusts(illusts, policy)
+                        except Exception as exc:
+                            logger.warning(
+                                f"{LOG_PREFIX} 发图候选补取失败: error_type={type(exc).__name__}"
+                            )
+                            break
+                        batch_attempts += 1
+                        transient_offset += raw_count
+                        continue
+                    for item in queue:
+                        item_id = str(item.get("id") or "")
+                        image_sources[item_id] = source_key
+                        if dedupe_days > 0 and self.image_index is not None and item_id:
+                            pending_illust_ids.add(item_id)
+                illust = queue.pop(0)
                 illust_id = illust.get("id", "?")
-                title = illust.get("title", "无标题")
+                item_id = str(illust.get("id") or "")
+                if item_id in attempted_ids:
+                    continue
+                attempted_ids.add(item_id)
+                download_attempts += 1
+                idx = download_attempts
+                download_ready = False
 
                 try:
-                    path, actual_q, file_size = await self.downloader.download_for_send(
-                        illust,
-                        quality,
-                        timeout=timeout_sec,
-                        downgrade_limit_bytes=downgrade_limit_bytes,
-                        log_context=f"[{idx}/{pick_count}] 作品 {illust_id}",
+                    path, actual_q, file_size = await asyncio.wait_for(
+                        self.downloader.download_for_send(
+                            illust, quality, timeout=timeout_sec,
+                            size_limit_bytes=size_limit_bytes,
+                            log_context=f"[候选 {idx}/{SEARCH_DOWNLOAD_ATTEMPTS}] 作品 {illust_id}",
+                            allow_quality_fallback=False,
+                        ),
+                        timeout=max(0, deadline - time.monotonic()),
                     )
                     logger.debug(
-                        f"{LOG_PREFIX} [{idx}/{pick_count}] 作品 {illust_id} "
+                        f"{LOG_PREFIX} [候选 {idx}/{SEARCH_DOWNLOAD_ATTEMPTS}] 作品 {illust_id} "
                         f"下载完成（大小={file_size / 1024:.2f}KB，画质={_search_quality_label(actual_q)}）"
                     )
                     temp_paths.append(path)
                     downloaded.append((illust, path, actual_q, file_size))
+                    download_ready = True
                 except asyncio.TimeoutError:
                     logger.debug(
                         f"{LOG_PREFIX} 下载候选跳过: illust_id={illust_id} "
-                        f"candidate={idx}/{pick_count} reason=timeout "
+                        f"candidate={idx}/{SEARCH_DOWNLOAD_ATTEMPTS} reason=timeout "
                         f"timeout_seconds={timeout_sec}"
                     )
                 except Exception as e:
                     logger.debug(
                         f"{LOG_PREFIX} 下载候选跳过: illust_id={illust_id} "
-                        f"candidate={idx}/{pick_count} reason=download_error "
+                        f"candidate={idx}/{SEARCH_DOWNLOAD_ATTEMPTS} reason=download_error "
                         f"error_type={type(e).__name__}"
                     )
+                finally:
+                    item_id = str(illust.get("id") or "")
+                    if not download_ready and self.image_index is not None and item_id in pending_illust_ids:
+                        try:
+                            await self.image_index.release_usage(
+                                scope=self._event_scope(event),
+                                source_key=image_sources[item_id],
+                                illust_id=item_id, feature="normal_pending",
+                            )
+                            pending_illust_ids.discard(item_id)
+                        except Exception as exc:
+                            log_delivery_error(
+                                exc, context=f"illust_id={item_id}", phase="release_usage",
+                                delivery_status="not_submitted",
+                            )
 
             # 统一发送（避免 yield 和 send 混用导致消息拆分）
             if not downloaded:
@@ -416,20 +497,15 @@ class SearchMixin:
                         )
                     )
                 # 如果有下载失败的图片，在合并消息末尾提示
-                failed_count = pick_count - len(downloaded)
+                failed_count = count - len(downloaded)
                 if failed_count > 0:
-                    failed_ids = [
-                        str(il.get("id", "?"))
-                        for il in chosen
-                        if not any(d[0].get("id") == il.get("id") for d in downloaded)
-                    ]
                     nodes.nodes.append(
                         Node(
                             uin=self_id,
                             name="Pixiv",
                             content=[
                                 Plain(
-                                    f"⚠️ {failed_count} 张图片下载失败（ID: {', '.join(failed_ids)}），已跳过"
+                                    f"⚠️ 少 {failed_count} 张符合画质和大小限制的可用图片，已跳过"
                                 )
                             ],
                         )
@@ -503,7 +579,7 @@ class SearchMixin:
                     try:
                         await self.image_index.release_usage(
                             scope=self._event_scope(event),
-                            source_key=source_key,
+                            source_key=image_sources[illust_id],
                             illust_id=illust_id,
                             feature="normal_pending",
                         )

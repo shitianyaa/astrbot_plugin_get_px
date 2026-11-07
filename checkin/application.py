@@ -27,7 +27,6 @@ except ImportError:  # Direct imports used by the test suite.
 
 
 LOG_PREFIX = "[GetPx]"
-DEFAULT_AUTO_DOWNGRADE_ORIGINAL_LIMIT_MB = 3.0
 
 
 @dataclass(frozen=True)

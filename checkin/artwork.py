@@ -219,7 +219,7 @@ class CheckinArtworkMixin:
                 illust,
                 background_quality,
                 timeout=timeout_sec,
-                downgrade_limit_bytes=0,
+                size_limit_bytes=0,
                 log_context=f"[签到背景恢复] 作品 {record.background_illust_id}",
             )
             logger.debug(
@@ -850,7 +850,7 @@ class CheckinArtworkMixin:
                     illust,
                     background_quality,
                     timeout=timeout_sec,
-                    downgrade_limit_bytes=0,
+                    size_limit_bytes=0,
                     log_context=f"[签到背景 {idx}] 作品 {illust_id}",
                 )
                 author = str((illust.get("user") or {}).get("name") or "")
@@ -1033,7 +1033,7 @@ class CheckinArtworkMixin:
                     illust,
                     background_quality,
                     timeout=timeout_sec,
-                    downgrade_limit_bytes=0,
+                    size_limit_bytes=0,
                     log_context=f"[日历背景] 作品 {illust_id}",
                 )
             except Exception as exc:

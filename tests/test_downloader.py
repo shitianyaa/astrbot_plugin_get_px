@@ -137,6 +137,23 @@ class ImageDownloaderSizeLimitTest(unittest.IsolatedAsyncioTestCase):
             with self.assertRaises(RuntimeError):
                 await downloader.download("http://x/a.jpg", timeout=5)
 
+    async def test_soft_limit_rejects_headers_and_stops_unknown_length_stream(self):
+        for declared in (11, None):
+            with self.subTest(content_length=declared), tempfile.TemporaryDirectory() as tmp:
+                consumed = []
+                resp = _FakeResponse(content_length=declared)
+                async def chunks(_size):
+                    for chunk in (b"12345", b"678901", b"must-not-read"):
+                        consumed.append(chunk)
+                        yield chunk
+                resp.content.iter_chunked = chunks
+                downloader = _downloader_with(resp)
+                downloader.temp_dir = Path(tmp)
+                with self.assertRaises(dl.ImageSizeLimitError):
+                    await downloader.download("http://x/a.jpg", timeout=5, size_limit_bytes=10)
+                self.assertEqual(len(consumed), 0 if declared else 2)
+                self.assertEqual(list(Path(tmp).iterdir()), [])
+
     async def test_non_200_status_raises(self):
         resp = _FakeResponse(status=404, chunks=[b"x"])
         downloader = _downloader_with(resp)
@@ -199,62 +216,83 @@ def _illust_urls():
     }
 
 
-class ImageDownloaderDowngradeTest(unittest.IsolatedAsyncioTestCase):
-    async def test_download_for_send_removes_original_after_successful_downgrade(self):
+class ImageDownloaderQualityTest(unittest.IsolatedAsyncioTestCase):
+    async def test_oversized_image_is_removed_without_trying_other_quality(self):
         with tempfile.TemporaryDirectory() as tmp:
-            tmp_path = Path(tmp)
-            original_path = tmp_path / "original.jpg"
-            large_path = tmp_path / "large.jpg"
-            downloader = ImageDownloader()
+            for quality in ("original", "large", "medium"):
+                with self.subTest(quality=quality):
+                    downloader = ImageDownloader(temp_dir=Path(tmp))
+                    session = _FakeSession(_FakeResponse(chunks=[b"12345", b"678901", b"unread"]))
+                    downloader._ensure_session = lambda: session
+                    with self.assertRaises(dl.ImageSizeLimitError) as raised:
+                        await downloader.download_for_send(
+                            _illust_urls(), quality, timeout=5,
+                            size_limit_bytes=10, log_context="test",
+                            allow_quality_fallback=False,
+                        )
+                    self.assertEqual(dl._download_error_reason(raised.exception), "size_limit")
+                    self.assertEqual([url for url, _ in session.calls], [f"http://x/{quality}.jpg"])
+                    self.assertEqual(list(Path(tmp).iterdir()), [])
+        self.assertEqual(dl._download_error_reason(dl.ImageSizeLimitError("different wording")), "size_limit")
 
-            async def fake_download(url, timeout):
-                if url.endswith("original.jpg"):
-                    original_path.write_bytes(b"x" * 20)
-                    return str(original_path), 20
-                if url.endswith("large.jpg"):
-                    large_path.write_bytes(b"x" * 3)
-                    return str(large_path), 3
-                raise RuntimeError(url)
-
-            downloader.download = fake_download  # type: ignore[method-assign]
-
-            path, quality, size = await downloader.download_for_send(
-                _illust_urls(),
-                quality="original",
-                timeout=5,
-                downgrade_limit_bytes=10,
-                log_context="test",
+    async def test_strict_quality_keeps_proxy_retry_but_never_changes_quality(self):
+        downloader = ImageDownloader(lolicon_image_proxy_origins=["https://i.pixiv.re"])
+        illust = _illust_urls()
+        illust["_source"] = "lolicon"
+        illust["meta_single_page"]["original_image_url"] = "https://i.pximg.net/original.jpg"
+        downloader.download = mock.AsyncMock(side_effect=RuntimeError("HTTP 404"))
+        with self.assertRaises(RuntimeError):
+            await downloader.download_for_send(
+                illust, "original", timeout=5, size_limit_bytes=0,
+                log_context="test", allow_quality_fallback=False,
             )
+        self.assertEqual(
+            [call.args[0] for call in downloader.download.await_args_list],
+            ["https://i.pixiv.re/original.jpg", "https://i.pximg.net/original.jpg"],
+        )
+        downloader.download.reset_mock()
+        downloader.download.side_effect = RuntimeError("图片过大: 超过上限 50 MiB")
+        with self.assertRaisesRegex(RuntimeError, "图片过大"):
+            await downloader.download_for_send(
+                illust, "original", timeout=5, size_limit_bytes=0,
+                log_context="test", allow_quality_fallback=False,
+            )
+        downloader.download.assert_awaited_once()
+        illust["meta_single_page"] = {}
+        downloader.download.reset_mock()
+        with self.assertRaisesRegex(RuntimeError, "无可下载 URL"):
+            await downloader.download_for_send(
+                illust, "original", timeout=5, size_limit_bytes=0,
+                log_context="test", allow_quality_fallback=False,
+            )
+        downloader.download.assert_not_awaited()
 
-            self.assertEqual(path, str(large_path))
-            self.assertEqual(quality, "large")
-            self.assertEqual(size, 3)
-            self.assertFalse(original_path.exists())
-            self.assertTrue(large_path.exists())
-
-    async def test_download_for_send_removes_original_when_all_downgrades_fail(self):
+    async def test_size_boundary_and_disabled_limit_preserve_requested_quality(self):
+        from io import BytesIO
+        from PIL import Image
+        data = BytesIO()
+        Image.new("RGB", (1, 1)).save(data, format="PNG")
+        payload = data.getvalue()
         with tempfile.TemporaryDirectory() as tmp:
-            original_path = Path(tmp) / "original.jpg"
-            downloader = ImageDownloader()
-
-            async def fake_download(url, timeout):
-                if url.endswith("original.jpg"):
-                    original_path.write_bytes(b"x" * 20)
-                    return str(original_path), 20
-                raise RuntimeError("candidate failed")
-
-            downloader.download = fake_download  # type: ignore[method-assign]
-
-            with self.assertRaises(RuntimeError):
-                await downloader.download_for_send(
-                    _illust_urls(),
-                    quality="original",
-                    timeout=5,
-                    downgrade_limit_bytes=10,
-                    log_context="test",
+            for limit in (len(payload), 0):
+                downloader = _downloader_with(_FakeResponse(content_length=len(payload), chunks=[payload]))
+                downloader.temp_dir = Path(tmp)
+                path, quality, size = await downloader.download_for_send(
+                    _illust_urls(), "original", timeout=5, size_limit_bytes=limit,
+                    log_context="test", allow_quality_fallback=False,
                 )
+                self.assertEqual((quality, size), ("original", len(payload)))
+                self.assertEqual(Path(path).read_bytes(), payload)
+                dl.cleanup(path)
 
-            self.assertFalse(original_path.exists())
+    async def test_background_download_can_still_fall_back_to_available_quality(self):
+        downloader = ImageDownloader()
+        downloader.download = mock.AsyncMock(side_effect=[RuntimeError("HTTP 404"), ("unused.jpg", 10)])
+        result = await downloader.download_for_send(
+            _illust_urls(), "large", timeout=5, size_limit_bytes=0,
+            log_context="test",
+        )
+        self.assertEqual(result, ("unused.jpg", "medium", 10))
 
 
 if __name__ == "__main__":

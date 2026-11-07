@@ -32,7 +32,7 @@ pixiv/
 │  ├─ safety.py          内置安全词与文本规范化
 │  ├─ client.py          Pixiv API 客户端
 │  ├─ lolicon.py         Lolicon API 客户端与数据规范化
-│  ├─ downloader.py      图片下载、Lolicon 反代轮换与质量降级
+│  ├─ downloader.py      图片下载、Lolicon 反代轮换与画质选择
 │  ├─ index.py           多自然日去重索引、安全词与作品黑名单
 plugin_api/
 └─ api.py                Plugin Pages 后端 API
@@ -128,3 +128,13 @@ initialize 获取插件数据目录后，将 `data_dir / "temp"` 注入共享 Im
 ### OneBot 路径传输的跨用户读权限
 
 下载器 mkstemp 生成的文件在 POSIX 上通常为0600，仅创建用户可读写。在 file 模式序列化图片时，将已下载并校验完成的文件设为0644，支持共享目录中的不同UID读取；该处理同样覆盖合并转发节点。base64、其他平台及Windows不调整文件权限。chmod权限错误记录后切换base64；重建或发送失败仍记录原因，不向聊天发送异常提示。此操作只处理图片文件，不修改共享目录及祖先目录的权限；协议端仍需能遍历这些目录。
+
+## 普通发图的大小筛选
+
+`pixiv/search.py` 在所选画质下下载候选，超出大小上限、地址缺失或下载失败就换作品，先使用同批剩余候选，再按图片源优先级补取。每次请求最多取 3 批、实际尝试 20 张作品，相同 ID 不重复下载；不足时发送已下载的图片。每张候选保留自己的 source_key，补取回退另一源后仍按对应来源写成功记录或释放 pending；跳过候选立即释放，未提交与取消仍由 finally 收尾。
+
+`ImageDownloader.download_for_send()` 的 `allow_quality_fallback=False` 限定普通发图只尝试所选画质的反代和源地址；超软上限时清理文件并抛错交回选图层，50 MiB 硬上限不变。签到及日历传入 `size_limit_bytes=0` 并保留默认画质回退。持久配置沿用 `auto_downgrade_original_mb` 的键与数值，WebUI 名称改为图片大小上限。
+
+下载阶段以 `time.monotonic()` 建立 `request_timeout * max(3, count)` 秒的共享截止时间，单张下载（含反代轮换）及补取用 `asyncio.wait_for` 传入剩余预算。到期取消进行中的操作，发送已下载图片；首次取源、消息发送及清理不在预算内。外部取消继续传播。
+
+大小约束由 `download()` 统一执行：Content-Length 超限时不读取正文，流式字节累计超限立即中止并清理半文件；`download_for_send()` 不重复检查返回大小。`ImageSizeLimitError` 按类型记录为 `size_limit` 并交回选图层，异常文案不参与分类。
