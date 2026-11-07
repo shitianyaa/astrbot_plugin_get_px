@@ -300,6 +300,122 @@ def _plugin_for_checkin(tmp: str, result: CheckinResult, order, *, cache_hit=Fal
 
 
 class Issue24CacheTest(unittest.IsolatedAsyncioTestCase):
+    async def test_daily_uncertain_delivery_keeps_background_cache_and_rewards_without_text(self):
+        from aiocqhttp.exceptions import ActionFailed
+
+        for error in (TimeoutError(), ActionFailed({
+            "retcode": 1200, "message": "Timeout: NTEvent NodeIKernelMsgService/sendMsg",
+        }), RuntimeError("ambiguous send failure"), asyncio.CancelledError()):
+            with self.subTest(error=type(error).__name__), tempfile.TemporaryDirectory() as tmp:
+                plugin, selected = self.setup_plugin(tmp)
+                plugin._fetch_qq_birthday = AsyncMock(return_value=SimpleNamespace(value=None, definitive=True))
+                event = _FakeEvent(group_id="456")
+                event.bot = SimpleNamespace(call_action=AsyncMock(side_effect=error))
+                with patch("astrbot_plugin_get_px.pixiv.delivery.logger") as logger:
+                    if isinstance(error, asyncio.CancelledError):
+                        with self.assertRaises(asyncio.CancelledError):
+                            await _collect(plugin._handle_checkin(event))
+                        output = []
+                    else:
+                        output = await _collect(plugin._handle_checkin(event))
+                self.assertEqual(output, [])
+                self.assertEqual(event.sent, [])
+                event.bot.call_action.assert_awaited_once()
+                plugin._release_checkin_background_claim.assert_not_awaited()
+                uncertain = type(error) is RuntimeError or isinstance(error, asyncio.CancelledError)
+                self.assertEqual(plugin._record_checkin_background.await_count, 0 if uncertain else 1)
+                record = await plugin.checkin_store.get_today_record("10001")
+                self.assertEqual(record.background_illust_id, selected[0])
+                self.assertEqual(record.background_mode, "pixiv_daily")
+                cached = list(plugin.checkin_cache.root.rglob("*.jpg"))
+                self.assertEqual(len(cached), 1)
+                self.assertTrue(list(plugin.checkin_cache.root.rglob("*.json")))
+                image = cached[0].read_bytes()
+                logs = " ".join(call.args[0] for call in logger.warning.call_args_list)
+                if not isinstance(error, asyncio.CancelledError):
+                    self.assertIn("feature=checkin", logs)
+                    self.assertIn("delivery_status=unknown" if uncertain else "delivery_status=timed_out", logs)
+                self.assertNotIn("charge=", logs)
+
+                event.bot.call_action = AsyncMock(return_value=None)
+                self.assertEqual(await _collect(plugin._handle_checkin(event)), [])
+                self.assertEqual(plugin._render_checkin_card.await_count, 1)
+                self.assertEqual(cached[0].read_bytes(), image)
+                self.assertEqual(await plugin.checkin_store.get_today_record("10001"), record)
+                self.assertEqual(len(selected), 1)
+
+    async def test_daily_card_file_error_retries_base64_with_diagnostics(self):
+        from aiocqhttp.exceptions import ActionFailed
+
+        with tempfile.TemporaryDirectory() as tmp:
+            plugin, _ = self.setup_plugin(tmp)
+            plugin._fetch_qq_birthday = AsyncMock(return_value=SimpleNamespace(value=None, definitive=True))
+            event = _FakeEvent(group_id="456")
+            event.bot = SimpleNamespace(call_action=AsyncMock(side_effect=[
+                ActionFailed({"retcode": 1200, "message": "ENOENT copyfile"}), None,
+            ]))
+            with patch("astrbot_plugin_get_px.pixiv.delivery.logger") as logger:
+                self.assertEqual(await _collect(plugin._handle_checkin(event)), [])
+            first, second = event.bot.call_action.await_args_list
+            self.assertTrue(first.kwargs["message"][0]["data"]["file"].startswith("file:"))
+            self.assertTrue(second.kwargs["message"][0]["data"]["file"].startswith("base64://"))
+            logs = " ".join(call.args[0] for call in logger.warning.call_args_list)
+            self.assertIn("ENOENT copyfile", logs)
+            self.assertIn("to_transport=base64", logs)
+            self.assertIn("feature=checkin transport=base64", logger.info.call_args.args[0])
+            self.assertEqual(event.sent, [])
+            plugin._release_checkin_background_claim.assert_not_awaited()
+
+    async def test_refresh_submission_states_control_card_and_claim_cleanup(self):
+        for cache_enabled, outcome in ((True, "timeout"), (False, "timeout"), (False, "empty"),
+                                       (False, "unknown"), (False, "cancelled"), (False, "build_cancelled")):
+            with self.subTest(cache=cache_enabled, outcome=outcome), tempfile.TemporaryDirectory() as tmp:
+                plugin, _ = self.setup_plugin(tmp)
+                await self.send_card(plugin, "456")
+                await plugin.checkin_store.update_checkin_member(
+                    user_id="10001", coins=500, affection=0, total_days=1, streak_days=1,
+                )
+                source = Path(tmp) / "new-background.png"
+                PILImage.new("RGB", (8, 8)).save(source)
+                plugin._prepare_checkin_background.side_effect = None
+                plugin._prepare_checkin_background.return_value = CardBackground(
+                    mode="pixiv_daily", source="lolicon:random", illust_id="999999:0",
+                    image_path=str(source), title="New background",
+                )
+                plugin.downloader = SimpleNamespace(defer_cleanup=Mock())
+                if not cache_enabled:
+                    plugin.checkin_cache = None
+                event = _FakeEvent(group_id="456")
+                side_effect = {"timeout": TimeoutError(), "unknown": RuntimeError("ambiguous failure"),
+                               "cancelled": asyncio.CancelledError()}.get(outcome)
+                event.bot = SimpleNamespace(call_action=AsyncMock(return_value=None, side_effect=side_effect))
+                if outcome == "build_cancelled":
+                    with patch("astrbot_plugin_get_px.pixiv.delivery._onebot_request", side_effect=asyncio.CancelledError()):
+                        with self.assertRaises(asyncio.CancelledError):
+                            await _collect(plugin._handle_refresh_checkin_background(event))
+                    event.bot.call_action.assert_not_awaited()
+                elif outcome == "cancelled":
+                    with self.assertRaises(asyncio.CancelledError):
+                        await _collect(plugin._handle_refresh_checkin_background(event))
+                else:
+                    self.assertEqual(await _collect(plugin._handle_refresh_checkin_background(event)), [])
+                self.assertEqual(event.sent, [])
+                self.assertEqual(plugin._release_checkin_background_claim.await_count, int(outcome == "build_cancelled"))
+                self.assertEqual(plugin._record_checkin_background.await_count, 1 if outcome in ("unknown", "cancelled", "build_cancelled") else 2)
+                record = await plugin.checkin_store.get_today_record("10001")
+                self.assertEqual(record.background_illust_id, "999999:0")
+                self.assertEqual((await plugin.checkin_store.get_profile("10001")).coins, 400)
+                if cache_enabled:
+                    self.assertEqual(len(list(plugin.checkin_cache.root.rglob("*.jpg"))), 2)
+                    plugin.downloader.defer_cleanup.assert_not_called()
+                elif outcome == "build_cancelled":
+                    plugin.downloader.defer_cleanup.assert_not_called()
+                    self.assertFalse((Path(tmp) / "rendered.jpg").exists())
+                else:
+                    plugin.downloader.defer_cleanup.assert_called_once()
+                    self.assertTrue(Path(plugin.downloader.defer_cleanup.call_args.args[0]).exists())
+
+
     async def test_rejected_background_uses_consistent_placeholder_and_cache(self):
         from astrbot_plugin_get_px.checkin import card
 
@@ -739,8 +855,7 @@ class MainErrorHandlingTest(unittest.IsolatedAsyncioTestCase):
         order = []
         plugin.config = {}
         plugin.context = SimpleNamespace()
-        plugin._migrate_grouped_config = Mock()
-        plugin._migrate_dedupe_config = Mock(return_value=1)
+        plugin._cleanup_retired_transport_config = Mock()
         plugin._init_client = Mock()
         plugin._cfg_bool = Mock(return_value=False)
 
@@ -818,8 +933,7 @@ class MainErrorHandlingTest(unittest.IsolatedAsyncioTestCase):
         plugin.downloader = SimpleNamespace(temp_dir=None, resume_cleanup=AsyncMock())
         plugin.config = {}
         plugin.context = SimpleNamespace()
-        plugin._migrate_grouped_config = Mock()
-        plugin._migrate_dedupe_config = Mock(return_value=1)
+        plugin._cleanup_retired_transport_config = Mock()
         plugin._init_client = Mock()
         plugin._cfg_bool = Mock(return_value=False)
         order = []
@@ -865,8 +979,7 @@ class MainErrorHandlingTest(unittest.IsolatedAsyncioTestCase):
         plugin.downloader = SimpleNamespace(temp_dir=None, resume_cleanup=AsyncMock())
         plugin.config = {}
         plugin.context = SimpleNamespace()
-        plugin._migrate_grouped_config = Mock()
-        plugin._migrate_dedupe_config = Mock(return_value=1)
+        plugin._cleanup_retired_transport_config = Mock()
         plugin._init_client = Mock()
         plugin._cfg_bool = Mock(return_value=False)
         plugin.plugin_web_api = SimpleNamespace(register=Mock())
@@ -1201,7 +1314,7 @@ class MainErrorHandlingTest(unittest.IsolatedAsyncioTestCase):
             self.assertIn("usage", order)
             self.assertNotIn("release_claim", order)
 
-    async def test_duplicate_reselect_send_failure_reverts_persist_and_releases_claim(
+    async def test_duplicate_reselect_unknown_keeps_card_and_claim(
         self,
     ):
         with tempfile.TemporaryDirectory() as tmp:
@@ -1230,13 +1343,13 @@ class MainErrorHandlingTest(unittest.IsolatedAsyncioTestCase):
                 plugin._handle_checkin(_FakeEvent(order, fail_send=True))
             )
 
-            self.assertEqual(len(output), 1)
+            self.assertEqual(output, [])
             self.assertEqual(plugin.checkin_store.background_updates, [])
-            self.assertEqual(plugin.checkin_cache.backgrounds, {})
-            self.assertFalse(plugin.checkin_cache.cache_path.exists())
+            self.assertTrue(plugin.checkin_cache.backgrounds)
+            self.assertTrue(plugin.checkin_cache.cache_path.exists())
             self.assertFalse(rendered.exists())
             plugin._record_checkin_background.assert_not_awaited()
-            plugin._release_checkin_background_claim.assert_awaited_once()
+            plugin._release_checkin_background_claim.assert_not_awaited()
 
     async def test_duplicate_restore_failure_without_reselect_keeps_placeholder(
         self,
@@ -1436,7 +1549,7 @@ class MainErrorHandlingTest(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(plugin.checkin_store.background_updates, [])
             self.assertFalse(source.exists())
 
-    async def test_send_failure_keeps_cache_but_does_not_record_usage(self):
+    async def test_unknown_send_keeps_background_and_cache_without_recording_success(self):
         with tempfile.TemporaryDirectory() as tmp:
             order = []
             result = CheckinResult(
@@ -1462,16 +1575,13 @@ class MainErrorHandlingTest(unittest.IsolatedAsyncioTestCase):
                 plugin._handle_checkin(_FakeEvent(order, fail_send=True))
             )
 
-            self.assertEqual(len(output), 1)
-            self.assertEqual(len(plugin.checkin_store.background_updates), 2)
-            self.assertEqual(
-                plugin.checkin_store.background_updates[1]["mode"], "fallback"
-            )
-            # 发送失败回滚：缓存与渲染中间文件均被清理。
-            self.assertFalse(plugin.checkin_cache.cache_path.exists())
+            self.assertEqual(output, [])
+            self.assertEqual(len(plugin.checkin_store.background_updates), 1)
+            self.assertEqual(plugin.checkin_store.background_updates[0]["illust_id"], "445566")
+            self.assertTrue(plugin.checkin_cache.cache_path.exists())
             self.assertFalse(rendered.exists())
             plugin._record_checkin_background.assert_not_awaited()
-            plugin._release_checkin_background_claim.assert_awaited_once()
+            plugin._release_checkin_background_claim.assert_not_awaited()
 
     async def test_cache_store_cancellation_releases_claim_and_cleans_pixiv_source(
         self,
@@ -1546,7 +1656,7 @@ class MainErrorHandlingTest(unittest.IsolatedAsyncioTestCase):
             self.assertFalse(source.exists())
             self.assertTrue(plugin.checkin_cache.cache_path.exists())
 
-    async def test_failed_first_send_then_cached_resend_records_metadata_usage_once(
+    async def test_unknown_first_send_then_cached_resend_records_metadata_usage_once(
         self,
     ):
         with tempfile.TemporaryDirectory() as tmp:
@@ -1580,12 +1690,12 @@ class MainErrorHandlingTest(unittest.IsolatedAsyncioTestCase):
             )
             second_output = await _collect(plugin._handle_checkin(_FakeEvent(order)))
 
-            self.assertEqual(len(first_output), 1)
+            self.assertEqual(first_output, [])
             self.assertEqual(second_output, [])
             self.assertEqual(plugin._prepare_checkin_background.await_count, 1)
             plugin._restore_checkin_background.assert_not_awaited()
-            # 第一次发送失败回滚到 fallback 背景，第二次重发不记录图片使用。
-            plugin._record_image_usage.assert_not_awaited()
+            # 首次送达未知保留背景，用户再次签到命中缓存并确认后才记成功使用。
+            plugin._record_image_usage.assert_awaited_once()
 
     async def test_same_user_concurrent_checkins_wait_for_the_first_full_flow(self):
         with tempfile.TemporaryDirectory() as tmp:

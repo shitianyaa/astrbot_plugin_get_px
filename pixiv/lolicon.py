@@ -17,7 +17,6 @@ IMAGE_SIZES = ("original", "regular", "small", "thumb", "mini")
 class LoliconClient:
     """Small async client for the Lolicon setu API."""
 
-    api_url: str = DEFAULT_API_URL
     exclude_ai: bool = True
     request_timeout: float = 30.0
     _session: aiohttp.ClientSession | None = field(default=None, repr=False)
@@ -25,7 +24,7 @@ class LoliconClient:
 
     @property
     def available(self) -> bool:
-        return bool(self.api_url.strip()) and not self._closed
+        return not self._closed
 
     def _ensure_session(self) -> aiohttp.ClientSession:
         if self._closed:
@@ -43,7 +42,7 @@ class LoliconClient:
         r18: int = 0,
     ) -> list[dict[str, Any]]:
         if not self.available:
-            raise RuntimeError("Lolicon API 未配置")
+            raise RuntimeError("Lolicon 客户端已关闭")
         if type(r18) is not int or r18 not in (0, 2):
             raise ValueError("r18 must be 0 or 2")
         params: list[tuple[str, str]] = [
@@ -59,7 +58,7 @@ class LoliconClient:
 
         session = self._ensure_session()
         timeout = aiohttp.ClientTimeout(total=self.request_timeout)
-        async with session.get(self.api_url, params=params, timeout=timeout) as resp:
+        async with session.get(DEFAULT_API_URL, params=params, timeout=timeout) as resp:
             if resp.status != 200:
                 raise RuntimeError(f"Lolicon API HTTP {resp.status}")
             payload = await resp.json(content_type=None)

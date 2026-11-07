@@ -76,7 +76,7 @@ python main.py
 3. 修改代码
 4. 运行语法检查和相关测试
 5. 手工验证相关功能路径
-6. 更新文档（如有必要）
+6. 同步受影响文档
 7. 记录进度到 `Progress/` 目录
 8. 提交代码
 
@@ -86,8 +86,8 @@ python main.py
 
 1. 阅读 [`../project/architecture.md`](../project/architecture.md) 的 `pixiv/` 部分
 2. 修改相关模块（`search.py`、`downloader.py`、`filters.py` 等）
-3. 运行相关测试：`pytest tests/test_pixiv_*.py -v`
-4. 手工验证：`/来点图`、`/p 关键词`、`/pid 作品ID`
+3. 运行相关测试：`python -m pytest -q tests/test_lolicon.py tests/test_pixiv_client.py tests/test_filtering.py tests/test_delivery.py tests/test_p_coin_cost.py tests/test_image_index.py`
+4. 手工验证：`/p 关键词 2`、`/p 2`；开启自动触发后发送「来张图」
 
 ### 修改签到逻辑
 
@@ -119,29 +119,19 @@ python main.py
 
 ### 查看数据库
 
-签到数据和去重索引保存在 SQLite 数据库中：
+先从插件日志或 `StarTools.get_data_dir("astrbot_plugin_get_px")` 确认真实数据目录，再使用已存在的 `.sqlite3` 文件。不要猜测目录或文件名；SQLite 对不存在的路径默认可能新建空库。下列命令使用只读模式，不在源码目录执行建库：
 
 ```bash
-# 进入插件数据目录
-cd <AstrBot数据目录>/data/astrbot_plugin_get_px
-
-# 查看签到数据库
-sqlite3 checkin.db
-.tables
-.schema checkin_users
-SELECT * FROM checkin_users LIMIT 5;
-
-# 查看去重索引
-sqlite3 image_index.db
-.tables
-.schema image_index
-SELECT * FROM image_index ORDER BY seen_date DESC LIMIT 10;
+sqlite3 -readonly "<插件数据目录>/checkin.sqlite3" ".tables"
+sqlite3 -readonly "<插件数据目录>/checkin.sqlite3" ".schema checkin_records"
+sqlite3 -readonly "<插件数据目录>/image_index.sqlite3" ".schema image_usage"
+sqlite3 -readonly "<插件数据目录>/image_index.sqlite3" "SELECT date_key, scope, source_key, illust_id, feature FROM image_usage ORDER BY sent_at DESC LIMIT 10;"
 ```
 
-### 清空测试数据
+去重查询按会话、图源／标签和原始图片 ID 隔离。JPEG 与摘要在 `checkin_card_cache/`，不在 SQLite；详细存储与清理边界见 [缓存与去重](../project/cache-and-dedupe.md)。不要把包含用户资料的查询结果直接贴入公开日志或 issue。
 
-开发测试时如需重置数据：
+### 重置隔离测试数据
 
-1. 停止 AstrBot
-2. 删除插件数据目录中的 `.db` 文件
-3. 重启 AstrBot，插件会自动初始化新数据库
+测试使用新建的临时数据目录和临时数据库，不操作真实 Bot 的数据目录。手工集成测试也应配置独立 AstrBot 数据目录；停止测试实例、确认备份及路径后，只清理本轮生成的隔离目录，再启动测试实例。
+
+不要为排查重复图片删除生产 `checkin.sqlite3` 或 `image_index.sqlite3`。Pages 清理缓存不清空签到奖励、作品去重、黑名单或备份。

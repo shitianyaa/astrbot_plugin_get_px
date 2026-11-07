@@ -10,10 +10,11 @@ import sys
 from unittest.mock import AsyncMock
 
 from PIL import Image as PILImage
+import pytest
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 
-from astrbot_plugin_get_px.checkin import artwork as artwork_mod  # noqa: E402
+from astrbot_plugin_get_px.checkin import CheckinStore, artwork as artwork_mod  # noqa: E402
 from astrbot_plugin_get_px.checkin.card import CardBackground  # noqa: E402
 from astrbot_plugin_get_px.checkin.calendar import (  # noqa: E402
     CALENDAR_EVENT_LIMIT,
@@ -614,14 +615,14 @@ def test_calendar_command_returns_text_for_bad_month_render_and_send_failures(
     assert not rendered.exists()
 
 
-def test_calendar_cache_key_reflects_custom_event_fingerprint(tmp_path) -> None:
+def test_calendar_cache_key_reflects_actual_event_content(tmp_path) -> None:
     rendered = tmp_path / "rendered.jpg"
     _make_jpeg(rendered, size=(1600, 900))
     plugin = object.__new__(GetPxPlugin)
     plugin.config = {"checkin_enabled": True}
     plugin.checkin_store = _CalendarStore(
         records=[],
-        global_events=(type("Event", (), {"event_id": 7})(),),
+        global_events=(type("Event", (), {"event_id": 7, "name": "周年", "date_value": "08-15"})(),),
     )
     cache = _KeyCapturingCache(published=rendered)
     plugin.checkin_cache = cache
@@ -633,12 +634,13 @@ def test_calendar_cache_key_reflects_custom_event_fingerprint(tmp_path) -> None:
 
     output = asyncio.run(_collect(plugin._handle_checkin_calendar(event, "2026-08")))
 
-    # 管理员增删自定义事件后指纹变化，当日缓存即失效重渲
+    # 实际渲染事件快照进入 key，事件名称与日期不再只由数量/ID表示。
     assert output == []
     assert cache.view_models == [
         {
             "month": "2026-08",
-            "events": "1-7",
+            "events": sorted((item.start, item.end, item.name, item.is_off_day)
+                             for item in collect_calendar_events(month="2026-08", holiday_lookup=None, custom_events=plugin.checkin_store.global_events)),
             "records": "",
             "background_quality": "medium",
             "output_size": "1600x900",
@@ -648,7 +650,7 @@ def test_calendar_cache_key_reflects_custom_event_fingerprint(tmp_path) -> None:
     assert len(event.sent) == 1
 
 
-def test_calendar_cache_key_fingerprint_blank_without_event_source(tmp_path) -> None:
+def test_calendar_cache_key_keeps_builtin_events_without_custom_event_source(tmp_path) -> None:
     rendered = tmp_path / "rendered.jpg"
     _make_jpeg(rendered, size=(1600, 900))
     plugin = object.__new__(GetPxPlugin)
@@ -668,13 +670,50 @@ def test_calendar_cache_key_fingerprint_blank_without_event_source(tmp_path) -> 
     assert cache.view_models == [
         {
             "month": "2026-08",
-            "events": "",
+            "events": sorted((item.start, item.end, item.name, item.is_off_day)
+                             for item in collect_calendar_events(month="2026-08", holiday_lookup=None)),
             "records": "",
             "background_quality": "medium",
             "output_size": "1600x900",
             "content_safety_policy": ContentSafetyPolicy().cache_identity(),
         }
     ]
+
+
+@pytest.mark.asyncio
+async def test_calendar_event_edits_and_holiday_updates_invalidate_cache(tmp_path):
+    from copy import deepcopy
+    from astrbot_plugin_get_px.checkin.holiday import HolidayCalendar
+
+    store = CheckinStore(tmp_path / "store")
+    await store.add_global_event(event_type="annual", date_value="08-15", name="旧事件", created_by="test")
+    rendered = tmp_path / "calendar.jpg"
+    _make_jpeg(rendered, size=(1600, 900))
+    plugin = object.__new__(GetPxPlugin)
+    plugin.config = {"checkin_enabled": True}
+    plugin.checkin_store = store
+    cache = _PolicyAwareCalendarCache(rendered, [])
+    plugin.checkin_cache = cache
+    plugin.holiday_calendar = HolidayCalendar(tmp_path, plugin_version="test")
+    plugin._prepare_checkin_calendar_background = AsyncMock(return_value=CardBackground(mode="fallback"))
+    plugin._render_checkin_calendar = AsyncMock(return_value=str(rendered))
+    event = _FakeEvent()
+    await _collect(plugin._handle_checkin_calendar(event, "2026-08"))
+    before = await store.export_snapshot()
+    changed = deepcopy(before)
+    changed["global_events"][0].update(name="新事件", date_value="08-16")
+    await store.import_snapshot(changed)
+    await _collect(plugin._handle_checkin_calendar(event, "2026-08"))
+    plugin.holiday_calendar._state["days"] = {"2026-08-17": {"name": "新假日", "is_off_day": True}}
+    await _collect(plugin._handle_checkin_calendar(event, "2026-08"))
+    await _collect(plugin._handle_checkin_calendar(event, "2026-08"))
+
+    assert plugin._render_checkin_calendar.await_count == 3
+    assert cache.view_models[0] != cache.view_models[1] != cache.view_models[2]
+    assert cache.view_models[2] == cache.view_models[3]
+    rendered_events = plugin._render_checkin_calendar.await_args.kwargs["events"]
+    assert any(item.name == "新事件" and item.start == "2026-08-16" for item in rendered_events)
+    assert any(item.name == "新假日" for item in rendered_events)
 
 
 def test_calendar_background_quality_follows_render_tier(tmp_path) -> None:
@@ -698,7 +737,8 @@ def test_calendar_background_quality_follows_render_tier(tmp_path) -> None:
     assert cache.view_models == [
         {
             "month": "2026-08",
-            "events": "0-0",
+            "events": sorted((item.start, item.end, item.name, item.is_off_day)
+                             for item in collect_calendar_events(month="2026-08", holiday_lookup=None)),
             "records": "",
             "background_quality": "large",
             "output_size": "2080x1170",
@@ -790,7 +830,8 @@ def test_calendar_cache_key_reflects_month_record_state(tmp_path) -> None:
     assert cache.view_models == [
         {
             "month": "2026-08",
-            "events": "0-0",
+            "events": sorted((item.start, item.end, item.name, item.is_off_day)
+                             for item in collect_calendar_events(month="2026-08", holiday_lookup=None)),
             "records": "2026-08-02:60",
             "background_quality": "medium",
             "output_size": "1600x900",

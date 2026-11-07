@@ -17,15 +17,16 @@ from .greeting import DEFAULT_CHECKIN_GREETING_PROMPT
 from .themes import get_checkin_theme
 
 try:
+    from ..pixiv.delivery import DeliveryNotSubmitted, DeliveryStatus, send_once
     from ..pixiv.downloader import cleanup
     from ..pixiv.safety import normalized_builtin_terms
 except ImportError:  # Direct imports used by the test suite.
+    from pixiv.delivery import DeliveryNotSubmitted, DeliveryStatus, send_once
     from pixiv.downloader import cleanup
     from pixiv.safety import normalized_builtin_terms
 
 
 LOG_PREFIX = "[GetPx]"
-DEFAULT_AUTO_DOWNGRADE_ORIGINAL_LIMIT_MB = 3.0
 
 
 @dataclass(frozen=True)
@@ -347,8 +348,18 @@ class CheckinApplicationMixin:
                     if quota_line:
                         content.append(Plain(quota_line))
                 stage = "card_send"
-                await event.send(event.chain_result(content))
-                # 图片发送成功后不再释放 pending；即使升级正式记录失败，也要继续去重。
+                submission_cancelled = None
+                try:
+                    delivery_status = await send_once(event, content, context="feature=checkin")
+                except DeliveryNotSubmitted:
+                    raise
+                except asyncio.CancelledError as exc:
+                    # 保留派生背景摘要后再传播取消，重选卡片也可按原背景复用。
+                    submission_cancelled = exc
+                    delivery_status = DeliveryStatus.UNKNOWN
+                if delivery_status is DeliveryStatus.FAILED:
+                    raise RuntimeError("签到卡尚未提交")
+                # 正常返回、超时或送达未知均不能撤销已提交背景。
                 claim_held = False
                 if not cache_hit:
                     try:
@@ -367,6 +378,11 @@ class CheckinApplicationMixin:
                         logger.warning(
                             f"{LOG_PREFIX} 签到背景缓存写入失败: error_type={type(exc).__name__}"
                         )
+                if delivery_status is DeliveryStatus.UNKNOWN:
+                    logger.warning(f"{LOG_PREFIX} 签到卡送达未知，保留背景与缓存: delivery_status=unknown retry=no")
+                    if submission_cancelled is not None:
+                        raise submission_cancelled
+                    return
                 try:
                     stage = "usage_record"
                     await self._record_checkin_background(event, background)
@@ -383,6 +399,7 @@ class CheckinApplicationMixin:
                 logger.info(
                     f"{LOG_PREFIX} 签到卡发送完成: tier={actual_tier} "
                     f"cache_hit={'yes' if cache_hit else 'no'} "
+                    f"delivery_status={delivery_status.value} "
                     f"background_mode={getattr(background, 'mode', 'none')}"
                 )
                 return

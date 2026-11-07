@@ -6,29 +6,40 @@
 
 | 字段 | 类型 | 默认值 | 说明 |
 | --- | --- | --- | --- |
-| `pixiv_refresh_token` | `string` | 空 | Lolicon 主源失败时用于 Pixiv 搜索或推荐作品回退；留空不影响 Lolicon 发图 |
-| `lolicon_api_url` | `string` | `https://api.lolicon.app/setu/v2` | 首选图片源地址；留空停用 Lolicon，仅 Pixiv 回退 |
+| `pixiv_refresh_token` | `string` | 空 | 使用 Pixiv 作为首选或回退时需要填写；留空直接使用 Lolicon |
+| `preferred_image_source` | `enum` | `Lolicon` | 下拉选择 `Lolicon` / `Pixiv`；首选请求失败或无结果时尝试另一源 |
 | `lolicon_exclude_ai` | `bool` | `true` | 仅向 Lolicon API 传递 excludeAI=true/false；R18 与普通混合由当前会话强制普通分级决定 |
 | `lolicon_image_proxy_origins` | `text` | 空 | 每行一个 http(s) origin，最多 5 个按序尝试；仅改写允许列表内 Pixiv 图片主机 |
 | `max_count` | `int` | `5` | 单次指令最多发送张数，范围 1–20 |
-| `p_coin_cost` | `int` | `20` | `/p` 成功发图每张金币，范围 0–200；0 免费 |
-| `onebot_image_transport` | `enum` | `file` | `file` 本地路径直调、`base64` 编码直调、`astrbot` 框架链路；仅 aiocqhttp 的 /p 和自然语言发图生效 |
-| `image_quality` | `enum` | `original` | `original`/`large`/`medium`；超阈值自动降级 |
-| `auto_downgrade_original_mb` | `float` | `3.0` | 原图超过此 MiB 时降级，范围 0–25；0 禁用降级 |
+| `p_coin_cost` | `int` | `20` | `/p` 每张金币，范围 0–200；0 免费；正常返回与发送超时均扣费，下载／构建失败及其他发送异常不扣费 |
+| `image_quality` | `enum` | `original` | `original`/`large`/`medium`；固定所选画质，超限／不可用时换作品 |
+| `auto_downgrade_original_mb` | `float` | `10.0` | 图片大小上限（MiB），适用于所选画质，范围 0–25；0 关闭软上限；保留旧键并沿用已有数值 |
 | `forward_threshold` | `int` | `1` | 下载张数严格大于此值时合并转发（仅 aiocqhttp）；0 始终合并，范围 0–20 |
 | `auto_trigger_enabled` | `bool` | `false` | 群内自然语言（「来份/张图」）自动触发发图 |
+
+`preferred_image_source` 保存并重载后生效，普通发图、签到背景与日历背景共用请求顺序。Lolicon 有标签时搜索、无标签时随机；Pixiv 有标签时搜索、无标签时推荐。无 Pixiv token 时直接使用 Lolicon；两源均失败或无结果时按各入口现有失败路径处理。单张候选被过滤、去重或下载失败不直接触发换源；普通发图耗尽本批可用候选后按相同优先级补取，请求失败或空结果时仍可回退另一源；有效缓存及已保存背景继续复用，不因切换优先级强制重选。无效选项记录日志并使用默认 Lolicon 优先。
+
+普通发图先用同批剩余候选补足张数，每次请求最多取 3 批、实际尝试 20 张作品，同一作品 ID 不重复下载。大小等于上限可发送；超限、所选画质地址缺失或下载失败则换图，不尝试其他画质。反代与源地址重试保持同一画质。跳过候选清理文件并释放临时占用，最终按实际发送调用结果结算；不足时发送已找到的图片。签到和日历仍使用独立画质规则，不应用此软上限。
+
+从首次下载开始，下载和候选补取共享 `request_timeout × max(3, 请求张数)` 秒预算；默认超时 30 秒时，1 张为 90 秒、5 张为 150 秒。预算到期会取消进行中的网络操作，发送已下载图片，允许少于请求张数；首次取源、消息发送和资源清理不计入该预算。大小上限在响应头及分块读取时执行。
+
+旧阈值不会自动改为 10 MiB；使用原图且频繁因大小限制换图时，建议手动将上限调整为 10 MiB。
+
+Lolicon 请求地址固定为 `https://api.lolicon.app/setu/v2`。旧 `lolicon_api_url` 从 schema 删除，由 AstrBot 加载时裁剪；简单 dict 中的残留值也不参与请求，旧自定义地址和留空停用不再生效。图片反代 origin 配置仍只代理图片，不代理 API。
+
+OneBot 发图默认使用本地 `file:///` 路径；仅在明确文件读取失败时，将同一条消息回退到 base64 编码重试一次，超时不回退、不重发。base64 是图片编码，与 AstrBot 4.27.3 的 OneBot 默认发图编码相同；回退仍直接调用 OneBot，不额外尝试 AstrBot 框架发送。file 发送正常返回但没有有效 `message_id` 时仍扣费，并保留图片 10 分钟供协议端读取，不重发。旧 `onebot_image_transport`（顶层及 `pixiv_source` 内）由 AstrBot 在加载时按 schema 裁剪；插件不依赖旧键，也不能恢复框架已裁剪的值。发送异常仅记日志，详见 [OneBot 图片发送](../../README.md#onebot-图片发送)。
 
 ## 2. 图片筛选与去重（`content_dedupe`）
 
 | 字段 | 类型 | 默认值 | 说明 |
 | --- | --- | --- | --- |
-| `filter_manga` | `bool` | `true` | 过滤 Pixiv 回退结果中的 manga；Lolicon 返回按插画处理 |
-| `dedupe_days` | `int` | `1` | 按北京时间自然日去重，0–7；0 关闭并清空记录。同群共享，缩短天数会在重载时清理超期记录 |
-| `dedupe_ttl_hours` | `float` | `24.0` | 旧版去重配置（迁移用，隐藏） |
-| `dedupe_days_migrated` | `bool` | `false` | 去重配置迁移标记（隐藏） |
+| `filter_manga` | `bool` | `true` | 过滤 Pixiv 结果中的 manga；Lolicon 返回按插画处理 |
+| `dedupe_days` | `int` | `1` | 最近 0–7 个北京时间自然日；1 仅当天，非滚动 24 小时；同群共享，不同会话、标签和图源隔离；0 关闭并清空使用记录 |
 | `group_content_safety_policies` | `template_list` | `[]` | 群聊内容安全策略：强制普通分级、内置安全词开关、独立自定义屏蔽词与独立作品 ID 黑名单，按群 ID 生效；建议在管理中心维护 |
 | `private_content_safety_policies` | `template_list` | `[]` | 私聊内容安全策略：字段同群聊策略，按用户 ID 独立生效；建议在管理中心维护 |
 | `group_content_safety_policies_migrated` | `bool` | `false` | 会话策略迁移标记（隐藏） |
+
+`dedupe_days` 不控制签到 JPEG、日历或预览缓存的有效期。窗口缩短会清理超期使用记录，扩大不能恢复已删除历史；配置保存后重载生效。查询、预占用及不同入口的复用规则见 [缓存与去重](cache-and-dedupe.md#2-正式图片去重)。
 
 ## 3. 万象画卷联动（`checkin_omnidraw`）
 
@@ -47,7 +58,7 @@
 | --- | --- | --- | --- |
 | `checkin_enabled` | `bool` | `true` | 签到开关 |
 | `checkin_bot_name` | `string` | `neko` | 签到卡片 bot 角色名 |
-| `checkin_card_quality_tier` | `enum` | `省流量` | `省流量`(960×540+medium)/`清晰`(1248×702+large)/`极致`(1728×972+large)；签到日历同档 |
+| `checkin_card_quality_tier` | `enum` | `省流量` | `省流量`(960×540+medium)/`清晰`(1248×702+large)/`极致`(1728×972+large)；日历同档但尺寸分别为 1600×900／2080×1170／2880×1620；普通重复签到保持当天记录档位 |
 | `checkin_avatar_enabled` | `bool` | `true` | QQ 平台尝试在卡片显示用户头像 |
 | `checkin_greeting_mode` | `enum` | `hitokoto` | `local`(本地事件)/`hitokoto`(一言 API)/`ai`(文本模型) |
 | `checkin_hitokoto_categories` | `list` | `["全部"]` | 一言类型多选 |
@@ -56,7 +67,7 @@
 | `checkin_ai_greeting_timeout` | `float` | `8.0` | AI 问候超时，1–30 秒 |
 | `checkin_hitokoto_timeout` | `float` | `5.0` | 一言请求超时，1–15 秒 |
 | `checkin_background_mode` | `enum` | `pixiv_daily` | `pixiv_daily`(每日自动选背景)/`custom`(固定背景文件) |
-| `checkin_background_tag` | `string` | 空 | 背景搜索标签，多标签分隔；留空 Lolicon 随机取图 |
+| `checkin_background_tag` | `string` | 空 | 多标签随机排列逐个尝试，使用记录按最终标签隔离；留空按所选优先级请求 Lolicon 随机或 Pixiv 推荐作品 |
 | `checkin_custom_background` | `string` | 空 | 管理员本地背景路径，推荐 3:4 竖图 |
 
 ## 5. 签到商店与定价（`checkin_shop`）
@@ -88,14 +99,20 @@
 
 独立列表支持分别应用到所有群聊策略、所有私聊策略或全部策略；批量操作只覆盖对应字段，并在一次保存中完成，失败时回滚。缺少会话上下文、策略不存在或读取异常时严格启用普通分级和内置安全词。
 
+## 升级基线
+
+v3.8.7 的配置升级基线为已成功完成迁移的 v3.8.0，配置只保留六个分组。顶层旧扁平兼容键、`content_dedupe.dedupe_ttl_hours`、`content_dedupe.dedupe_days_migrated` 和 `runtime._grouped_config_migrated` 已移除；正式字段的默认值与策略模板不变。`group_content_safety_policies_migrated` 仍用于 SQLite 旧群策略迁移，不能作为无用标记删除。
+
+升级前备份插件配置 JSON 和数据目录。早于 v3.8.0 的版本须先安装 v3.8.0、成功启动，并确认自定义值及群／私聊策略已保存到对应分组后再升级。仅存在于顶层的值不属于支持范围；AstrBot 4.27.3 在插件初始化前删除 schema 外的键，插件无法在裁剪后找回旧值。若来自 v2.8.x 或已有数据但数据库无 schema 版本号，先使用 v3.0.0 完成签到数据迁移，再经过 v3.8.0 完成配置迁移。不要先升级再依赖回退旧版本恢复配置。
+
 ## 配置维护规则
 
 - README 配置表必须和 `_conf_schema.json` 保持一致。
-- 运行时通过 `main.py` 的 `_cfg_str`/`_cfg_int`/`_cfg_float`/`_cfg_bool` 读取，这些方法先遍历分组取值、找不到再回退扁平 key（兼容旧扁平配置与测试）。不要在业务流程散落 `self.config.get(...)`。
+- 运行时通过 `main.py` 的 `_cfg_str`/`_cfg_int`/`_cfg_float`/`_cfg_bool` 读取。正式配置由 AstrBot 按分组加载；读取层保留简单 dict 支持，但不承担旧扁平配置迁移。不要在业务流程散落 `self.config.get(...)`。
 - 分组后存盘为嵌套 `config[组][键]`；新增配置项时加入对应组的 `items`，读取层无需改动。
 - 删除、重命名或改字段类型时必须说明兼容影响。
 - `forward_threshold` 按下载张数判断，仅 aiocqhttp 合并转发；旧 `send_as_forward` 仅在新字段缺失时兼容（`true`→0，`false`→20）。
 - `dedupe_days` 缩短天数会在重载时清理超期记录，增加天数无法恢复已清理历史。
 - `image_quality` 不影响签到背景，签到卡/日历背景画质由 `checkin_card_quality_tier` 独立控制。
-- `pixiv_refresh_token` 留空时 Lolicon 失败直接报错，不进行 Pixiv 回退。
-- schema 顶层保留兼容迁移用的 `invisible` 旧扁平键。AstrBot 4.27+ 在加载插件配置时会删除 schema 之外的键，这些 invisible 键让旧扁平值在框架裁剪前存活，`_migrate_grouped_config` 随后搬到对应分组。迁移完成后下一版本可删除这些顶层键。
+- `pixiv_refresh_token` 留空时跳过 Pixiv，仅请求 Lolicon；失败或无结果时不再有可用回退源。
+- schema 顶层仅定义六个正式分组，不再复制隐藏兼容键。策略服务只读写 `content_dedupe` 的正式模板；分组中的空列表不得恢复已停用的顶层策略。

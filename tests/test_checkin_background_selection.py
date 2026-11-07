@@ -53,12 +53,12 @@ class FakeDownloader:
         illust,
         background_quality,
         timeout,
-        downgrade_limit_bytes,
+        size_limit_bytes,
         log_context,
     ):
         self.illust_ids.append(str(illust["id"]))
         self.qualities.append(background_quality)
-        self.downgrade_limits.append(downgrade_limit_bytes)
+        self.downgrade_limits.append(size_limit_bytes)
         return f"picked_{illust['id']}.jpg", background_quality, 123
 
 

@@ -20,8 +20,10 @@ from .themes import (
 )
 
 try:
+    from ..pixiv.delivery import DeliveryNotSubmitted, DeliveryStatus, send_once
     from ..pixiv.downloader import cleanup
 except ImportError:  # Direct imports used by the test suite.
+    from pixiv.delivery import DeliveryNotSubmitted, DeliveryStatus, send_once
     from pixiv.downloader import cleanup
 
 
@@ -495,7 +497,25 @@ class CheckinShopMixin:
             content = [Plain(purchase.message), Image.fromFileSystem(str(card_path))]
             if background.pixiv_caption:
                 content.append(Plain(background.pixiv_caption))
-            await event.send(event.chain_result(content))
+            try:
+                delivery_status = await send_once(event, content, context="feature=checkin_refresh")
+            except DeliveryNotSubmitted:
+                raise
+            except asyncio.CancelledError:
+                claim_held = False
+                if cache is None:
+                    self.downloader.defer_cleanup(str(card_path))
+                    card_path = None
+                raise
+            if delivery_status is DeliveryStatus.FAILED:
+                raise RuntimeError("刷新签到卡尚未提交")
+            claim_held = False
+            if delivery_status in (DeliveryStatus.ACCEPTED, DeliveryStatus.TIMED_OUT, DeliveryStatus.UNKNOWN) and cache is None:
+                self.downloader.defer_cleanup(str(card_path))
+                card_path = None
+            if delivery_status is DeliveryStatus.UNKNOWN:
+                logger.warning(f"{LOG_PREFIX} 刷新签到卡送达未知，保留背景与卡片: delivery_status=unknown retry=no")
+                return
             try:
                 await self._record_checkin_background(event, background)
             except Exception as exc:
@@ -503,8 +523,6 @@ class CheckinShopMixin:
                     f"{LOG_PREFIX} 记录签到背景使用状态失败: "
                     f"error_type={type(exc).__name__}"
                 )
-            else:
-                claim_held = False
             return
         except Exception as exc:
             logger.warning(

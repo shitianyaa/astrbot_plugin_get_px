@@ -14,8 +14,10 @@ from astrbot.api.message_components import Image, Plain, Node, Nodes
 
 class DeliveryStatus(Enum):
     CONFIRMED = "confirmed"
+    ACCEPTED = "accepted"
     FAILED = "failed"
     UNKNOWN = "unknown"
+    TIMED_OUT = "timed_out"
 
 
 class DeliveryNotSubmitted(asyncio.CancelledError):
@@ -76,12 +78,9 @@ async def _onebot_request(event, content: list, transport: str) -> tuple[str, di
     return action, params
 
 
-def _safe_error_text(value: object) -> str:
-    """保留诊断文本，移除地址、标识和凭据；限制异常回包撑大日志。"""
-    if not isinstance(value, str):
-        return ""
-    # 输出仅保留 512 字符；先限制输入，避免异常长回包拖慢事件循环。
-    text = value[:2048].replace(r"\/", "/")
+def _without_error_paths(text: str) -> str:
+    """排除地址和路径，避免其参与错误分类或泄露到日志。"""
+    text = text.replace(r"\/", "/")
     text = re.sub(r"https?://\S+|\[CQ:[^\]]*\]", "[redacted]", text)
     path_start = r"(?:file://|\\{2,}|[a-z]:[\\/]|/|\.\.?[\\/])"
     text = re.sub(
@@ -89,8 +88,10 @@ def _safe_error_text(value: object) -> str:
         "[path]",
         text,
     )
+    # 无引号路径在独立诊断前结束；不要求扩展名，不匹配 timeout.jpg 等文件名。
+    timeout_diagnostic = r"(?:(?:operation\s+)?(?:timed\s+out|timeout)|(?:上传|读取)?超时)(?![\w./\\=])"
     text = re.sub(
-        rf'''(?i)\b((?:file|path|filename)\s*=\s*){path_start}[^"'\r\n,;]+?(?=\s+\w+\s*[:=]|["'\r\n,;]|$)''',
+        rf'''(?i)\b((?:file|path|filename)\s*=\s*){path_start}[^"'\r\n,;]+?(?=(?:[:：]\s*|\s+){timeout_diagnostic}|\s+\w+\s*[:=]|["'\r\n,;]|$)''',
         r"\1[path]",
         text,
     )
@@ -101,6 +102,15 @@ def _safe_error_text(value: object) -> str:
         "[path]",
         text,
     )
+    return text
+
+
+def _safe_error_text(value: object) -> str:
+    """保留诊断文本，移除地址、标识和凭据；限制异常回包撑大日志。"""
+    if not isinstance(value, str):
+        return ""
+    # 输出仅保留 512 字符；先限制输入，避免异常长回包拖慢事件循环。
+    text = _without_error_paths(value[:2048])
     text = re.sub(
         r"""(?i)((?:token|secret|password|authorization|api[_-]?key)["']?\s*[=:]\s*)(?:"[^"]*"|'[^']*'|[^\s,;]+)""",
         r"\1[redacted]",
@@ -144,79 +154,98 @@ def log_delivery_error(
     )
 
 
-async def _send_notice(event, text: str, *, context: str, status: DeliveryStatus) -> None:
-    try:
-        await event.send(event.plain_result(text))
-    except Exception as exc:
-        log_delivery_error(
-            exc, context=context, phase="notice", delivery_status=status.value
+def _error_text(error: BaseException) -> str:
+    result = getattr(error, "result", None)
+    messages = (result.get("message", ""), result.get("wording", "")) if isinstance(result, dict) else (str(error),)
+    return " ".join(_without_error_paths(message) for message in messages if isinstance(message, str))
+
+
+def _is_timeout(error: BaseException) -> bool:
+    seen = set()
+    while error is not None and id(error) not in seen:
+        seen.add(id(error))
+        if isinstance(error, TimeoutError):
+            return True
+        if re.search(r"\btimeout\b|\btimed\s+out\b|超时", _error_text(error), re.IGNORECASE):
+            return True
+        error = error.__cause__ or error.__context__
+    return False
+
+
+def _is_file_read_error(error: Exception) -> bool:
+    text = _error_text(error).lower()
+    return isinstance(error, (FileNotFoundError, PermissionError)) or any(
+        marker in text for marker in (
+            "enoent", "eacces", "eperm", "no such file", "permission denied",
+            "copyfile", "文件不存在", "无法读取",
         )
+    )
 
 
-async def send_once(
-    event, content: list, *, context: str, onebot_transport: str = "file"
-) -> DeliveryStatus:
-    """发送接口无幂等保证；异常时保留未知状态，不自动重发图片。"""
+async def send_once(event, content: list, *, context: str) -> DeliveryStatus:
+    """路径读取失败才换编码；超时按已发送结算，不重复提交。"""
     started = time.monotonic()
     direct = (
-        onebot_transport in ("file", "base64")
-        and getattr(event, "get_platform_name", lambda: "")() == "aiocqhttp"
+        getattr(event, "get_platform_name", lambda: "")() == "aiocqhttp"
         and getattr(event, "bot", None) is not None
     )
-    context += f" transport={onebot_transport if direct else 'astrbot'}"
-    try:
-        if direct:
-            action, params = await _onebot_request(event, content, onebot_transport)
-        else:
-            message = event.chain_result(content)
-    except asyncio.CancelledError as exc:
-        raise DeliveryNotSubmitted() from exc
-    except Exception as exc:
-        log_delivery_error(
-            exc, context=context, phase="build", delivery_status="failed"
-        )
+    transport = "file" if direct else "astrbot"
+    while True:
+        attempt_context = f"{context} transport={transport}"
         try:
-            await _send_notice(
-                event, "⚠️ 图片消息构建失败，本次未发送且不扣费，请检查插件日志。",
-                context=context, status=DeliveryStatus.FAILED,
+            if direct:
+                action, params = await _onebot_request(event, content, transport)
+            else:
+                message = event.chain_result(content)
+        except asyncio.CancelledError as exc:
+            raise DeliveryNotSubmitted() from exc
+        except Exception as exc:
+            log_delivery_error(
+                exc, context=attempt_context, phase="build", delivery_status="failed"
             )
-        except asyncio.CancelledError as cancelled:
-            raise DeliveryNotSubmitted() from cancelled
-        return DeliveryStatus.FAILED
-    try:
-        if direct:
-            receipt = await event.bot.call_action(action, **params)
-            # aiocqhttp 已解包 data；异步受理可返回 None，不能据此确认发图。
-            message_id = receipt.get("message_id") if isinstance(receipt, dict) else None
-            if type(message_id) not in (int, str) or not str(message_id).strip():
+            if direct and transport == "file" and _is_file_read_error(exc):
+                transport = "base64"
                 logger.warning(
-                    f"[GetPx] 发图回执缺少消息标识: {context} "
-                    f"phase=receipt delivery_status=unknown"
+                    f"[GetPx] 图片传输方式切换: {context} from_transport=file "
+                    "to_transport=base64 reason=file_read_error phase=build"
                 )
-                await _send_notice(
-                    event, "⚠️ 图片送达状态未知，已停止自动重发；请先查看聊天记录，本次未确认部分不扣费。",
-                    context=context, status=DeliveryStatus.UNKNOWN,
+                continue
+            return DeliveryStatus.FAILED
+        try:
+            if direct:
+                receipt = await event.bot.call_action(action, **params)
+            else:
+                await event.send(message)
+        except Exception as exc:
+            # 超时可能延迟出图，优先于路径错误分类，避免重复发送。
+            status = DeliveryStatus.TIMED_OUT if _is_timeout(exc) else DeliveryStatus.UNKNOWN
+            log_delivery_error(
+                exc, context=attempt_context, phase="send", delivery_status=status.value,
+                duration_ms=int((time.monotonic() - started) * 1000),
+            )
+            if status is DeliveryStatus.TIMED_OUT:
+                logger.warning(f"[GetPx] 发图超时停止重试: {attempt_context} delivery_status=timed_out retry=no")
+                return status
+            if direct and transport == "file" and _is_file_read_error(exc):
+                transport = "base64"
+                logger.warning(
+                    f"[GetPx] 图片传输方式切换: {context} from_transport=file "
+                    "to_transport=base64 reason=file_read_error phase=send"
                 )
-                return DeliveryStatus.UNKNOWN
-        else:
-            await event.send(message)
-    except Exception as exc:
-        log_delivery_error(
-            exc,
-            context=context,
-            phase="send",
-            delivery_status="unknown",
-            duration_ms=int((time.monotonic() - started) * 1000),
+                continue
+            return DeliveryStatus.UNKNOWN
+        status = DeliveryStatus.CONFIRMED
+        message_id = receipt.get("message_id") if direct and isinstance(receipt, dict) else None
+        if direct and transport == "file" and not (
+            (type(message_id) is int and message_id != 0)
+            or (isinstance(message_id, str) and message_id.strip())
+        ):
+            # 正常返回仍结算，但协议端可能只受理，保留文件读取窗口。
+            status = DeliveryStatus.ACCEPTED
+        logger.info(
+            f"[GetPx] 作品发送调用成功: {attempt_context} delivery_status={status.value} duration_ms={int((time.monotonic() - started) * 1000)}"
         )
-        await _send_notice(
-            event, "⚠️ 图片送达状态未知，已停止自动重发；请先查看聊天记录，本次未确认部分不扣费。",
-            context=context, status=DeliveryStatus.UNKNOWN,
-        )
-        return DeliveryStatus.UNKNOWN
-    logger.info(
-        f"[GetPx] 作品发送已确认: {context} delivery_status=confirmed duration_ms={int((time.monotonic() - started) * 1000)}"
-    )
-    return DeliveryStatus.CONFIRMED
+        return status
 
 
 class DeliveryMixin:

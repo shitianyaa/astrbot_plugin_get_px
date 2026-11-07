@@ -327,7 +327,7 @@ async def test_group_and_private_metadata_survive_reinitialize():
 
 
 @pytest.mark.asyncio
-async def test_grouped_config_migrates_flat_policies_and_reloads_from_nested_container():
+async def test_empty_grouped_policies_do_not_restore_retired_flat_values():
     legacy_entry = {"group_id": "g1", "general_only_enabled": False,
                     "builtin_terms_enabled": True, "custom_terms": ["old"]}
     grouped = {CONFIG_KEY: [], PRIVATE_CONFIG_KEY: [], MIGRATION_KEY: False}
@@ -335,13 +335,13 @@ async def test_grouped_config_migrates_flat_policies_and_reloads_from_nested_con
                      MIGRATION_KEY: False, "content_dedupe": grouped})
     service = GroupSafetyService(config)
     await service.initialize(TrackingLegacy([]))
-    assert grouped[CONFIG_KEY][0]["group_id"] == "g1"
-    assert grouped[CONFIG_KEY][0]["custom_terms"] == ["old"]
+    assert grouped[CONFIG_KEY] == []
+    assert grouped[MIGRATION_KEY] is True
     assert config[CONFIG_KEY] == [legacy_entry]
 
     reloaded = GroupSafetyService(config)
     await reloaded.initialize(TrackingLegacy([]))
-    assert (await reloaded.get_group_policy("g1"))["custom_terms"] == ["old"]
+    assert (await reloaded.get_group_policy("g1"))["is_default"] is True
 
 
 @pytest.mark.asyncio
@@ -362,82 +362,6 @@ async def test_grouped_config_failed_save_restores_nested_identity_and_compatibi
     assert grouped[CONFIG_KEY] == before
     assert config[CONFIG_KEY] == []
     assert config[MIGRATION_KEY] is True
-
-
-@pytest.mark.asyncio
-async def test_grouped_config_repairs_template_compatibility_after_global_marker():
-    group_legacy = {"__template_key": "group_policy", "group_id": "g2",
-                    "general_only_enabled": True, "builtin_terms_enabled": True}
-    private_legacy = {"__template_key": "private_policy", "user_id": "u2",
-                      "general_only_enabled": False, "builtin_terms_enabled": True}
-    grouped = {CONFIG_KEY: [], PRIVATE_CONFIG_KEY: [], MIGRATION_KEY: False}
-    config = Config({"content_dedupe": grouped, CONFIG_KEY: [group_legacy],
-                     PRIVATE_CONFIG_KEY: [private_legacy], MIGRATION_KEY: True,
-                     "_grouped_config_migrated": True})
-    import importlib
-    import sys
-    repo = Path(__file__).resolve().parents[1]
-    sys.path.insert(0, str(repo.parent))
-    try:
-        GetPxPlugin = importlib.import_module(f"{repo.name}.main").GetPxPlugin
-        plugin = GetPxPlugin.__new__(GetPxPlugin)
-        plugin.config = config
-        plugin._migrate_grouped_config()
-    finally:
-        sys.path.remove(str(repo.parent))
-    assert grouped[CONFIG_KEY] == [group_legacy]
-    assert grouped[PRIVATE_CONFIG_KEY] == [private_legacy]
-    assert grouped[MIGRATION_KEY] is True
-
-
-@pytest.mark.parametrize("pre_materialized", [True, False])
-def test_grouped_policy_compat_migration_is_atomic_on_save_failure(pre_materialized):
-    import importlib
-    import sys
-    group_entry = {"__template_key": "group_policy", "group_id": "g9",
-                   "general_only_enabled": True, "builtin_terms_enabled": True}
-    private_entry = {"__template_key": "private_policy", "user_id": "u9",
-                     "general_only_enabled": False, "builtin_terms_enabled": True}
-    group_ref = [group_entry]
-    private_ref = [private_entry]
-    config = Config({CONFIG_KEY: group_ref, PRIVATE_CONFIG_KEY: private_ref,
-                     MIGRATION_KEY: True, "_grouped_config_migrated": True})
-    runtime_ref = {"_grouped_config_migrated": True}
-    config["runtime"] = runtime_ref
-    content_ref = None
-    nested_group_ref = None
-    nested_private_ref = None
-    if pre_materialized:
-        nested_group_ref, nested_private_ref = [], []
-        content_ref = {CONFIG_KEY: nested_group_ref, PRIVATE_CONFIG_KEY: nested_private_ref,
-                       MIGRATION_KEY: False}
-        config["content_dedupe"] = content_ref
-    runtime_before = deepcopy(runtime_ref)
-    config["fail"] = True
-    repo = Path(__file__).resolve().parents[1]
-    sys.path.insert(0, str(repo.parent))
-    try:
-        GetPxPlugin = importlib.import_module(f"{repo.name}.main").GetPxPlugin
-        plugin = GetPxPlugin.__new__(GetPxPlugin)
-        plugin.config = config
-        plugin._migrate_grouped_config()
-    finally:
-        sys.path.remove(str(repo.parent))
-    assert config[CONFIG_KEY] is group_ref and config[PRIVATE_CONFIG_KEY] is private_ref
-    assert config[CONFIG_KEY] == [group_entry]
-    assert config[PRIVATE_CONFIG_KEY] == [private_entry]
-    assert config[MIGRATION_KEY] is True
-    assert config["runtime"] is runtime_ref and config["runtime"] == runtime_before
-    if pre_materialized:
-        assert config["content_dedupe"] is content_ref
-        assert config["content_dedupe"][CONFIG_KEY] is nested_group_ref
-        assert config["content_dedupe"][PRIVATE_CONFIG_KEY] is nested_private_ref
-        assert config["content_dedupe"][CONFIG_KEY] == []
-        assert config["content_dedupe"][PRIVATE_CONFIG_KEY] == []
-        assert config["content_dedupe"][MIGRATION_KEY] is False
-    else:
-        assert "content_dedupe" not in config
-
 
 
 def test_lolicon_exclude_ai_document_contracts_are_consistent():
