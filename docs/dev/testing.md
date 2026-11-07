@@ -225,3 +225,5 @@ async def test_something_async():
 ## OneBot 自动传输与超时结算
 
 运行 `python -m pytest -q tests/test_delivery.py tests/test_p_coin_cost.py tests/test_downloader.py`。覆盖群聊/私聊、单图/转发、空回执正常结算、1200 NTEvent 超时仍扣费且去重、不发异常提示、不重发、文件读取失败换 base64 的两次诊断日志、超时文件保留 600 秒、非超时未知状态及取消处理，以及旧传输配置清理/保存失败回滚。测试使用模拟协议回包，不代表晚间 QQ 实际延迟验证。
+
+签到卡发送回归运行 `python -m pytest -q tests/test_main_error_handling.py tests/test_delivery.py tests/test_checkin_cache.py`：验证每日签到与付费刷新超时不补文本、背景/缓存/占用保留、重复签到复用同图且不重复奖励、路径失败切 base64 的诊断日志，以及无缓存刷新卡片的延迟清理；非超时失败继续回归原有撤销流程。

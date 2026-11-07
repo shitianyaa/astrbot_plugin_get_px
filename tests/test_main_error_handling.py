@@ -300,6 +300,101 @@ def _plugin_for_checkin(tmp: str, result: CheckinResult, order, *, cache_hit=Fal
 
 
 class Issue24CacheTest(unittest.IsolatedAsyncioTestCase):
+    async def test_daily_timeout_keeps_background_cache_and_rewards_without_text(self):
+        from aiocqhttp.exceptions import ActionFailed
+
+        for error in (TimeoutError(), ActionFailed({
+            "retcode": 1200, "message": "Timeout: NTEvent NodeIKernelMsgService/sendMsg",
+        })):
+            with self.subTest(error=type(error).__name__), tempfile.TemporaryDirectory() as tmp:
+                plugin, selected = self.setup_plugin(tmp)
+                plugin._fetch_qq_birthday = AsyncMock(return_value=SimpleNamespace(value=None, definitive=True))
+                event = _FakeEvent(group_id="456")
+                event.bot = SimpleNamespace(call_action=AsyncMock(side_effect=error))
+                with patch("astrbot_plugin_get_px.pixiv.delivery.logger") as logger:
+                    output = await _collect(plugin._handle_checkin(event))
+                self.assertEqual(output, [])
+                self.assertEqual(event.sent, [])
+                event.bot.call_action.assert_awaited_once()
+                plugin._release_checkin_background_claim.assert_not_awaited()
+                plugin._record_checkin_background.assert_awaited_once()
+                record = await plugin.checkin_store.get_today_record("10001")
+                self.assertEqual(record.background_illust_id, selected[0])
+                self.assertEqual(record.background_mode, "pixiv_daily")
+                cached = list(plugin.checkin_cache.root.rglob("*.jpg"))
+                self.assertEqual(len(cached), 1)
+                self.assertTrue(list(plugin.checkin_cache.root.rglob("*.json")))
+                image = cached[0].read_bytes()
+                logs = " ".join(call.args[0] for call in logger.warning.call_args_list)
+                self.assertIn("feature=checkin", logs)
+                self.assertIn("delivery_status=timed_out", logs)
+                self.assertNotIn("charge=", logs)
+
+                event.bot.call_action = AsyncMock(return_value=None)
+                self.assertEqual(await _collect(plugin._handle_checkin(event)), [])
+                self.assertEqual(plugin._render_checkin_card.await_count, 1)
+                self.assertEqual(cached[0].read_bytes(), image)
+                self.assertEqual(await plugin.checkin_store.get_today_record("10001"), record)
+                self.assertEqual(len(selected), 1)
+
+    async def test_daily_card_file_error_retries_base64_with_diagnostics(self):
+        from aiocqhttp.exceptions import ActionFailed
+
+        with tempfile.TemporaryDirectory() as tmp:
+            plugin, _ = self.setup_plugin(tmp)
+            plugin._fetch_qq_birthday = AsyncMock(return_value=SimpleNamespace(value=None, definitive=True))
+            event = _FakeEvent(group_id="456")
+            event.bot = SimpleNamespace(call_action=AsyncMock(side_effect=[
+                ActionFailed({"retcode": 1200, "message": "ENOENT copyfile"}), None,
+            ]))
+            with patch("astrbot_plugin_get_px.pixiv.delivery.logger") as logger:
+                self.assertEqual(await _collect(plugin._handle_checkin(event)), [])
+            first, second = event.bot.call_action.await_args_list
+            self.assertTrue(first.kwargs["message"][0]["data"]["file"].startswith("file:"))
+            self.assertTrue(second.kwargs["message"][0]["data"]["file"].startswith("base64://"))
+            logs = " ".join(call.args[0] for call in logger.warning.call_args_list)
+            self.assertIn("ENOENT copyfile", logs)
+            self.assertIn("to_transport=base64", logs)
+            self.assertIn("feature=checkin transport=base64", logger.info.call_args.args[0])
+            self.assertEqual(event.sent, [])
+            plugin._release_checkin_background_claim.assert_not_awaited()
+
+    async def test_refresh_timeout_keeps_new_background_charge_and_card(self):
+        for cache_enabled in (True, False):
+            with self.subTest(cache=cache_enabled), tempfile.TemporaryDirectory() as tmp:
+                plugin, _ = self.setup_plugin(tmp)
+                await self.send_card(plugin, "456")
+                await plugin.checkin_store.update_checkin_member(
+                    user_id="10001", coins=500, affection=0, total_days=1, streak_days=1,
+                )
+                source = Path(tmp) / "new-background.png"
+                PILImage.new("RGB", (8, 8)).save(source)
+                plugin._prepare_checkin_background.side_effect = None
+                plugin._prepare_checkin_background.return_value = CardBackground(
+                    mode="pixiv_daily", source="lolicon:random", illust_id="999999:0",
+                    image_path=str(source), title="New background",
+                )
+                plugin.downloader = SimpleNamespace(defer_cleanup=Mock())
+                if not cache_enabled:
+                    plugin.checkin_cache = None
+                event = _FakeEvent(group_id="456")
+                event.bot = SimpleNamespace(call_action=AsyncMock(side_effect=TimeoutError()))
+                self.assertEqual(await _collect(plugin._handle_refresh_checkin_background(event)), [])
+                event.bot.call_action.assert_awaited_once()
+                self.assertEqual(event.sent, [])
+                plugin._release_checkin_background_claim.assert_not_awaited()
+                self.assertEqual(plugin._record_checkin_background.await_count, 2)
+                record = await plugin.checkin_store.get_today_record("10001")
+                self.assertEqual(record.background_illust_id, "999999:0")
+                self.assertEqual((await plugin.checkin_store.get_profile("10001")).coins, 400)
+                if cache_enabled:
+                    self.assertEqual(len(list(plugin.checkin_cache.root.rglob("*.jpg"))), 2)
+                    plugin.downloader.defer_cleanup.assert_not_called()
+                else:
+                    plugin.downloader.defer_cleanup.assert_called_once()
+                    self.assertTrue(Path(plugin.downloader.defer_cleanup.call_args.args[0]).exists())
+
+
     async def test_rejected_background_uses_consistent_placeholder_and_cache(self):
         from astrbot_plugin_get_px.checkin import card
 

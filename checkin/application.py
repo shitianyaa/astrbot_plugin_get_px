@@ -17,9 +17,11 @@ from .greeting import DEFAULT_CHECKIN_GREETING_PROMPT
 from .themes import get_checkin_theme
 
 try:
+    from ..pixiv.delivery import DeliveryStatus, send_once
     from ..pixiv.downloader import cleanup
     from ..pixiv.safety import normalized_builtin_terms
 except ImportError:  # Direct imports used by the test suite.
+    from pixiv.delivery import DeliveryStatus, send_once
     from pixiv.downloader import cleanup
     from pixiv.safety import normalized_builtin_terms
 
@@ -347,8 +349,10 @@ class CheckinApplicationMixin:
                     if quota_line:
                         content.append(Plain(quota_line))
                 stage = "card_send"
-                await event.send(event.chain_result(content))
-                # 图片发送成功后不再释放 pending；即使升级正式记录失败，也要继续去重。
+                delivery_status = await send_once(event, content, context="feature=checkin")
+                if delivery_status not in (DeliveryStatus.CONFIRMED, DeliveryStatus.TIMED_OUT):
+                    raise RuntimeError("签到卡发送未完成")
+                # 正常返回或超时后保留背景与缓存；后续记录失败也不能撤销占用。
                 claim_held = False
                 if not cache_hit:
                     try:
@@ -383,6 +387,7 @@ class CheckinApplicationMixin:
                 logger.info(
                     f"{LOG_PREFIX} 签到卡发送完成: tier={actual_tier} "
                     f"cache_hit={'yes' if cache_hit else 'no'} "
+                    f"delivery_status={delivery_status.value} "
                     f"background_mode={getattr(background, 'mode', 'none')}"
                 )
                 return

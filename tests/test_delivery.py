@@ -179,7 +179,7 @@ async def test_automatic_onebot_delivery(tmp_path, group, forward, outcome):
     if outcome == "retry_error":
         assert "base64 rejected" in logs and "transport=base64" in logs
     if outcome == "timeout":
-        assert "1200" in logs and "sendMsg" in logs and "charge=yes retry=no" in logs
+        assert "1200" in logs and "sendMsg" in logs and "delivery_status=timed_out retry=no" in logs
 
 
 @pytest.mark.asyncio
@@ -189,7 +189,7 @@ async def test_framework_timeout_is_logged_without_notice_or_resend(error):
     with patch("astrbot_plugin_get_px.pixiv.delivery.logger") as logger:
         assert await send_once(event, ["image"], context="test") is DeliveryStatus.TIMED_OUT
     event.send.assert_awaited_once_with(["image"])
-    assert "charge=yes" in logger.warning.call_args.args[0]
+    assert "delivery_status=timed_out retry=no" in logger.warning.call_args.args[0]
 
 
 @pytest.mark.asyncio

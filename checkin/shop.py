@@ -20,8 +20,10 @@ from .themes import (
 )
 
 try:
+    from ..pixiv.delivery import DeliveryStatus, send_once
     from ..pixiv.downloader import cleanup
 except ImportError:  # Direct imports used by the test suite.
+    from pixiv.delivery import DeliveryStatus, send_once
     from pixiv.downloader import cleanup
 
 
@@ -495,7 +497,13 @@ class CheckinShopMixin:
             content = [Plain(purchase.message), Image.fromFileSystem(str(card_path))]
             if background.pixiv_caption:
                 content.append(Plain(background.pixiv_caption))
-            await event.send(event.chain_result(content))
+            delivery_status = await send_once(event, content, context="feature=checkin_refresh")
+            if delivery_status not in (DeliveryStatus.CONFIRMED, DeliveryStatus.TIMED_OUT):
+                raise RuntimeError("刷新签到卡发送未完成")
+            claim_held = False
+            if delivery_status is DeliveryStatus.TIMED_OUT and cache is None:
+                self.downloader.defer_cleanup(str(card_path))
+                card_path = None
             try:
                 await self._record_checkin_background(event, background)
             except Exception as exc:
@@ -503,8 +511,6 @@ class CheckinShopMixin:
                     f"{LOG_PREFIX} 记录签到背景使用状态失败: "
                     f"error_type={type(exc).__name__}"
                 )
-            else:
-                claim_held = False
             return
         except Exception as exc:
             logger.warning(

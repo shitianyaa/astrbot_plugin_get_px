@@ -217,7 +217,7 @@ async def send_once(event, content: list, *, context: str) -> DeliveryStatus:
                 duration_ms=int((time.monotonic() - started) * 1000),
             )
             if status is DeliveryStatus.TIMED_OUT:
-                logger.warning(f"[GetPx] 发图超时按已发送结算: {attempt_context} charge=yes retry=no")
+                logger.warning(f"[GetPx] 发图超时停止重试: {attempt_context} delivery_status=timed_out retry=no")
                 return status
             if direct and transport == "file" and _is_file_read_error(exc):
                 transport = "base64"
