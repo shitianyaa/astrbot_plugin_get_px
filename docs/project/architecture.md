@@ -101,7 +101,7 @@ python -m pytest -q tests
 
 ## 发图送达状态
 
-`pixiv/delivery.py` 的 `send_once()` 返回五种状态：消息构建失败为 `FAILED`；调用正常返回为 `CONFIRMED`，但 OneBot file 正常返回且无有效 `message_id` 时为 `ACCEPTED`（已受理，需保留文件）；发送异常链包含超时为 `TIMED_OUT`；其余提交异常为 `UNKNOWN`。超时按 `TimeoutError` 类型或 message/wording 中独立的 timeout/timed out/超时文本判断，先排除路径、URL 和无关回包字段；包括 OneBot 1200 回包中的 `Timeout: NTEvent … sendMsg`，不能仅凭 1200 判定超时。
+`pixiv/delivery.py` 的 `send_once()` 返回五种状态：消息构建失败为 `FAILED`；调用正常返回为 `CONFIRMED`，但 OneBot file 正常返回且无有效 `message_id`（非零整数或非空白字符串，排除 bool／对象）时为 `ACCEPTED`（已受理，需保留文件）；发送异常链包含超时为 `TIMED_OUT`；其余提交异常为 `UNKNOWN`。超时按 `TimeoutError` 类型或 message/wording 中独立的 timeout/timed out/超时文本判断，先排除路径、URL 和无关回包字段，并保留路径字段后的独立超时诊断（含冒号分隔、无扩展名路径与“上传／读取超时”，不把 timeout.jpg 等文件名当诊断）；文件读取错误也只检查相同诊断文本，不因路径中的 copyfile 重发。包括 OneBot 1200 回包中的 `Timeout: NTEvent … sendMsg`，不能仅凭 1200 判定超时。
 
 `search.py` 对 `CONFIRMED`、`ACCEPTED` 与 `TIMED_OUT` 均记录 normal 使用记录并结算金币；超时不补发，即使最终没有出图也扣费。`FAILED` 与构建期间取消释放未提交图片占用；`UNKNOWN` 与提交期间取消保留 normal_pending 占用，不扣费。OneBot `ACCEPTED`、超时、未知及提交期间取消保留文件读取窗口。构建和发送异常只记日志，不补发异常提示；正常金币结算消息保留。
 
@@ -115,9 +115,9 @@ python -m pytest -q tests
 
 ## 签到卡发送
 
-每日签到（`checkin/application.py`）和付费背景刷新（`checkin/shop.py`）复用 `send_once()`。正常返回或发送超时均继续完成背景使用记录，不补发纯文字，不撤销背景持久化、卡片缓存或去重占用。签到卡在当天缓存中保留，不使用普通 /p 临时文件的 600 秒删除策略；付费刷新未启用卡片缓存时，`ACCEPTED` 或超时的渲染文件交给下载器延迟清理；这是框架 T2I 临时产物，不纳入插件 temp/get_px_* 的重启清理恢复，存活时间仍受框架临时目录策略影响。仅编码时读取的背景源下载文件仍正常清理，不影响已内联的背景与卡片。
+每日签到（`checkin/application.py`）和付费背景刷新（`checkin/shop.py`）复用 `send_once()`。正常返回或发送超时均继续完成背景使用记录，不补发纯文字，不撤销背景持久化、卡片缓存或去重占用。送达未知或提交期间取消保留已保存背景、卡片及 pending，不写发送成功记录、不补发；`DeliveryNotSubmitted` 表示构建期取消，仍传播取消并释放未提交资源。签到卡在当天缓存中保留，不使用普通 /p 临时文件的 600 秒删除策略；付费刷新未启用卡片缓存时，`ACCEPTED`、超时、未知或提交期间取消的渲染文件交给下载器延迟清理；这是框架 T2I 临时产物，不纳入插件 temp/get_px_* 的重启清理恢复，存活时间仍受框架临时目录策略影响。仅编码时读取的背景源下载文件仍正常清理，不影响已内联的背景与卡片。
 
-明确文件读取失败时使用共享的 file → base64 重试和脱敏诊断日志；发送日志使用 `feature=checkin/checkin_refresh` 标识来源，不在共享发送层声明扣费。非超时发送失败保留原来的纯文字回退与清理流程。奖励在签到写入时发放，付费刷新在发送前完成购买，均不因发送超时回滚。签到测试预览、主题预览及日历发送不在这条持久化卡片流程内。
+明确文件读取失败时使用共享的 file → base64 重试和脱敏诊断日志；发送日志使用 `feature=checkin/checkin_refresh` 标识来源，不在共享发送层声明扣费。确定构建失败保留原来的纯文字回退与清理流程；构建期取消只释放资源并传播取消。奖励在签到写入时发放，付费刷新在发送前完成购买，均不因发送超时回滚。签到测试预览、主题预览及日历发送不在这条持久化卡片流程内。
 
 ## 下载临时目录
 

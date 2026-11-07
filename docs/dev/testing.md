@@ -225,7 +225,7 @@ async def test_something_async():
 | --- | --- | --- |
 | 图片使用索引 | `tests/test_image_index.py` | 原子占用、释放不删成功记录、自然日清理、分页游标与黑名单持久化 |
 | 选图与预览 | `tests/test_checkin_background_selection.py` | 已用候选过滤、分页、5 分钟预览列表、下载取消释放 |
-| 卡片缓存 | `tests/test_checkin_cache.py`、`tests/test_main_error_handling.py` | JPEG／摘要校验、并发、跨群有效规则、恢复／重选、刷新／主题变化与超时保留 |
+| 卡片缓存 | `tests/test_checkin_cache.py`、`tests/test_main_error_handling.py` | JPEG／摘要校验、实例内并发、跨群有效规则、恢复／重选、刷新／主题变化与不确定提交保留 |
 | 日历与单次资源 | `tests/test_checkin_calendar.py`、`tests/test_checkin_card.py` | 记录／事件／画质 key、背景获取、头像内联与三档资源复用 |
 | 外部资料 | `tests/test_holiday_calendar.py`、`tests/test_checkin_greeting.py`、`tests/test_checkin_omnidraw_bridge.py` | 初始化刷新条件、失败重试窗口、问候回退与额度幂等 |
 | Pages 清理 | `tests/test_plugin_api_cache.py` | 不触碰数据库、跳过受保护下载文件、只清理受管缓存 |
@@ -260,4 +260,6 @@ python -m pytest -q tests/test_checkin_cache.py tests/test_checkin_calendar.py t
 
 运行 `python -m pytest -q tests/test_delivery.py tests/test_p_coin_cost.py tests/test_downloader.py`。覆盖群聊/私聊、单图/转发、空回执正常结算并保留 file 图片、路径含 timeout 不误判、1200 NTEvent 超时仍扣费且去重、不发异常提示、不重发、文件读取失败换 base64 的两次诊断日志、超时文件保留 600 秒、非超时未知状态及取消处理，以及旧传输配置清理/保存失败回滚。测试使用模拟协议回包，不代表 QQ 实际延迟验证。
 
-签到卡发送回归运行 `python -m pytest -q tests/test_main_error_handling.py tests/test_delivery.py tests/test_checkin_cache.py`：验证每日签到与付费刷新超时不补文本、背景/缓存/占用保留、重复签到复用同图且不重复奖励、路径失败切 base64 的诊断日志，以及无缓存刷新卡片的延迟清理；非超时失败继续回归原有撤销流程。
+签到卡发送回归运行 `python -m pytest -q tests/test_main_error_handling.py tests/test_delivery.py tests/test_checkin_cache.py`：验证每日签到与付费刷新超时／送达未知不补文本，提交期间取消保留背景、卡片和占用，构建期取消释放未提交资源；覆盖重复签到复用、路径失败切 base64、无缓存刷新延迟清理，以及真实超时诊断和畸形回执分类。
+
+日历缓存回归运行 `python -m pytest -q tests/test_checkin_calendar.py`，用实际事件快照验证备份导入编辑名称／日期、在线节假日更新均改变缓存 key，相同内容仍复用 JPEG；同一快照传给渲染，避免 key 与内容错配。

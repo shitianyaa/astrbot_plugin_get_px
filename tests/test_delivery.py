@@ -265,6 +265,13 @@ def test_protocol_error_details_are_allowlisted_and_redacted():
     ("Timeout: NTEvent sendMsg ENOENT copyfile", True),
     ("retcode=1200 res_id failed", False),
     ("operation timed out", True),
+    ("path=/shared/image.jpg operation timed out", True),
+    ("file=/tmp/x.jpg: operation timed out", True),
+    ("file=/tmp/abc operation timed out", True),
+    ("file=/tmp/x.jpg 上传超时", True),
+    ("path=/tmp/x.jpg 读取超时", True),
+    ("file=/tmp/image folder/timeout.jpg", False),
+    ("file=/tmp/image folder/上传超时.png", False),
     ("x" * 2100 + " operation timed out", True),
     (r"ENOENT copyfile C:\shared\timeout\image.jpg", False),
     ("ENOENT copyfile /shared/timeout/image.jpg", False),
@@ -276,3 +283,36 @@ def test_timeout_classification_includes_wrapped_cause(message, expected):
     error = RuntimeError("send failed")
     error.__cause__ = cause
     assert _is_timeout(error) is expected
+    # 同一规则用于日志；路径应隐藏，路径后的诊断应保留。
+    from astrbot_plugin_get_px.pixiv.delivery import _safe_error_text
+    safe = _safe_error_text(message)
+    if "file=/tmp/" in message or "path=/tmp/" in message:
+        assert "/tmp/" not in safe and "[path]" in safe
+        if expected:
+            assert "timed out" in safe or "超时" in safe
+
+
+def test_file_error_classification_ignores_paths_and_unrelated_response_fields():
+    from astrbot_plugin_get_px.pixiv.delivery import _is_file_read_error
+
+    for message in ("send failed path=/shared/copyfile/image.jpg", "send failed"):
+        error = ActionFailed({"message": message, "data": {"path": "/shared/copyfile/image.jpg"}})
+        assert not _is_file_read_error(error)
+    assert _is_file_read_error(ActionFailed({"message": "ENOENT copyfile /shared/image.jpg"}))
+
+
+@pytest.mark.asyncio
+async def test_file_receipt_validation_retains_malformed_ids(tmp_path):
+    from PIL import Image as PILImage
+    from astrbot.api.message_components import Image
+
+    path = tmp_path / "image.png"
+    PILImage.new("RGB", (8, 8)).save(path)
+    event = SimpleNamespace(
+        get_platform_name=lambda: "aiocqhttp", get_group_id=lambda: "456",
+        get_sender_id=lambda: "789", bot=SimpleNamespace(call_action=AsyncMock()),
+    )
+    for value, expected in ((True, DeliveryStatus.ACCEPTED), ({"id": 1}, DeliveryStatus.ACCEPTED),
+                            ("   ", DeliveryStatus.ACCEPTED), ("123", DeliveryStatus.CONFIRMED)):
+        event.bot.call_action.return_value = {"message_id": value}
+        assert await send_once(event, [Image.fromFileSystem(str(path))], context="receipt_test") is expected

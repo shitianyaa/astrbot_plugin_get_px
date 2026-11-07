@@ -88,8 +88,10 @@ def _without_error_paths(text: str) -> str:
         "[path]",
         text,
     )
+    # 无引号路径在独立诊断前结束；不要求扩展名，不匹配 timeout.jpg 等文件名。
+    timeout_diagnostic = r"(?:(?:operation\s+)?(?:timed\s+out|timeout)|(?:上传|读取)?超时)(?![\w./\\=])"
     text = re.sub(
-        rf'''(?i)\b((?:file|path|filename)\s*=\s*){path_start}[^"'\r\n,;]+?(?=\s+\w+\s*[:=]|["'\r\n,;]|$)''',
+        rf'''(?i)\b((?:file|path|filename)\s*=\s*){path_start}[^"'\r\n,;]+?(?=(?:[:：]\s*|\s+){timeout_diagnostic}|\s+\w+\s*[:=]|["'\r\n,;]|$)''',
         r"\1[path]",
         text,
     )
@@ -154,9 +156,8 @@ def log_delivery_error(
 
 def _error_text(error: BaseException) -> str:
     result = getattr(error, "result", None)
-    if isinstance(result, dict):
-        return f"{error} {result.get('message', '')} {result.get('wording', '')}"
-    return str(error)
+    messages = (result.get("message", ""), result.get("wording", "")) if isinstance(result, dict) else (str(error),)
+    return " ".join(_without_error_paths(message) for message in messages if isinstance(message, str))
 
 
 def _is_timeout(error: BaseException) -> bool:
@@ -165,11 +166,7 @@ def _is_timeout(error: BaseException) -> bool:
         seen.add(id(error))
         if isinstance(error, TimeoutError):
             return True
-        result = getattr(error, "result", None)
-        messages = (result.get("message", ""), result.get("wording", "")) if isinstance(result, dict) else (str(error),)
-        # 排除路径、URL 和回包中无关字段，只匹配独立的超时标记。
-        if any(re.search(r"\btimeout\b|\btimed\s+out\b|超时", _without_error_paths(message), re.IGNORECASE)
-               for message in messages if isinstance(message, str)):
+        if re.search(r"\btimeout\b|\btimed\s+out\b|超时", _error_text(error), re.IGNORECASE):
             return True
         error = error.__cause__ or error.__context__
     return False
@@ -238,8 +235,10 @@ async def send_once(event, content: list, *, context: str) -> DeliveryStatus:
                 continue
             return DeliveryStatus.UNKNOWN
         status = DeliveryStatus.CONFIRMED
-        if direct and transport == "file" and (
-            not isinstance(receipt, dict) or not receipt.get("message_id")
+        message_id = receipt.get("message_id") if direct and isinstance(receipt, dict) else None
+        if direct and transport == "file" and not (
+            (type(message_id) is int and message_id != 0)
+            or (isinstance(message_id, str) and message_id.strip())
         ):
             # 正常返回仍结算，但协议端可能只受理，保留文件读取窗口。
             status = DeliveryStatus.ACCEPTED

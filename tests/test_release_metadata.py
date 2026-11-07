@@ -31,7 +31,9 @@ def test_release_versions_are_consistent() -> None:
     assert metadata_version == runtime_version == changelog_version
     assert readme_version == metadata_version.removeprefix("v")
     anchor = f"{changelog_version.replace('.', '')}-{release_date}"
-    assert f"CHANGELOG.md#{anchor}" in (ROOT / "README.md").read_text(encoding="utf-8")
+    readme = (ROOT / "README.md").read_text(encoding="utf-8")
+    link = re.search(r"\[[^\]]*更新日志\]\(([^)]+)\)", readme)
+    assert link is not None and link.group(1) == f"CHANGELOG.md#{anchor}"
 
 
 def test_user_documentation_has_no_temporary_branch_wording() -> None:
@@ -40,8 +42,11 @@ def test_user_documentation_has_no_temporary_branch_wording() -> None:
         *(ROOT / "docs/project").glob("*.md"),
         *(ROOT / "docs/user").glob("*.md"),
     ]
-    for path in paths:
-        text = path.read_text(encoding="utf-8")
+    texts = [(path, path.read_text(encoding="utf-8")) for path in paths]
+    changelog = ROOT / "CHANGELOG.md"
+    current_section = re.split(r"^## ", changelog.read_text(encoding="utf-8"), flags=re.MULTILINE)[1]
+    texts.append((changelog, current_section))
+    for path, text in texts:
         assert not any(
             marker in text for marker in ("本分支", "当前分支", "待发布变更")
         ), path
