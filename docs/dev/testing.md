@@ -221,3 +221,7 @@ async def test_something_async():
 ### 跨用户图片读取回归
 
 `tests/test_delivery.py` 覆盖POSIX file模式设置0644、Windows与base64不改权限、合并转发嵌套图片、chmod异常不调用发送API。真实mkstemp 0600→0644断言仅在POSIX执行，Windows明确跳过；跨容器不同UID的读取仍需部署端验证。
+
+## OneBot 自动传输与超时结算
+
+运行 `python -m pytest -q tests/test_delivery.py tests/test_p_coin_cost.py tests/test_downloader.py`。覆盖群聊/私聊、单图/转发、空回执正常结算、1200 NTEvent 超时仍扣费且去重、不发异常提示、不重发、文件读取失败换 base64 的两次诊断日志、超时文件保留 600 秒、非超时未知状态及取消处理，以及旧传输配置清理/保存失败回滚。测试使用模拟协议回包，不代表晚间 QQ 实际延迟验证。

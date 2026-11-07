@@ -734,7 +734,6 @@ class GetPxPlugin(
         "max_count": "pixiv_source",
         "p_coin_cost": "pixiv_source",
         "image_quality": "pixiv_source",
-        "onebot_image_transport": "pixiv_source",
         "auto_downgrade_original_mb": "pixiv_source",
         "forward_threshold": "pixiv_source",
         "auto_trigger_enabled": "pixiv_source",
@@ -835,6 +834,23 @@ class GetPxPlugin(
         config = getattr(self, "config", None)
         if config is None:
             return
+        # 旧传输开关统一迁移到自动策略，保留保存失败时的原值供下次重试。
+        retired_key = "onebot_image_transport"
+        containers = [config]
+        if isinstance(config.get("pixiv_source"), dict):
+            containers.append(config["pixiv_source"])
+        removed = [(container, container.pop(retired_key))
+                   for container in containers if retired_key in container]
+        if removed:
+            try:
+                saver = getattr(config, "save_config", None)
+                if callable(saver):
+                    saver()
+                logger.info(f"{LOG_PREFIX} 图片传输配置迁移完成: transport=auto removed_count={len(removed)}")
+            except Exception as exc:
+                for container, value in removed:
+                    container[retired_key] = value
+                logger.warning(f"{LOG_PREFIX} 图片传输配置迁移保存失败: error_type={type(exc).__name__}")
         policy_keys = {"group_content_safety_policies",
                        "private_content_safety_policies",
                        "group_content_safety_policies_migrated"}

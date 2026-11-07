@@ -384,27 +384,34 @@ async def test_record_usage_error_does_not_repeat_confirmed_delivery():
     harness.image_index.record_usage.assert_awaited_once()
 
 
-def test_onebot_transport_nested_config_and_schema():
+@pytest.mark.parametrize("already_migrated", [True, False])
+@pytest.mark.parametrize("save_fails", [True, False])
+def test_retired_transport_config_is_removed_with_save_rollback(already_migrated, save_fails):
     import json
     from astrbot_plugin_get_px.main import GetPxPlugin
+    class Config(dict):
+        def save_config(self):
+            if save_fails:
+                raise OSError("disk unavailable")
     plugin = object.__new__(GetPxPlugin)
-    plugin.config = {"pixiv_source": {"onebot_image_transport": "base64"}}
-    assert plugin._cfg_str("onebot_image_transport", "file") == "base64"
+    group = {"onebot_image_transport": "base64"}
+    plugin.config = Config({"pixiv_source": group, "onebot_image_transport": "astrbot",
+                            "_grouped_config_migrated": already_migrated})
+    plugin._migrate_grouped_config()
+    assert plugin.config["pixiv_source"] is group
+    assert ("onebot_image_transport" in group) is save_fails
+    assert ("onebot_image_transport" in plugin.config) is save_fails
     schema = json.loads((Path(__file__).resolve().parents[1] / "_conf_schema.json").read_text(encoding="utf-8"))
-    field = schema["pixiv_source"]["items"]["onebot_image_transport"]
-    assert field["default"] == "file"
-    assert set(field["options"]) == {"file", "base64", "astrbot"}
+    assert "onebot_image_transport" not in schema["pixiv_source"]["items"]
 
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("forward", [False, True])
-@pytest.mark.parametrize("transport,outcome", [
-    ("file", outcome) for outcome in (
-        "confirmed", "failed", "unknown", "cancelled", "empty_receipt",
-        "build_notice_cancelled", "build_cancelled",
-    )
-] + [("base64", "confirmed"), ("base64", "unknown")])
-async def test_delivery_state_controls_charge_pending_and_file_lifetime(tmp_path, forward, transport, outcome):
+@pytest.mark.parametrize("outcome", [
+    "confirmed", "failed", "timed_out", "protocol_timeout", "unknown", "cancelled",
+    "empty_receipt", "build_cancelled",
+])
+async def test_delivery_state_controls_charge_pending_and_file_lifetime(tmp_path, forward, outcome):
     import asyncio
     from PIL import Image
     from astrbot_plugin_get_px.pixiv.downloader import ImageDownloader
@@ -415,7 +422,6 @@ async def test_delivery_state_controls_charge_pending_and_file_lifetime(tmp_path
     for path in paths:
         Image.new("RGB", (8, 8), "blue").save(path)
     harness = _SearchFlowHarness(illusts=[_illust(i) for i in range(1, count + 1)])
-    harness.config["onebot_image_transport"] = transport
     harness._forward_threshold = lambda: 0 if forward else 1
     harness._dedupe_days_cfg = 1
     harness.checkin_store, _ = _settle_store()
@@ -429,8 +435,13 @@ async def test_delivery_state_controls_charge_pending_and_file_lifetime(tmp_path
     event = _FlowEvent(platform="aiocqhttp")
     event.get_group_id = lambda: "456"
     event.bot = Mock(call_action=AsyncMock(return_value={"message_id": 123}))
-    if outcome == "unknown":
+    if outcome == "timed_out":
         event.bot.call_action.side_effect = TimeoutError()
+    elif outcome == "protocol_timeout":
+        from aiocqhttp.exceptions import ActionFailed
+        event.bot.call_action.side_effect = ActionFailed({"retcode": 1200, "message": "Timeout: NTEvent sendMsg"})
+    elif outcome == "unknown":
+        event.bot.call_action.side_effect = RuntimeError("ambiguous failure")
     elif outcome == "cancelled":
         event.bot.call_action.side_effect = asyncio.CancelledError()
     elif outcome == "empty_receipt":
@@ -443,9 +454,7 @@ async def test_delivery_state_controls_charge_pending_and_file_lifetime(tmp_path
                 scope=scope, source_key="lolicon:random", illust_id=illust_id,
                 feature="normal_pending", user_id="10001",
             )
-        if outcome in ("failed", "build_notice_cancelled", "build_cancelled"):
-            if outcome == "build_notice_cancelled":
-                event.send = AsyncMock(side_effect=asyncio.CancelledError())
+        if outcome in ("failed", "build_cancelled"):
             error = asyncio.CancelledError() if outcome == "build_cancelled" else ValueError("invalid payload")
             with patch("astrbot_plugin_get_px.pixiv.delivery._onebot_request", side_effect=error):
                 if outcome == "failed":
@@ -455,23 +464,22 @@ async def test_delivery_state_controls_charge_pending_and_file_lifetime(tmp_path
                         await _run_search(harness, event, str(count))
             event.bot.call_action.assert_not_awaited()
             if outcome == "failed":
-                assert any("构建失败" in chain for chain in event.sent if isinstance(chain, str))
+                assert not event.sent
         elif outcome == "cancelled":
             with pytest.raises(asyncio.CancelledError):
                 await _run_search(harness, event, str(count))
         else:
             await _run_search(harness, event, str(count))
         held = await index.get_used_illust_ids(scope, "lolicon:random")
-        assert held == (set() if outcome in ("failed", "build_notice_cancelled", "build_cancelled") else ids)
-        uncertain = outcome in ("unknown", "cancelled", "empty_receipt")
-        assert all(path.exists() is (uncertain and transport == "file") for path in paths)
-        assert len(downloader._cleanup_tasks) == (count if uncertain and transport == "file" else 0)
-        if outcome == "confirmed":
+        assert held == (set() if outcome in ("failed", "build_cancelled") else ids)
+        uncertain = outcome in ("timed_out", "protocol_timeout", "unknown", "cancelled")
+        assert all(path.exists() is uncertain for path in paths)
+        assert len(downloader._cleanup_tasks) == (count if uncertain else 0)
+        if outcome in ("confirmed", "empty_receipt", "timed_out", "protocol_timeout"):
             args, params = event.bot.call_action.await_args
             assert args == ("send_group_forward_msg" if forward else "send_group_msg",)
             segments = params["messages"][0]["data"]["content"] if forward else params["message"]
-            if transport == "file":
-                assert segments[1]["data"]["file"] == paths[0].resolve().as_uri()
+            assert segments[1]["data"]["file"] == paths[0].resolve().as_uri()
             harness.checkin_store.spend_coins.assert_awaited_once_with(user_id="10001", cost=20 * count)
         else:
             harness.checkin_store.spend_coins.assert_not_awaited()
@@ -481,7 +489,7 @@ async def test_delivery_state_controls_charge_pending_and_file_lifetime(tmp_path
 
 
 @pytest.mark.asyncio
-async def test_mixed_single_batch_charges_only_confirmed_and_retains_only_unknown(tmp_path):
+async def test_mixed_single_batch_charges_success_and_timeout_but_not_build_failure(tmp_path):
     from PIL import Image
     from astrbot_plugin_get_px.pixiv.downloader import ImageDownloader
     from astrbot_plugin_get_px.pixiv.index import ImageIndexStore
@@ -490,7 +498,6 @@ async def test_mixed_single_batch_charges_only_confirmed_and_retains_only_unknow
     for path in paths.values():
         Image.new("RGB", (8, 8), "blue").save(path)
     harness = _SearchFlowHarness(illusts=[_illust(i) for i in (1, 2, 3)])
-    harness.config["onebot_image_transport"] = "file"
     harness._should_use_forward = lambda **_kwargs: False
     harness._dedupe_days_cfg = 1
     harness.checkin_store, _ = _settle_store()
@@ -520,10 +527,10 @@ async def test_mixed_single_batch_charges_only_confirmed_and_retains_only_unknow
         await _run_search(harness, event, "3")
         assert await index.get_used_illust_ids(scope, "lolicon:random") == {"1", "2"}
         rows = index._get_conn().execute("SELECT illust_id, feature FROM image_usage").fetchall()
-        assert {row["illust_id"]: row["feature"] for row in rows} == {"1": "normal", "2": "normal_pending"}
+        assert {row["illust_id"]: row["feature"] for row in rows} == {"1": "normal", "2": "normal"}
         assert [path.exists() for path in paths.values()] == [False, True, False]
         assert event.bot.call_action.await_count == 2
-        harness.checkin_store.spend_coins.assert_awaited_once_with(user_id="10001", cost=20)
+        harness.checkin_store.spend_coins.assert_awaited_once_with(user_id="10001", cost=40)
     finally:
         await downloader.close()
         index.close()

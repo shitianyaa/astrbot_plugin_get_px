@@ -97,22 +97,24 @@ python -m pytest -q
 
 ## 发图送达状态
 
-`pixiv/delivery.py` 的 `send_once()` 对普通图片和合并转发返回 `DeliveryStatus` 三态：构建异常为 `FAILED`，提示未发送；OneBot 直调须取得含 `message_id` 的 data 回执才为 `CONFIRMED`，框架发送沿用其正常返回语义；空回执、异步受理或发送异常为 `UNKNOWN`。aiocqhttp 已对失败协议回包抛出异常并解包 data，调用方不把原始 status/retcode 当作成功回执。协议报错不保证图片未送达，不能简单归为确定失败。仅确认成功的作品进入使用记录与金币结算；未知不扣费、不重发、不从转发降为逐条补发。此策略没有查询 QQ 实际送达状态。
+`pixiv/delivery.py` 的 `send_once()` 返回四种状态：消息构建失败为 `FAILED`；调用正常返回为 `CONFIRMED`，包括没有 `message_id` 的正常返回；发送异常链包含超时（异常类型、timeout/timed out/超时文本）为 `TIMED_OUT`；其余提交异常为 `UNKNOWN`。超时包括 OneBot 1200 回包中的 `Timeout: NTEvent … sendMsg`，不能仅凭 1200 判定超时。
 
-`search.py` 按三态分别处理：构建失败、构建期间取消及构建失败通知期间取消均释放未提交图片的占用；确认成功记录使用并结算；未知与提交期间取消保留原 `normal_pending` 占用（仅在开启去重时生效），随自然日去重窗口过期。未知的 file 图片交给下载器延迟清理，base64 图片无需保留原文件。通知发送失败独立记录日志，不触发重发图片。
+`search.py` 对 `CONFIRMED` 与 `TIMED_OUT` 均记录 normal 使用记录并结算金币；超时不补发，即使最终没有出图也扣费。`FAILED` 与构建期间取消释放未提交图片占用；`UNKNOWN` 与提交期间取消保留 normal_pending 占用，不扣费。OneBot 超时、未知及提交期间取消保留文件读取窗口。构建和发送异常只记日志，不补发异常提示；正常金币结算消息保留。
 
-异常日志只提取 `error_type`、`retcode`、`status`、脱敏 `message/wording`，并包含 `send_mode`、可用的作品 ID、`phase`、`delivery_status` 和 `duration_ms`。错误文本先截取前 2048 字符再脱敏，输出最多 512 字符，限制异常回包的正则处理开销与日志体积；地址、本地路径及 Windows UNC 共享路径、凭据和长数字标识会被遮蔽，不输出完整请求与回包。路径按盘符、UNC、file URI、位于词边界的根目录或点目录起点，以及带文件扩展名的相对路径识别；`NodeIKernelMsgService/sendMsg` 等服务名/方法名保留，不单凭标识内部的斜杠判定路径。file/path/filename 字段支持无引号的空格路径，以后续字段或分隔符为界；引号路径按对应引号闭合，兼容转义斜杠和相对路径后的方括号。错误提示、使用记录、去重占位释放失败分别记录，不重发已确认图片。
+异常日志只提取 `error_type`、`retcode`、`status`、脱敏 `message/wording`，并包含 `send_mode`、可用的作品 ID、`phase`、`delivery_status` 和 `duration_ms`。错误文本先截取前 2048 字符再脱敏，输出最多 512 字符，限制异常回包的正则处理开销与日志体积；地址、本地路径及 Windows UNC 共享路径、凭据和长数字标识会被遮蔽，不输出完整请求与回包。路径按盘符、UNC、file URI、位于词边界的根目录或点目录起点，以及带文件扩展名的相对路径识别；`NodeIKernelMsgService/sendMsg` 等服务名/方法名保留，不单凭标识内部的斜杠判定路径。file/path/filename 字段支持无引号的空格路径，以后续字段或分隔符为界；引号路径按对应引号闭合，兼容转义斜杠和相对路径后的方括号。编码切换、使用记录、去重占位释放失败分别记录，不重发已确认图片。
 
 ## OneBot 图片发送
 
-`send_once()` 在 aiocqhttp 且存在事件 `bot` 时，根据 `onebot_image_transport` 选择直接调用事件已有客户端的 `call_action()`，不另建连接。单图调用 send_group_msg/send_private_msg，合并转发调用 send_group_forward_msg/send_private_forward_msg，保留 self_id 路由。file 模式显式转换图片为本地 URI，base64 模式沿用图片组件编码；两者均直接组装文本、图片和转发节点。astrbot 模式或其他平台继续走原框架链路。发送结果未知时不自动重发、不计费；传输模式由配置明确指定，发送异常后不自动切换模式。
+`send_once()` 在 aiocqhttp 且事件存在 bot 时直接调用已有客户端的 call_action()，不另建连接。单图调用 send_group_msg/send_private_msg，合并转发调用 send_group_forward_msg/send_private_forward_msg，保留 self_id 路由。默认 file URI；构建或提交明确报文件不存在、权限不足、ENOENT/copyfile 等读取问题时，记录本次异常和 file → base64 切换，再重建同一消息尝试一次。第二次失败也独立记录；发送超时优先分类，绝不触发换编码。其他平台继续使用框架链路。
+
+`onebot_image_transport` 已从 schema 和配置映射移除。分组迁移入口清理根配置及 pixiv_source 内的旧键并保存；保存失败恢复原值，运行时始终使用自动策略。
 
 ## 下载临时目录
 
 initialize 获取插件数据目录后，将 `data_dir / "temp"` 注入共享 ImageDownloader。下载器直接在该目录创建 `get_px_*` 文件，未初始化时明确报错，不回退系统临时目录。/p、背景、头像与黑名单缩略图共用该下载器；卡片缓存继续使用 checkin_card_cache，框架 T2I 自行产生的临时文件不在此变更范围。
 
-确认成功与确定构建失败仍及时清理文件；未知或提交期间取消的 file 发送保留 600 秒，与 Pages 原有的最近10分钟保护保持一致。保留时更新 mtime，并由下载器持有延迟删除任务。close 取消任务但不提前删文件；initialize 在服务开始前扫描插件 temp 的 get_px_*，按 mtime 恢复剩余清理时间，已过期残余立即安排清理，未使用系统临时目录。Pages 仍可清理过期下载文件，不影响数据库。该时间窗口用于读取保护，不代表确认送达。
+确认成功与确定构建失败仍及时清理文件；超时、未知或提交期间取消的 OneBot 发送保留 600 秒，与 Pages 原有的最近10分钟保护保持一致。保留时更新 mtime，并由下载器持有延迟删除任务。close 取消任务但不提前删文件；initialize 在服务开始前扫描插件 temp 的 get_px_*，按 mtime 恢复剩余清理时间，已过期残余立即安排清理，未使用系统临时目录。Pages 仍可清理过期下载文件，不影响数据库。该时间窗口用于读取保护，不代表确认送达。
 
 ### OneBot 路径传输的跨用户读权限
 
-下载器 mkstemp 生成的文件在 POSIX 上通常为0600，仅创建用户可读写。在 file 模式序列化图片时，将已下载并校验完成的文件设为0644，支持共享目录中的不同UID读取；该处理同样覆盖合并转发节点。base64和astrbot模式以及Windows不调整文件权限。chmod失败按构建阶段错误记录，不继续调用发送API，不自动补发。此操作只处理图片文件，不修改共享目录及祖先目录的权限；协议端仍需能遍历这些目录。
+下载器 mkstemp 生成的文件在 POSIX 上通常为0600，仅创建用户可读写。在 file 模式序列化图片时，将已下载并校验完成的文件设为0644，支持共享目录中的不同UID读取；该处理同样覆盖合并转发节点。base64、其他平台及Windows不调整文件权限。chmod权限错误记录后切换base64；重建或发送失败仍记录原因，不向聊天发送异常提示。此操作只处理图片文件，不修改共享目录及祖先目录的权限；协议端仍需能遍历这些目录。

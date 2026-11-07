@@ -11,12 +11,13 @@
 | `lolicon_exclude_ai` | `bool` | `true` | 仅向 Lolicon API 传递 excludeAI=true/false；R18 与普通混合由当前会话强制普通分级决定 |
 | `lolicon_image_proxy_origins` | `text` | 空 | 每行一个 http(s) origin，最多 5 个按序尝试；仅改写允许列表内 Pixiv 图片主机 |
 | `max_count` | `int` | `5` | 单次指令最多发送张数，范围 1–20 |
-| `p_coin_cost` | `int` | `20` | `/p` 成功发图每张金币，范围 0–200；0 免费 |
-| `onebot_image_transport` | `enum` | `file` | `file` 本地路径直调、`base64` 编码直调、`astrbot` 框架链路；仅 aiocqhttp 的 /p 和自然语言发图生效 |
+| `p_coin_cost` | `int` | `20` | `/p` 每张金币，范围 0–200；0 免费；正常返回与发送超时均扣费，下载或构建失败不扣费 |
 | `image_quality` | `enum` | `original` | `original`/`large`/`medium`；超阈值自动降级 |
 | `auto_downgrade_original_mb` | `float` | `3.0` | 原图超过此 MiB 时降级，范围 0–25；0 禁用降级 |
 | `forward_threshold` | `int` | `1` | 下载张数严格大于此值时合并转发（仅 aiocqhttp）；0 始终合并，范围 0–20 |
 | `auto_trigger_enabled` | `bool` | `false` | 群内自然语言（「来份/张图」）自动触发发图 |
+
+OneBot 传输自动采用路径 → 明确文件读取失败后 base64 重试；超时不重试。旧 `onebot_image_transport`（顶层及 `pixiv_source` 内）在启动时清理并保存，保存失败恢复原值，下次启动重试。发送异常仅记日志，详见 README 的“OneBot 图片发送”。
 
 ## 2. 图片筛选与去重（`content_dedupe`）
 

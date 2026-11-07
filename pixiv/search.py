@@ -314,10 +314,8 @@ class SearchMixin:
         sent_illust_ids: set[str] = set()
         unknown_illust_ids: set[str] = set()
         retained_paths: set[str] = set()
-        onebot_transport = self._cfg_str("onebot_image_transport", "file")
         file_transport = (
-            onebot_transport == "file"
-            and event.get_platform_name() == AIOCQHTTP_PLATFORM
+            event.get_platform_name() == AIOCQHTTP_PLATFORM
             and getattr(event, "bot", None) is not None
         )
         if dedupe_days > 0 and self.image_index is not None:
@@ -339,9 +337,7 @@ class SearchMixin:
                     retained_paths.update(path for _, path, *_ in images)
 
             try:
-                status = await send_once(
-                    event, content, context=context, onebot_transport=onebot_transport
-                )
+                status = await send_once(event, content, context=context)
             except DeliveryNotSubmitted:
                 raise
             except asyncio.CancelledError:
@@ -350,7 +346,9 @@ class SearchMixin:
                 raise
             if status is DeliveryStatus.UNKNOWN:
                 retain_unknown()
-            elif status is DeliveryStatus.CONFIRMED:
+            if status in (DeliveryStatus.CONFIRMED, DeliveryStatus.TIMED_OUT):
+                if status is DeliveryStatus.TIMED_OUT and file_transport:
+                    retained_paths.update(path for _, path, *_ in images)
                 sent_illust_ids.update(ids)
                 for illust, *_ in images:
                     await self._record_image_usage(
