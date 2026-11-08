@@ -15,6 +15,7 @@ from astrbot_plugin_get_px.checkin.artwork import (  # noqa: E402
 )
 from astrbot_plugin_get_px.checkin.card import CardBackground  # noqa: E402
 from astrbot_plugin_get_px.pixiv.index import ImageIndexStore  # noqa: E402
+from astrbot_plugin_get_px.pixiv.pagination import PixivPage
 from astrbot_plugin_get_px.main import GetPxPlugin  # noqa: E402
 
 
@@ -33,13 +34,17 @@ class FakePixivClient:
         self.recommended_offsets = []
         self.search_calls = []
 
-    async def recommended(self, offset: int = 0):
+    async def recommended(self, offset: int = 0, *, continuation=None):
+        offset = continuation["offset"] if continuation is not None else offset
         self.recommended_offsets.append(offset)
-        return list(self.pages.get(offset, []))
+        next_offsets = sorted(value for value in self.pages if value > offset)
+        return PixivPage(list(self.pages.get(offset, [])), {"offset": next_offsets[0]} if next_offsets else None)
 
-    async def search(self, tag: str, offset: int = 0):
+    async def search(self, tag: str, offset: int = 0, *, continuation=None, portrait=False):
+        offset = continuation["offset"] if continuation is not None else offset
         self.search_calls.append((tag, offset))
-        return list(self.search_pages.get((tag, offset), []))
+        next_offsets = sorted(value for key, value in self.search_pages if key == tag and value > offset)
+        return PixivPage(list(self.search_pages.get((tag, offset), [])), {"offset": next_offsets[0]} if next_offsets else None)
 
 
 class FakeDownloader:
@@ -477,11 +482,8 @@ class CheckinBackgroundSelectionTest(unittest.IsolatedAsyncioTestCase):
                 }
             )
             try:
-                await plugin.image_index.advance_page_offset(
-                    "group:20001", "pixiv:recommended", 20
-                )
-                await plugin.image_index.advance_page_offset(
-                    "group:20001", "pixiv:recommended", 20
+                await plugin.image_index.set_page_offset(
+                    "group:20001", "pixiv:recommended", 40
                 )
 
                 background = await plugin._download_checkin_pixiv_background(

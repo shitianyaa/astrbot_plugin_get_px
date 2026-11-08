@@ -11,6 +11,7 @@ from astrbot.api.message_components import Node, Nodes
 from .constants import AIOCQHTTP_PLATFORM, MAX_IMAGE_COUNT
 from .delivery import DeliveryNotSubmitted, DeliveryStatus, log_delivery_error, send_once
 from .downloader import cleanup
+from .pagination import SourceRequest, SourceResponseError, SelectionIndexError
 from .safety import ContentSafetyPolicy, STRICT_CONTENT_SAFETY_POLICY
 
 
@@ -111,8 +112,10 @@ class SearchMixin:
         count: int = 20,
         offset: int = 0,
         aspect_ratio: str = "",
+        portrait: bool = False,
         use_page_cursor: bool = True,
         policy: ContentSafetyPolicy = STRICT_CONTENT_SAFETY_POLICY,
+        request_state: SourceRequest | None = None,
     ) -> tuple[list[dict], int, str]:
         """按首选图片源顺序取图，请求失败或无结果时尝试另一源。"""
         preferred = self._cfg_str("preferred_image_source", "Lolicon").lower()
@@ -122,6 +125,9 @@ class SearchMixin:
         sources = ("pixiv", "lolicon") if preferred == "pixiv" else ("lolicon", "pixiv")
         if getattr(self, "lolicon_client", None) is None and getattr(self, "client", None) is None:
             self._init_client()
+        state = request_state if request_state is not None else SourceRequest()
+        state.failure_reason = ""
+        source_key = ""
         for source in sources:
             source_key = self._source_key(tag, source)
             if source == "pixiv" and not tag:
@@ -143,31 +149,70 @@ class SearchMixin:
                             r18=0 if policy.general_only_enabled else 2,
                         )
                 else:
+                    if source_key in state.next_params and state.next_params[source_key] is None:
+                        continue
+                    continuation = state.next_params.get(source_key)
                     page_offset = offset
-                    if use_page_cursor and page_offset == 0 and self.image_index is not None:
-                        try:
-                            page_offset = await self.image_index.get_page_offset(
-                                self._event_scope(event), source_key
-                            )
-                        except Exception as exc:
-                            logger.warning(
-                                f"{LOG_PREFIX} 读取 Pixiv 分页游标失败: "
-                                f"error_type={type(exc).__name__}"
-                            )
+                    if source_key not in state.next_params:
+                        if use_page_cursor and page_offset == 0 and self.image_index is not None:
+                            try:
+                                page_offset = await self.image_index.get_page_offset(
+                                    self._event_scope(event), source_key
+                                )
+                            except Exception as exc:
+                                raise SelectionIndexError("读取分页索引失败") from exc
+                    params = continuation if continuation is not None else {"offset": page_offset}
+                    identity = tuple(sorted(
+                        (key, tuple(value) if isinstance(value, list) else value)
+                        for key, value in params.items()
+                    ))
+                    seen = state.seen.setdefault(source_key, set())
+                    if identity in seen:
+                        state.next_params[source_key] = None
+                        raise SourceResponseError("repeated_continuation")
+                    seen.add(identity)
                     if tag:
-                        illusts = await client.search(tag, offset=page_offset)
+                        page = await client.search(
+                            tag, offset=page_offset, continuation=continuation,
+                            portrait=portrait,
+                        )
                     else:
-                        illusts = await client.recommended(offset=page_offset)
+                        page = await client.recommended(offset=page_offset, continuation=continuation)
+                    illusts = page.items
+                    state.next_params[source_key] = page.next_params
                 if illusts:
                     return illusts, len(illusts), source_key
+                if source == "pixiv":
+                    await self._advance_source_page(event, source_key, state, use_page_cursor=use_page_cursor)
                 logger.info(f"{LOG_PREFIX} 图片源无结果，继续尝试可用来源: source={source}")
+            except SelectionIndexError:
+                raise
             except Exception as exc:
+                state.failure_reason = getattr(exc, "reason", "request_failed")
+                if source == "pixiv":
+                    state.next_params[source_key] = None
                 logger.warning(
                     f"{LOG_PREFIX} 图片源请求失败，继续尝试可用来源: "
                     f"source={source} tag_configured={'yes' if tag else 'no'} "
-                    f"error_type={type(exc).__name__}"
+                    f"reason={state.failure_reason} error_type={type(exc).__name__}"
                 )
         return [], 0, source_key
+
+    async def _advance_source_page(
+        self, event: AstrMessageEvent, source_key: str, state: SourceRequest,
+        *, use_page_cursor: bool = True,
+    ) -> None:
+        if not use_page_cursor or self.image_index is None or not source_key.startswith("pixiv:"):
+            return
+        if source_key not in state.next_params:
+            return
+        # shortcut: 推荐完整多参数位置仅在请求内保存，跨请求仍使用数字 offset。
+        params = state.next_params[source_key]
+        offset = params.get("offset", 0) if params is not None else 0
+        try:
+            await self.image_index.set_page_offset(self._event_scope(event), source_key, offset)
+        except Exception as exc:
+            raise SelectionIndexError("保存分页索引失败") from exc
 
     async def _record_image_usage(
         self,
@@ -247,42 +292,7 @@ class SearchMixin:
         size_limit_bytes = int(size_limit_mb * 1024 * 1024)
         filter_manga = self._cfg_bool("filter_manga", True)
 
-        # 获取作品列表：按首选图片源顺序取图与回退。
-        illusts, raw_count, source_key = await self._fetch_source_candidates(
-            event, tag, count=SEARCH_BATCH_SIZE, policy=policy
-        )
-        logger.info(
-            f"{LOG_PREFIX} 搜索候选获取完成: "
-            f"tag_configured={'yes' if tag else 'no'} "
-            f"source={_search_source_label(source_key)} "
-            f"requested_count={count} quality={_search_quality_label(quality)} "
-            f"candidate_count={raw_count}"
-        )
-
-        if not illusts:
-            yield event.plain_result("❌ 图片源请求失败或无结果，换个标签试试")
-            return
-
-        if filter_manga:
-            illusts = self._filter_manga(illusts)
-            if not illusts:
-                yield event.plain_result(
-                    "😶 过滤漫画后没有可用作品，可关闭漫画过滤后重试"
-                )
-                return
-
-        try:
-            illusts = await self._filter_blacklisted_illusts(illusts, policy)
-        except RuntimeError:
-            yield event.plain_result("🚫 内容安全服务暂不可用，本次请求已拒绝")
-            return
-        if not illusts:
-            yield event.plain_result(
-                "😶 可用作品都被内容安全策略过滤了，换个标签后再试"
-            )
-            return
-
-        pick_count = min(count, len(illusts))
+        request_state = SourceRequest()
         dedupe_days = self._cfg_int("dedupe_days", 1, 0, 7)
         if (
             self.image_index is not None
@@ -294,19 +304,6 @@ class SearchMixin:
                 yield event.plain_result("图片去重索引更新失败，请稍后重试")
                 return
 
-        chosen = await self._pick_illusts(
-            event,
-            illusts,
-            pick_count,
-            source_key=source_key,
-            dedupe_enabled=dedupe_days > 0,
-            raw_count=raw_count,
-        )
-        if not chosen:
-            yield event.plain_result(
-                "当前去重范围内没有未发送过的图片了，换个标签或稍后再试"
-            )
-            return
         pending_illust_ids: set[str] = set()
         sent_illust_ids: set[str] = set()
         unknown_illust_ids: set[str] = set()
@@ -315,21 +312,18 @@ class SearchMixin:
             event.get_platform_name() == AIOCQHTTP_PLATFORM
             and getattr(event, "bot", None) is not None
         )
-        if dedupe_days > 0 and self.image_index is not None:
-            pending_illust_ids = {
-                str(illust.get("id") or "") for illust in chosen if illust.get("id")
-            }
-
         # 下载所有图片
         downloaded: list[tuple[dict, str, str, int]] = []
         temp_paths: list[str] = []
-        image_sources = {str(illust.get("id") or ""): source_key for illust in chosen}
+        image_sources: dict[str, str] = {}
         attempted_ids: set[str] = set()
-        batch_attempts = 1
+        batch_attempts = 0
         download_attempts = 0
-        transient_offset = raw_count
-        queue = list(chosen)
-        deadline = time.monotonic() + timeout_sec * max(3, count)
+        illusts: list[dict] = []
+        source_key = ""
+        queue: list[dict] = []
+        deadline: float | None = None
+        failure_message = "❌ 图片源请求失败或无结果，换个标签试试"
 
         async def deliver_images(content, images, *, context: str) -> None:
             """按实际提交阶段维护计费、去重占用和文件读取窗口。"""
@@ -362,46 +356,67 @@ class SearchMixin:
 
         try:
             while len(downloaded) < count and download_attempts < SEARCH_DOWNLOAD_ATTEMPTS:
-                if time.monotonic() >= deadline:
+                if deadline is not None and time.monotonic() >= deadline:
                     logger.info(f"{LOG_PREFIX} 发图取图总时间预算耗尽: downloaded_count={len(downloaded)}")
                     break
                 if not queue:
-                    remaining = [
-                        item for item in illusts
-                        if str(item.get("id") or "") not in attempted_ids
-                    ]
+                    remaining = [item for item in illusts if str(item.get("id") or "") not in attempted_ids]
                     if remaining:
-                        queue = await self._pick_illusts(
-                            event, remaining, min(count - len(downloaded), len(remaining)),
-                            source_key=source_key, dedupe_enabled=dedupe_days > 0,
-                            raw_count=0,
-                        )
-                    if not queue:
-                        if batch_attempts >= SEARCH_BATCH_ATTEMPTS:
-                            break
                         try:
-                            if self.image_index is not None:
-                                await self.image_index.advance_page_offset(
-                                    self._event_scope(event), source_key, raw_count
-                                )
-                            illusts, raw_count, source_key = await asyncio.wait_for(
-                                self._fetch_source_candidates(
-                                    event, tag, count=SEARCH_BATCH_SIZE,
-                                    offset=transient_offset if self.image_index is None else 0,
-                                    policy=policy,
-                                ),
-                                timeout=max(0, deadline - time.monotonic()),
+                            queue = await self._pick_illusts(
+                                event, remaining, min(count - len(downloaded), len(remaining)),
+                                source_key=source_key, dedupe_enabled=dedupe_days > 0,
                             )
+                        except SelectionIndexError as exc:
+                            logger.warning(f"{LOG_PREFIX} 发图去重服务不可用: error_type={type(exc).__name__}")
+                            failure_message = "图片去重服务暂不可用，请稍后重试"
+                            break
+                        if not queue:
+                            failure_message = "当前去重范围内没有未发送过的图片了，换个标签或稍后再试"
+                    if not queue:
+                        try:
+                            await self._advance_source_page(event, source_key, request_state)
+                            if batch_attempts >= SEARCH_BATCH_ATTEMPTS:
+                                break
+                            fetch = self._fetch_source_candidates(
+                                event, tag, count=SEARCH_BATCH_SIZE, policy=policy,
+                                request_state=request_state,
+                            )
+                            if deadline is None:
+                                illusts, raw_count, source_key = await fetch
+                                deadline = time.monotonic() + timeout_sec * max(3, count)
+                            else:
+                                illusts, raw_count, source_key = await asyncio.wait_for(
+                                    fetch, timeout=max(0, deadline - time.monotonic()),
+                                )
+                            batch_attempts += 1
+                            logger.info(
+                                f"{LOG_PREFIX} 搜索候选获取完成: source={_search_source_label(source_key)} "
+                                f"batch={batch_attempts}/{SEARCH_BATCH_ATTEMPTS} candidate_count={raw_count}"
+                            )
+                            if not illusts:
+                                if request_state.failure_reason:
+                                    failure_message = "❌ 图片源暂不可用，请稍后重试"
+                                continue
                             if filter_manga:
                                 illusts = self._filter_manga(illusts)
+                                if not illusts:
+                                    failure_message = "😶 过滤漫画后没有可用作品，换个标签后再试"
+                                    continue
                             illusts = await self._filter_blacklisted_illusts(illusts, policy)
-                        except Exception as exc:
-                            logger.warning(
-                                f"{LOG_PREFIX} 发图候选补取失败: error_type={type(exc).__name__}"
-                            )
+                            if not illusts:
+                                failure_message = "😶 可用作品都被内容安全策略过滤了，换个标签后再试"
+                        except SelectionIndexError as exc:
+                            logger.warning(f"{LOG_PREFIX} 发图分页索引不可用: error_type={type(exc).__name__}")
+                            failure_message = "图片去重服务暂不可用，请稍后重试"
                             break
-                        batch_attempts += 1
-                        transient_offset += raw_count
+                        except RuntimeError as exc:
+                            logger.warning(f"{LOG_PREFIX} 发图候选处理失败: error_type={type(exc).__name__}")
+                            failure_message = "🚫 内容安全或图片源服务暂不可用，请稍后重试"
+                            break
+                        except Exception as exc:
+                            logger.warning(f"{LOG_PREFIX} 发图候选补取失败: error_type={type(exc).__name__}")
+                            break
                         continue
                     for item in queue:
                         item_id = str(item.get("id") or "")
@@ -415,6 +430,7 @@ class SearchMixin:
                     continue
                 attempted_ids.add(item_id)
                 download_attempts += 1
+                failure_message = "😢 所有图片均下载失败，请稍后再试"
                 idx = download_attempts
                 download_ready = False
 
@@ -465,7 +481,7 @@ class SearchMixin:
 
             # 统一发送（避免 yield 和 send 混用导致消息拆分）
             if not downloaded:
-                yield event.plain_result("😢 所有图片均下载失败，请稍后再试")
+                yield event.plain_result(failure_message)
                 return
 
             # 非 OneBot 平台不支持合并转发，自动降级。

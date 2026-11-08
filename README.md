@@ -270,7 +270,9 @@ WebUI 配置页按以下 6 组折叠展示，分组细节与维护规则见 [doc
 
 </details>
 
-`preferred_image_source` 保存并重载后生效，普通发图、签到与日历背景共用此顺序。首选请求失败或返回空结果时尝试另一源；已有候选被过滤、去重或下载失败不触发换源。有效的签到／日历缓存与已保存背景仍按原规则复用，不因切换优先级强制重选。
+`preferred_image_source` 保存并重载后生效，普通发图、签到与日历背景共用此顺序。每轮首选请求失败或返回空结果时尝试另一源；单张候选被过滤、去重或下载失败不直接触发换源，耗尽本批可用候选后按相同优先级补取。首批全被漫画、安全规则或去重过滤也会有限补取；安全规则或去重索引异常则停止选图，不放行未经校验的作品。有效的签到／日历缓存与已保存背景仍按原规则复用，不因切换优先级强制重选。
+
+Lolicon 每次重新随机请求，没有 offset 或分页游标，补取可能再次返回旧图，由本地去重排除。Pixiv 在请求内按上游下一页参数继续，推荐接口保留收藏游标及已浏览／书签作品列表，空页有下一页时仍可续取；来源耗尽或分页位置重复时，本次请求不绕回首页。跨请求继续使用现有数字 offset，推荐多参数位置不完整持久化。签到标签搜索同时使用 Pixiv 竖图粗筛和本地 0.60–0.90 精筛；日历仍只取一批。两源均校验响应及候选必要字段，异常响应不当作合法空结果。
 
 Lolicon 请求地址固定为 `https://api.lolicon.app/setu/v2`，旧 `lolicon_api_url` 已删除；旧自定义地址及留空停用不再生效。图片反代配置仍保留，但不代理 API 请求。
 
@@ -289,7 +291,7 @@ Lolicon 请求地址固定为 `https://api.lolicon.app/setu/v2`，旧 `lolicon_a
 
 普通 `/p` 和自然语言发图固定使用 `image_quality` 指定的画质，不在插件内压缩或自动换成低档图片。选择 `original` 时，原图超过大小上限、地址缺失或下载失败会跳过该作品，再找另一张。
 
-“图片大小上限”默认 **10 MiB**，适用于所选的所有画质；配置键仍为 `auto_downgrade_original_mb`，升级后沿用已有数值。先尝试同批剩余候选，不足时补取，每次请求最多取 **3 批**、实际尝试 **20 张作品**；相同作品 ID 在本次请求内只尝试一次。到达上限后发送已找到的图片，没有可用图片则提示失败；超限或下载失败的候选不扣费、不记成功使用。
+“图片大小上限”默认 **10 MiB**，适用于所选的所有画质；配置键仍为 `auto_downgrade_original_mb`，升级后沿用已有数值。先尝试同批剩余候选，不足时补取，每次请求最多取 **3 轮候选**（含首轮，每轮最多尝试两个来源，不等于最多 3 次 HTTP 请求）、实际尝试下载 **20 张作品**；相同作品 ID 在本次请求内只尝试一次。到达上限后发送已找到的图片，没有可用图片则提示失败；超限或下载失败的候选不扣费、不记成功使用。
 
 **升级提醒：** 旧配置中的 `3.0` 会继续生效；使用原图且频繁因大小限制换图时，建议手动把“图片大小上限”调到 **10 MiB**。自定义数值不会被升级覆盖。
 
@@ -377,6 +379,7 @@ lunar-python
 
 - 默认图片源由 [Lolicon API](https://api.lolicon.app/) 提供
 - Pixiv 图片源基于 [pixivpy-async](https://github.com/Mikubill/pixivpy-async)
+- 图片候选分页、搜索筛选与错误处理设计参考 [pixiv-cli](https://github.com/FlanChanXwO/pixiv-cli)，感谢 [FlanChanXwO](https://github.com/FlanChanXwO) 的开源实现
 - Pixiv `refresh_token` 获取方案来自 [piglig/pixiv-token](https://github.com/piglig/pixiv-token)，感谢 [piglig](https://github.com/piglig) 提供基于 Playwright 的 OAuth 自动取码工具
 - 作品黑名单缩略图生成基于 [Pillow](https://python-pillow.org/)
 - 签到每日一言由 [Hitokoto API](https://github.com/hitokoto-osc/hitokoto-api) 提供，感谢一言开源社区和公共 API 服务

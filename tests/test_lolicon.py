@@ -9,6 +9,7 @@ import pytest
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 
 from astrbot_plugin_get_px.pixiv.lolicon import DEFAULT_API_URL, LoliconClient
+from astrbot_plugin_get_px.pixiv.pagination import PixivPage
 from astrbot_plugin_get_px.pixiv.constants import AIOCQHTTP_PLATFORM
 from astrbot_plugin_get_px.pixiv.search import SearchMixin
 from astrbot_plugin_get_px.pixiv.safety import ContentSafetyPolicy
@@ -100,19 +101,19 @@ class _SourcePixiv:
         self.search_calls = []
         self.recommended_calls = []
 
-    async def search(self, tag, offset=0):
+    async def search(self, tag, offset=0, *, continuation=None, portrait=False):
         self.search_calls.append((tag, offset))
         self.order.append("pixiv")
         if self.error:
             raise RuntimeError("down")
-        return [] if self.empty else [{"id": "3"}]
+        return PixivPage([] if self.empty else [{"id": "3"}], None)
 
-    async def recommended(self, offset=0):
+    async def recommended(self, offset=0, *, continuation=None):
         self.recommended_calls.append(offset)
         self.order.append("pixiv")
         if self.error:
             raise RuntimeError("down")
-        return [] if self.empty else [{"id": "4"}]
+        return PixivPage([] if self.empty else [{"id": "4"}], None)
 
 
 class _SourceHarness(SearchMixin):

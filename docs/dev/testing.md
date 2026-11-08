@@ -264,6 +264,25 @@ python -m pytest -q tests/test_checkin_cache.py tests/test_checkin_calendar.py t
 
 日历缓存回归运行 `python -m pytest -q tests/test_checkin_calendar.py`，用实际事件快照验证备份导入编辑名称／日期、在线节假日更新均改变缓存 key，相同内容仍复用 JPEG；同一快照传给渲染，避免 key 与内容错配。
 
+### 双图源补选与分页
+
+运行 `python -m pytest -q tests/test_image_selection.py tests/test_pixiv_client.py tests/test_lolicon.py tests/test_checkin_background_selection.py tests/test_p_coin_cost.py tests/test_image_index.py`。覆盖首批全漫画／安全过滤／已用后的补取、服务故障停止、合法空列表与畸形响应、官方 continuation 主机／路径／参数校验、推荐 offset=0 和收藏游标、空页续取及另一源回退、分页循环拒绝、Lolicon 不传 offset／不写游标、最后一批耗尽后保存真实位置，以及取消时等待 SQLite 占用完成后释放。使用 SDK／HTTP 测试替身和临时 SQLite，不访问真实图源或 QQ。
+
+`tests/test_pagination_review_fixes.py` 另覆盖推荐已浏览／书签列表聚合、SDK 参数编码与回放、含列表的循环检测、重复／缺号／混合索引等非法列表拒绝。索引测试使用真实 `set_page_offset()` 验证精确替换、scope／source 隔离、重开持久化、TTL 与重置，不再按结果数推算位置。
+
+Pixiv 标签签到搜索另验证通过已有认证请求入口发送竖图粗筛，并保留本地 0.60–0.90 精筛；新增签到入口到客户端的显式 `portrait=True` 接线测试，改变 Lolicon 比例字符串不影响 Pixiv 粗筛，其他调用方默认关闭。推荐和日历不套用该搜索参数。跨请求推荐 continuation 仍只有数字 offset 持久化，不把请求内测试作为完整断点续读的证据。
+
+#### 真实图源验证记录（2026-11-07）
+
+通过本地 HTTP 代理执行 9 项小范围实测：Pixiv refresh token 登录、推荐首批和下一页、标签搜索首批和下一页、竖图标签搜索、Lolicon 普通分级竖图取样，以及两源各一张 `large` 下载。全部通过，图片均经 Pillow 格式和完整性校验；凭据仅在内存中读取，未写入脚本或报告。
+
+- Pixiv 推荐两批分别返回 67／69 条，下一页包含 offset 与收藏游标等参数，客户端成功解析并继续。
+- Pixiv 标签搜索两批各 30 条；竖图搜索 30 条均宽小于高，其中 21 条符合本地 0.60–0.90 精筛，粗筛不能替代精筛。
+- Lolicon 返回 2 条普通分级结果，宽高比分别约 0.620／0.707；本次 AI 标识均为未知，不作为 AI 排除有效性的证据。
+- Pixiv 下载为 WEBP（600×761，140856 bytes），Lolicon 下载为 JPEG（744×1200，566799 bytes），均使用返回的 `large` 地址，未验证原图档位。
+
+该记录只验证一次真实图源样本和当前 SDK；代理在测试进程显式注入，没有修改插件正式代理配置。未执行 QQ 发送、签到奖励、金币结算或 T2I；未测试自定义反代轮换、实际限流、异常回包与长期运行。Lolicon 文档域名的证书失败不代表取图 API 失败，本次 API 与默认返回图片地址均可通过代理访问。临时探针与脱敏报告仅存放于工作区外，不是仓库内可直接复现的测试脚本。
+
 ### 大小上限与候选补选
 
 `tests/test_downloader.py` 覆盖原图／大图／中图超限后清理且不降档、等于阈值与 0 关闭软上限、同画质反代重试、缺失所选画质拒绝、背景下载保留回退。`tests/test_p_coin_cost.py` 使用真实下载器与 SQLite 索引验证超限后同批补足、淘汰图释放占用且不扣费，并覆盖跨来源补取成功／下载取消、重复候选不重复下载、3 批／20 张上限，以及补取失败仍发送并结算已有图片。网络与协议回包使用测试替身，不代表真实图源和 QQ 验证。

@@ -17,7 +17,6 @@ from .safety import normalize_safety_text
 LOG_PREFIX = "[GetPx]"
 SHANGHAI_TZ = ZoneInfo("Asia/Shanghai")
 PAGE_CURSOR_TTL_DAYS = 3
-MIN_RESULTS_FOR_NEXT_PAGE = 20
 _CLEANUP_THROTTLE_SECONDS = 3600  # 每小时最多清理一次旧记录
 
 
@@ -181,14 +180,24 @@ class ImageIndexStore:
                 self._get_page_offset_sync, scope, source_key
             )
 
-    async def advance_page_offset(
-        self, scope: str, source_key: str, results_count: int
-    ) -> int:
-        """当前页全被用过后推进游标；若结果数明显少于正常页则重置为 0（已到底，循环）。返回新的 offset。"""
+    async def set_page_offset(self, scope: str, source_key: str, offset: int) -> None:
+        """保存上游提供的数字位置，不推算推荐接口的完整 continuation。"""
         async with self._lock:
-            return await asyncio.to_thread(
-                self._advance_page_offset_sync, scope, source_key, results_count
+            await asyncio.to_thread(self._set_page_offset_sync, scope, source_key, offset)
+
+    def _set_page_offset_sync(self, scope: str, source_key: str, offset: int) -> None:
+        conn = self._get_conn()
+        try:
+            conn.execute(
+                "INSERT INTO source_page_cursor (scope, source_key, page_offset, updated_at) "
+                "VALUES (?, ?, ?, ?) ON CONFLICT(scope, source_key) DO UPDATE SET "
+                "page_offset=excluded.page_offset, updated_at=excluded.updated_at",
+                (scope, source_key, offset, self.now_iso()),
             )
+            conn.commit()
+        except Exception:
+            conn.rollback()
+            raise
 
     async def get_blacklisted_illust_ids(self) -> set[str]:
         async with self._lock:
@@ -510,36 +519,6 @@ class ImageIndexStore:
         except (ValueError, TypeError):
             return 0
         return page_offset
-
-    def _advance_page_offset_sync(
-        self, scope: str, source_key: str, results_count: int
-    ) -> int:
-        now = self.now_iso()
-        conn = self._get_conn()
-        row = conn.execute(
-            "SELECT page_offset FROM source_page_cursor WHERE scope = ? AND source_key = ?",
-            (scope, source_key),
-        ).fetchone()
-        current = row["page_offset"] if row is not None else 0
-
-        # 如果结果数明显少于正常页大小，说明已到底，重置为 0
-        if results_count < MIN_RESULTS_FOR_NEXT_PAGE:
-            new_offset = 0
-        else:
-            new_offset = current + results_count
-
-        conn.execute(
-            """
-            INSERT INTO source_page_cursor (scope, source_key, page_offset, updated_at)
-            VALUES (?, ?, ?, ?)
-            ON CONFLICT(scope, source_key) DO UPDATE SET
-                page_offset = excluded.page_offset,
-                updated_at = excluded.updated_at
-            """,
-            (scope, source_key, new_offset, now),
-        )
-        conn.commit()
-        return new_offset
 
     def _get_used_illust_ids_sync(
         self, date_key: str, scope: str, source_key: str

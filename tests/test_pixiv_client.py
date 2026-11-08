@@ -47,7 +47,7 @@ class PixivClientIllustDetailTest(unittest.IsolatedAsyncioTestCase):
             factory_calls += 1
 
             async def fail():
-                raise RuntimeError("temporary failure")
+                raise TimeoutError("temporary failure")
 
             return fail()
 

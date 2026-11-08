@@ -30,7 +30,8 @@ pixiv/
 │  ├─ delivery.py        消息发送错误处理
 │  ├─ filters.py         普通分级、漫画和安全策略过滤
 │  ├─ safety.py          内置安全词与文本规范化
-│  ├─ client.py          Pixiv API 客户端
+│  ├─ client.py          Pixiv API 客户端、签到标签竖图粗筛
+│  ├─ pagination.py      请求内分页状态、上游响应与 continuation 校验
 │  ├─ lolicon.py         Lolicon API 客户端与数据规范化
 │  ├─ downloader.py      图片下载、Lolicon 反代轮换与画质选择
 │  ├─ index.py           多自然日去重索引、安全词与作品黑名单
@@ -131,10 +132,14 @@ initialize 获取插件数据目录后，将 `data_dir / "temp"` 注入共享 Im
 
 ## 普通发图的大小筛选
 
-`pixiv/search.py` 在所选画质下下载候选，超出大小上限、地址缺失或下载失败就换作品，先使用同批剩余候选，再按图片源优先级补取。每次请求最多取 3 批、实际尝试 20 张作品，相同 ID 不重复下载；不足时发送已下载的图片。每张候选保留自己的 source_key，补取回退另一源后仍按对应来源写成功记录或释放 pending；跳过候选立即释放，未提交与取消仍由 finally 收尾。
+`pixiv/search.py` 在所选画质下下载候选，超出大小上限、地址缺失或下载失败就换作品，先使用同批剩余候选，再按图片源优先级补取。首批全被漫画、安全规则或去重过滤时也继续补取。每次请求最多取 3 轮候选（每轮按优先级最多请求两个来源）、实际尝试下载 20 张作品，相同原始 ID 不重复下载；不足时发送已下载的图片。安全规则或去重索引异常停止选图；取消时等待正在执行的占用写入，再释放未提交占用。每张候选保留自己的 source_key，补取回退另一源后仍按对应来源写成功记录或释放 pending；跳过候选立即释放，未提交与取消仍由 finally 收尾。
 
 `ImageDownloader.download_for_send()` 的 `allow_quality_fallback=False` 限定普通发图只尝试所选画质的反代和源地址；超软上限时清理文件并抛错交回选图层，50 MiB 硬上限不变。签到及日历传入 `size_limit_bytes=0` 并保留默认画质回退。持久配置沿用 `auto_downgrade_original_mb` 的键与数值，WebUI 名称改为图片大小上限。
 
-下载阶段以 `time.monotonic()` 建立 `request_timeout * max(3, count)` 秒的共享截止时间，单张下载（含反代轮换）及补取用 `asyncio.wait_for` 传入剩余预算。到期取消进行中的操作，发送已下载图片；首次取源、消息发送及清理不在预算内。外部取消继续传播。
+首轮取源完成后以 `time.monotonic()` 建立 `request_timeout * max(3, count)` 秒的共享截止时间，单张下载（含反代轮换）及补取用 `asyncio.wait_for` 传入剩余预算。到期取消进行中的操作，发送已下载图片；首次取源、消息发送及清理不在预算内。外部取消继续传播。
+
+Lolicon 无分页，每轮重新随机请求且不推进 offset。Pixiv 客户端返回 `PixivPage(items, next_params)`，`SourceRequest` 在请求内按 source_key 保存 continuation、重复位置集合和失败原因；列表为空但仍有下一页时保留状态并允许另一源回退。候选耗尽时保存下一页数字 offset，不依赖条数推算；无下一页则本次流结束。完整推荐参数只在请求内保存，跨请求继续使用现有数字起点，不变更数据库 schema。签到／预览复用该机制，日历保持单批；签到标签搜索显式传递 `portrait=True`，经已有认证请求入口启用竖图粗筛并进行本地精筛；不再由 Lolicon 比例字符串推断。推荐 continuation 的 `viewed` 与 `bookmark_illust_ids` 列表经校验、聚合后透传 SDK，重复位置比较使用不可变列表内容。旧的按候选数量推算分页方法已移除，索引只保存上游数字位置。
+
+两源在响应边界校验必要列表、候选身份和分级等字段，使用 `SourceResponseError.reason` 暴露脱敏错误类别。Pixiv 的一次轻量重试只针对网络／超时错误，不因畸形响应或鉴权失败重试；不新增 `Retry-After` 逻辑。`SelectionIndexError` 区分本地索引故障和正常候选不足，不允许索引失效时继续放行。
 
 大小约束由 `download()` 统一执行：Content-Length 超限时不读取正文，流式字节累计超限立即中止并清理半文件；`download_for_send()` 不重复检查返回大小。`ImageSizeLimitError` 按类型记录为 `size_limit` 并交回选图层，异常文案不参与分类。

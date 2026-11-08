@@ -71,9 +71,11 @@ _CALENDAR_BG_ASPECT_PARAM = "gt1.7lt1.8"
 
 try:
     from ..pixiv.index import ordered_by_unused
+    from ..pixiv.pagination import SourceRequest, SelectionIndexError
     from ..pixiv.downloader import cleanup
 except ImportError:  # Direct imports used by the test suite.
     from pixiv.index import ordered_by_unused
+    from pixiv.pagination import SourceRequest, SelectionIndexError
     from pixiv.downloader import cleanup
 
 
@@ -699,19 +701,19 @@ class CheckinArtworkMixin:
         used_ids: set[str] = set(preview_excluded_ids or ())
         used_source_key = ""
         illusts: list[dict] = []
-        raw_count = 0
-        transient_offset = 0
+        request_state = SourceRequest()
 
         for page_attempt in range(1, CHECKIN_BACKGROUND_PAGE_ATTEMPTS + 1):
             try:
-                illusts, raw_count, source_key = await self._fetch_source_candidates(
+                illusts, _, source_key = await self._fetch_source_candidates(
                     event,
                     selected_tag,
                     count=20,
-                    offset=transient_offset if preview_nonce else 0,
                     aspect_ratio=CHECKIN_ARTWORK_ASPECT_PARAM,
+                    portrait=True,
                     use_page_cursor=not preview_nonce,
                     policy=_policy,
+                    request_state=request_state,
                 )
             except Exception as e:
                 logger.warning(
@@ -720,16 +722,15 @@ class CheckinArtworkMixin:
                     f"error_type={type(e).__name__}"
                 )
                 return None
-            if preview_nonce:
-                transient_offset += raw_count
             if source_key != used_source_key:
                 used_ids = set(preview_excluded_ids or ())
-                used_ids.update(
-                    await self._checkin_background_used_ids(event, source_key)
-                )
+                try:
+                    used_ids.update(await self._checkin_background_used_ids(event, source_key))
+                except SelectionIndexError:
+                    return None
                 used_source_key = source_key
             if not illusts:
-                return None
+                continue
 
             if self._cfg_bool("filter_manga", True):
                 illusts = self._filter_manga(illusts)
@@ -747,22 +748,12 @@ class CheckinArtworkMixin:
                 CHECKIN_ARTWORK_TOLERANCE,
             )
             if not illusts:
-                if preview_nonce:
-                    continue
-                if self.image_index is None:
-                    return None
                 try:
-                    await self.image_index.advance_page_offset(
-                        self._event_scope(event), source_key, raw_count
+                    await self._advance_source_page(
+                        event, source_key, request_state, use_page_cursor=not preview_nonce,
                     )
-                    logger.info(
-                        f"{LOG_PREFIX} 签到背景第 {page_attempt} 页无符合 3:4 的竖向作品\uff0c切换下一页"
-                    )
-                except Exception as e:
-                    logger.warning(
-                        f"{LOG_PREFIX} 签到背景分页游标更新失败: "
-                        f"error_type={type(e).__name__}"
-                    )
+                except Exception as exc:
+                    logger.warning(f"{LOG_PREFIX} 签到背景分页游标更新失败: error_type={type(exc).__name__}")
                     return None
                 continue
 
@@ -775,17 +766,9 @@ class CheckinArtworkMixin:
             if fresh:
                 illusts = fresh
                 break
-            if preview_nonce:
-                continue
-            if self.image_index is None:
-                logger.info(
-                    f"{LOG_PREFIX} 签到背景候选均已在去重窗口内使用，跳过图片源背景"
-                )
-                return None
-
             try:
-                await self.image_index.advance_page_offset(
-                    self._event_scope(event), source_key, raw_count
+                await self._advance_source_page(
+                    event, source_key, request_state, use_page_cursor=not preview_nonce,
                 )
                 logger.info(
                     f"{LOG_PREFIX} 签到背景第 {page_attempt} 页候选均已使用\uff0c切换下一页"
@@ -835,9 +818,10 @@ class CheckinArtworkMixin:
                 continue
             claimed = False
             if claim_usage:
-                claimed = await self._claim_checkin_background_usage(
-                    event, source_key, illust_id
-                )
+                try:
+                    claimed = await self._claim_checkin_background_usage(event, source_key, illust_id)
+                except SelectionIndexError:
+                    return None
                 if not claimed:
                     logger.debug(
                         f"{LOG_PREFIX} 签到背景跳过\uff1a作品 {illust_id} 已被其他签到占用"
@@ -903,14 +887,12 @@ class CheckinArtworkMixin:
     ) -> bool:
         if self.image_index is None or not source_key or not illust_id:
             return True
+        claim_task = asyncio.ensure_future(self.image_index.claim_usage(
+            scope=self._event_scope(event), source_key=source_key, illust_id=illust_id,
+            feature="checkin_pending", user_id=str(event.get_sender_id() or ""),
+        ))
         try:
-            claimed = await self.image_index.claim_usage(
-                scope=self._event_scope(event),
-                source_key=source_key,
-                illust_id=illust_id,
-                feature="checkin_pending",
-                user_id=str(event.get_sender_id() or ""),
-            )
+            claimed = await asyncio.shield(claim_task)
             logger.debug(
                 f"{LOG_PREFIX} 签到背景占用结果: "
                 f"result={'claimed' if claimed else 'duplicate'} "
@@ -918,12 +900,19 @@ class CheckinArtworkMixin:
                 f"illust_id={illust_id}"
             )
             return claimed
+        except asyncio.CancelledError:
+            try:
+                if await claim_task:
+                    await self._release_checkin_background_usage(event, source_key, illust_id)
+            except Exception as exc:
+                logger.warning(f"{LOG_PREFIX} 取消后签到背景占用处理失败: error_type={type(exc).__name__}")
+            raise
         except Exception as exc:
-            logger.debug(
+            logger.warning(
                 f"{LOG_PREFIX} 签到背景占用失败，拒绝使用候选: "
                 f"reason=index_error error_type={type(exc).__name__}"
             )
-            return False
+            raise SelectionIndexError("签到背景占用失败") from exc
 
     async def _release_checkin_background_usage(
         self, event: AstrMessageEvent, source_key: str, illust_id: str
@@ -1005,7 +994,10 @@ class CheckinArtworkMixin:
         illusts = filter_illusts_by_aspect_ratio(
             illusts, _CALENDAR_BG_RATIO, _CALENDAR_BG_RATIO_TOLERANCE
         )
-        used_ids = set(await self._checkin_background_used_ids(event, source_key))
+        try:
+            used_ids = set(await self._checkin_background_used_ids(event, source_key))
+        except SelectionIndexError:
+            return CardBackground(mode="fallback", source="fallback")
         ordered = [
             illust
             for illust in ordered_by_unused(illusts, used_ids)
@@ -1132,6 +1124,7 @@ class CheckinArtworkMixin:
                     f"{LOG_PREFIX} 签到背景读取去重索引失败: "
                     f"error_type={type(e).__name__}"
                 )
+                raise SelectionIndexError("读取背景去重索引失败") from e
         return used_ids
 
     def _checkin_avatar_url(self, event: AstrMessageEvent) -> str:

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import random
 import re
 
@@ -7,6 +8,7 @@ from astrbot.api import logger
 from astrbot.api.event import AstrMessageEvent
 
 from .index import ordered_by_unused
+from .pagination import SelectionIndexError
 from .safety import (
     ContentSafetyPolicy,
     STRICT_CONTENT_SAFETY_POLICY,
@@ -203,7 +205,6 @@ class FiltersMixin:
         *,
         source_key: str,
         dedupe_enabled: bool = True,
-        raw_count: int = 0,
     ) -> list[dict]:
         if not dedupe_enabled or self.image_index is None:
             return random.sample(illusts, pick_count)
@@ -216,21 +217,11 @@ class FiltersMixin:
                 f"{LOG_PREFIX} 读取发图去重索引失败: "
                 f"error_type={type(e).__name__}"
             )
-            return []
+            raise SelectionIndexError("读取去重索引失败") from e
 
         ordered = ordered_by_unused(illusts, used_ids)
         fresh = [i for i in ordered if str(i.get("id") or "") not in used_ids]
         repeated = [i for i in ordered if str(i.get("id") or "") in used_ids]
-
-        # 若整页全被用过，推进分页游标供下次翻页
-        if not fresh and raw_count > 0:
-            try:
-                await self.image_index.advance_page_offset(scope, source_key, raw_count)
-            except Exception as e:
-                logger.warning(
-                    f"{LOG_PREFIX} 分页游标更新失败: "
-                    f"error_type={type(e).__name__}"
-                )
 
         candidates = random.sample(fresh, len(fresh)) + random.sample(
             repeated, len(repeated)
@@ -243,16 +234,33 @@ class FiltersMixin:
             illust_id = str(illust.get("id") or "")
             if not illust_id:
                 continue
+            claim_task = asyncio.ensure_future(self.image_index.claim_usage(
+                scope=scope, source_key=source_key, illust_id=illust_id,
+                feature="normal_pending", user_id=user_id,
+            ))
             try:
-                claimed = await self.image_index.claim_usage(
-                    scope=scope,
-                    source_key=source_key,
-                    illust_id=illust_id,
-                    feature="normal_pending",
-                    user_id=user_id,
-                )
-            except Exception:
-                return chosen
+                # SQLite 线程可能在外部取消后完成写入，先等占用结果再释放。
+                claimed = await asyncio.shield(claim_task)
+            except BaseException as exc:
+                if isinstance(exc, asyncio.CancelledError):
+                    try:
+                        if await claim_task:
+                            chosen.append(illust)
+                    except Exception as claim_exc:
+                        logger.warning(f"{LOG_PREFIX} 取消后图片占用失败: error_type={type(claim_exc).__name__}")
+                for claimed_illust in chosen:
+                    try:
+                        await self.image_index.release_usage(
+                            scope=scope, source_key=source_key,
+                            illust_id=str(claimed_illust["id"]), feature="normal_pending",
+                        )
+                    except Exception as release_exc:
+                        logger.warning(f"{LOG_PREFIX} 选图占用释放失败: error_type={type(release_exc).__name__}")
+                if isinstance(exc, asyncio.CancelledError):
+                    raise
+                if not isinstance(exc, Exception):
+                    raise
+                raise SelectionIndexError("图片占用失败") from exc
             if claimed:
                 chosen.append(illust)
         return chosen

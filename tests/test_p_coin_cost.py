@@ -170,13 +170,13 @@ class _SearchFlowHarness(SearchMixin):
         return illusts
 
     async def _pick_illusts(
-        self, event, illusts, pick_count, *, source_key, dedupe_enabled, raw_count
+        self, event, illusts, pick_count, *, source_key, dedupe_enabled
     ):
         return illusts[:pick_count]
 
     async def _fetch_source_candidates(
         self, event, tag, *, count=20, offset=0, aspect_ratio="", use_page_cursor=True,
-        policy=None,
+        policy=None, request_state=None,
     ):
         return self.illusts, len(self.illusts), "lolicon:random"
 
