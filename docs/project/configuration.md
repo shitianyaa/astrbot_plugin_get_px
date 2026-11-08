@@ -15,7 +15,6 @@
 | `image_quality` | `enum` | `original` | `original`/`large`/`medium`；固定所选画质，超限／不可用时换作品 |
 | `auto_downgrade_original_mb` | `float` | `10.0` | 图片大小上限（MiB），适用于所选画质，范围 0–25；0 关闭软上限；保留旧键并沿用已有数值 |
 | `forward_threshold` | `int` | `1` | 下载张数严格大于此值时合并转发（仅 aiocqhttp）；0 始终合并，范围 0–20 |
-| `forward_transport` | `string` | `file` | OneBot 合并链路：`file` 本地文件直传，`astrbot` 框架 Node/Nodes base64；不影响逐张直发或签到卡 |
 | `auto_trigger_enabled` | `bool` | `false` | 群内自然语言（「来份/张图」）自动触发发图 |
 
 `preferred_image_source` 保存并重载后生效，普通发图、签到背景与日历背景共用请求顺序。Lolicon 有标签时搜索、无标签时随机；Pixiv 有标签时搜索、无标签时推荐。无 Pixiv token 时直接使用 Lolicon；两源均失败或无结果时按各入口现有失败路径处理。单张候选被过滤、去重或下载失败不直接触发换源；普通发图耗尽本批可用候选后按相同优先级补取，请求失败或空结果时仍可回退另一源；有效缓存及已保存背景继续复用，不因切换优先级强制重选。无效选项记录日志并使用默认 Lolicon 优先。
@@ -26,13 +25,13 @@
 
 Lolicon 补取是重新随机请求，不支持 offset 或 continuation，不更新分页索引，结果可能重复或少于指定数量。Pixiv 在请求内保留真实下一页参数，空页有 continuation 时可继续，没有下一页或位置重复时不绕回首页；跨请求仍以已有数字 offset 定位，推荐接口的完整多参数位置只保留在请求内。签到配置标签时，Pixiv 搜索使用竖图粗筛并继续本地 0.60–0.90 精筛；无标签推荐不套用搜索参数，日历仍只请求一轮。两源异常响应、缺失列表及无效候选字段明确拒绝，不作为合法空结果；未增加 AI 配置或额外 429 重试。
 
+原生 `get_px_image` 可附加请求级 `orientation`、`aspect_ratio`／`ratio_tolerance`、`min_width`／`min_height` 和 `max_size_mib`，不新增持久配置或改变六组 schema。`max_size_mib` 与 `auto_downgrade_original_mb` 的有效正数上限取较小值，管理员0时仍可收紧到本次上限，50MiB硬上限不变；省略沿用配置。像素要求按实际发送文件核对，不升降画质；方向／比例／像素筛选后有限补取，不放宽。参数定义与示例见 [模型原生取图](../../README.md#模型原生取图)。这些参数不扩展 `/p` 签名，也不影响签到／日历。
+
 旧阈值不会自动改为 10 MiB；使用原图且频繁因大小限制换图时，建议手动将上限调整为 10 MiB。
 
 Lolicon 请求地址固定为 `https://api.lolicon.app/setu/v2`。旧 `lolicon_api_url` 从 schema 删除，由 AstrBot 加载时裁剪；简单 dict 中的残留值也不参与请求，旧自定义地址和留空停用不再生效。图片反代 origin 配置仍只代理图片，不代理 API。
 
 OneBot 发图默认使用本地 `file:///` 路径；仅在明确文件读取失败时，将同一条消息回退到 base64 编码重试一次，超时不回退、不重发。base64 是图片编码，与 AstrBot 4.27.3 的 OneBot 默认发图编码相同；回退仍直接调用 OneBot，不额外尝试 AstrBot 框架发送。file 发送正常返回但没有有效 `message_id` 时仍扣费，并保留图片 10 分钟供协议端读取，不重发。旧 `onebot_image_transport`（顶层及 `pixiv_source` 内）由 AstrBot 在加载时按 schema 裁剪；插件不依赖旧键，也不能恢复框架已裁剪的值。发送异常仅记日志，详见 [OneBot 图片发送](../../README.md#onebot-图片发送)。
-
-`forward_transport` 保存并重载后生效，每次搜索开始固定链路，无效值记录日志并按 `file` 处理。仅 `/p`、自然语言及 Tool 的 OneBot 合并转发使用：`file` 沿用原始 OneBot 接口和文件读取失败时的 base64 回退；`astrbot` 通过 `event.send(Node/Nodes)` 让框架编码图片，不在失败后切 file 或拆分补发。两者保持相同画质、发送结果结算及未知文件保护；框架正常返回按 confirmed 清理，超时／未知／提交期间取消保守保留文件 10 分钟。日志 `transport` 和 `duration_ms` 可对照发送调用耗时，无法保证实际送达速度。
 
 ## 2. 图片筛选与去重（`content_dedupe`）
 

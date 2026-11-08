@@ -10,6 +10,7 @@ from astrbot.api import FunctionTool, logger
 from ..group_safety import normalize_session
 from ..pixiv.constants import MAX_IMAGE_COUNT
 from ..pixiv.search_result import SearchResult
+from ..pixiv.selection import ImageSelection, SELECTION_PARAMETERS
 
 
 MAX_TOOL_TAG_LENGTH = 48
@@ -61,8 +62,8 @@ class ImageToolService:
         return event
 
     async def image(self, context, args):
-        if not set(args).issubset({"tag", "count", "send_mode"}):
-            raise ValueError("取图参数只支持标签、数量和发送方式")
+        if not set(args).issubset({"tag", "count", "send_mode"} | SELECTION_PARAMETERS):
+            raise ValueError("取图参数不受支持")
         tag, count = args.get("tag", ""), args.get("count", 1)
         send_mode = args.get("send_mode", "auto")
         if (
@@ -75,6 +76,7 @@ class ImageToolService:
             raise ValueError("数量必须为范围内的正整数")
         if not isinstance(send_mode, str) or send_mode not in ("auto", "single", "forward"):
             raise ValueError("发送方式必须为 auto、single 或 forward")
+        selection = ImageSelection.from_args(args)
         event = self._event(context)
         # 先校验会话，不能给缺失 UMO 的请求默认全局放行。
         normalize_session(event.unified_msg_origin)
@@ -108,6 +110,7 @@ class ImageToolService:
                 result=outcome,
                 selection_deadline=deadline,
                 send_mode=send_mode,
+                selection=selection,
             )
         except asyncio.CancelledError:
             outcome.interrupted = True
@@ -168,7 +171,7 @@ class GetPxImageTool(FunctionTool):
     def __init__(self, service):
         super().__init__(
             name="get_px_image",
-            description="仅在用户明确要图片时向当前聊天取图。标签只取用户所需角色名或关键词，可换成确定的单一语言名称，不擅自加作品名、括号说明、画风或其他条件。模糊复数通常3张、可选2，明确数量优先。可自行选择直发或合并，用户指定优先，少量优先直发。遵循插件安全与费用配置，不自动重试或补发。正常费用不向聊天报告。",
+            description="仅在用户明确要图片时向当前聊天取图。标签只取用户所需角色名或关键词，可换成确定的单一语言名称，不擅自加作品名、括号说明、画风或其他条件。模糊复数通常3张、可选2，明确数量优先。可自行选择直发或合并，用户指定优先，少量优先直发。可按用户要求筛选方向、比例、最小像素宽高与文件大小，不擅自添加筛选。找不够不放宽条件；只读尺寸，不识别图片。遵循插件安全与费用配置，不自动重试或补发。正常费用不向聊天报告。",
             parameters={
                 "type": "object",
                 "properties": {
@@ -188,6 +191,40 @@ class GetPxImageTool(FunctionTool):
                         "enum": ["auto", "single", "forward"],
                         "default": "auto",
                         "description": "single逐张直发；forward合并转发（仅OneBot，其他平台逐张直发）；auto或省略沿用配置阈值。用户指定优先，否则自行选择，少量图片优先single，多图需收纳可forward。只影响本次调用；提交后不得换方式补发。",
+                    },
+                    "orientation": {
+                        "type": "string",
+                        "enum": ["any", "landscape", "portrait", "square"],
+                        "default": "any",
+                        "description": "any不限方向；landscape宽大于高；portrait宽小于高；square宽高相等。只按用户要求指定，与其他筛选同时生效。",
+                    },
+                    "aspect_ratio": {
+                        "type": "number",
+                        "exclusiveMinimum": 0,
+                        "description": "目标宽/高，例如16:9传1.7777778、3:4传0.75。默认绝对容差0.1；省略不限制比例。",
+                    },
+                    "ratio_tolerance": {
+                        "type": "number",
+                        "minimum": 0,
+                        "default": 0.1,
+                        "description": "宽高比的绝对容差，需同时指定aspect_ratio且小于目标比例；0为精确比例，不是百分比。",
+                    },
+                    "min_width": {
+                        "type": "integer",
+                        "minimum": 0,
+                        "default": 0,
+                        "description": "实际发送文件最小像素宽度；0不限制。元数据粗筛后再读文件尺寸，不识别画面。",
+                    },
+                    "min_height": {
+                        "type": "integer",
+                        "minimum": 0,
+                        "default": 0,
+                        "description": "实际发送文件最小像素高度；0不限制。所选画质达不到就跳过，不换画质。",
+                    },
+                    "max_size_mib": {
+                        "type": "number",
+                        "minimum": 1 / (1024 * 1024),
+                        "description": "本次文件大小上限，单位MiB，必须为正数；与管理员上限取较小值，不能放宽。省略沿用配置，50MiB硬上限不变。",
                     },
                 },
                 "additionalProperties": False,

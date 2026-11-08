@@ -132,6 +132,25 @@ async def test_context_does_not_create_profiles_and_failures_are_not_free(tmp_pa
         {"send_mode": True},
         {"send_mode": []},
         {"send_mode": "unknown"},
+        {"orientation": "horizontal"},
+        {"orientation": []},
+        {"min_width": True},
+        {"min_height": -1},
+        {"min_width": 1000.0},
+        {"aspect_ratio": "3:4"},
+        {"aspect_ratio": None},
+        {"aspect_ratio": 0},
+        {"aspect_ratio": float("inf")},
+        {"aspect_ratio": True},
+        {"ratio_tolerance": 0.1},
+        {"aspect_ratio": 0.75, "ratio_tolerance": -0.1},
+        {"aspect_ratio": 0.75, "ratio_tolerance": 0.75},
+        {"aspect_ratio": 0.75, "ratio_tolerance": float("nan")},
+        {"max_size_mib": 0},
+        {"max_size_mib": -1},
+        {"max_size_mib": float("nan")},
+        {"max_size_mib": "3"},
+        {"max_size_mib": 1e-12},
         {"r18": True},
         {"target": "other"},
     ],
@@ -160,7 +179,6 @@ async def test_tool_passes_short_names_without_expanding_or_truncating(tmp_path,
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("forward_transport", ["file", "astrbot"])
 @pytest.mark.parametrize(
     "send_mode,threshold,platform,forward",
     [
@@ -172,29 +190,19 @@ async def test_tool_passes_short_names_without_expanding_or_truncating(tmp_path,
     ],
 )
 async def test_tool_send_mode_routes_without_changing_config_or_resending(
-    tmp_path, send_mode, threshold, platform, forward, forward_transport
+    tmp_path, send_mode, threshold, platform, forward
 ):
-    from astrbot.core.platform.sources.aiocqhttp.aiocqhttp_message_event import AiocqhttpMessageEvent
     from PIL import Image as PILImage
 
     plugin, context, paths = await setup_flow(tmp_path, items=2)
     for path in paths:
         PILImage.new("RGB", (8, 8)).save(path)
-    plugin.config["forward_transport"] = forward_transport
     plugin._forward_threshold = lambda: threshold
     event = context.context.event
     event.platform = platform
     event.get_group_id = lambda: "1"
     event.get_self_id = lambda: "10000"
     event.bot.call_action = AsyncMock(return_value={"message_id": 1})
-    if platform == "aiocqhttp":
-        framework_sender = getattr(AiocqhttpMessageEvent, "_send", None) or AiocqhttpMessageEvent.send_message
-
-        async def framework_send(chain):
-            await framework_sender(
-                event.bot, SimpleNamespace(chain=chain), is_group=True, session_id="1"
-            )
-        event.send = AsyncMock(side_effect=framework_send)
     service = ImageToolService(plugin)
     args = {"count": 2}
     if send_mode is not None:
@@ -212,15 +220,13 @@ async def test_tool_send_mode_routes_without_changing_config_or_resending(
             for call in calls
         )
         if forward:
-            assert len(calls[0].kwargs["messages"]) == 1
-            content = calls[0].kwargs["messages"][0]["data"]["content"]
-            assert [part["type"] for part in content] == ["text", "image", "text", "image"]
-            image = content[1]
+            nodes = calls[0].kwargs["messages"]
+            assert len(nodes) == 2
+            assert all([part["type"] for part in node["data"]["content"]] == ["text", "image"] for node in nodes)
+            image = nodes[0]["data"]["content"][1]
         else:
             image = calls[0].kwargs["message"][1]
-        framework = forward and forward_transport == "astrbot"
-        assert image["data"]["file"].startswith("base64://" if framework else "file://")
-        assert event.send.await_count == (1 if framework else 0)
+        assert image["data"]["file"].startswith("file://")
         assert not event.sent
     else:
         event.bot.call_action.assert_not_awaited()
@@ -268,7 +274,11 @@ async def test_actual_framework_executor_returns_text_and_does_not_resend(tmp_pa
     from astrbot.core.astr_agent_tool_exec import FunctionToolExecutor
     from astrbot.core.agent.run_context import ContextWrapper
 
-    plugin, context, _ = await setup_flow(tmp_path, coins=100, items=1)
+    from PIL import Image as PILImage
+
+    plugin, context, paths = await setup_flow(tmp_path, coins=100, items=1)
+    plugin.illusts[0].update(width=12, height=16)
+    PILImage.new("RGB", (12, 16)).save(paths[0])
     service = ImageToolService(plugin)
     wrapper = ContextWrapper(context=context.context, tool_call_timeout=120)
     with patch(
@@ -278,7 +288,9 @@ async def test_actual_framework_executor_returns_text_and_does_not_resend(tmp_pa
         outputs = [
             r
             async for r in FunctionToolExecutor.execute(
-                GetPxImageTool(service), wrapper, count=1, send_mode="single"
+                GetPxImageTool(service), wrapper, count=1, send_mode="single",
+                orientation="portrait", aspect_ratio=0.75, ratio_tolerance=0,
+                min_width=12, min_height=16, max_size_mib=3,
             )
         ]
     assert sender.await_count == 1 and not context.context.event.sent

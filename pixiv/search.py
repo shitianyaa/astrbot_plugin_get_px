@@ -14,6 +14,7 @@ from .downloader import cleanup, format_log_size
 from .pagination import SourceRequest, SourceResponseError, SelectionIndexError
 from .safety import ContentSafetyPolicy, STRICT_CONTENT_SAFETY_POLICY
 from .search_result import SearchResult
+from .selection import ImageSelection
 
 
 LOG_PREFIX = "[GetPx]"
@@ -21,7 +22,6 @@ DEFAULT_IMAGE_SIZE_LIMIT_MB = 10.0
 SEARCH_BATCH_SIZE = 20
 SEARCH_BATCH_ATTEMPTS = 3
 SEARCH_DOWNLOAD_ATTEMPTS = 20
-FORWARD_IMAGES_PER_NODE = 9
 
 
 def _search_quality_label(value: object) -> str:
@@ -257,8 +257,10 @@ class SearchMixin:
         self, event: AstrMessageEvent, tag: str, count_str: str, *,
         tool: bool = False, result: SearchResult | None = None,
         selection_deadline: float | None = None, send_mode: str = "auto",
+        selection: ImageSelection | None = None,
     ) -> SearchResult:
-        """执行一次取图；Tool 可覆盖本次发送方式，复用命令的消费规则。"""
+        """执行一次取图；Tool 可附加本次筛选，复用命令的消费规则。"""
+        selection = selection if tool and selection is not None else ImageSelection()
         result = result if result is not None else SearchResult(1)
         sender_id = str(event.get_sender_id() or "")
         unit_cost = self._p_unit_cost()
@@ -266,10 +268,6 @@ class SearchMixin:
         wallet = getattr(self, "checkin_store", None)
         charging = charge_requested and wallet is not None
         forward_threshold = self._forward_threshold()
-        forward_transport = self._cfg_str("forward_transport", "file")
-        if forward_transport not in ("file", "astrbot"):
-            logger.warning(f"{LOG_PREFIX} 合并转发链路配置无效，使用默认链路: forward_transport=file")
-            forward_transport = "file"
         if tool and send_mode == "single":
             forward_threshold = MAX_IMAGE_COUNT
         elif tool and send_mode == "forward":
@@ -336,7 +334,7 @@ class SearchMixin:
             0.0,
             25.0,
         )
-        size_limit_bytes = int(size_limit_mb * 1024 * 1024)
+        size_limit_bytes = selection.size_limit_bytes(int(size_limit_mb * 1024 * 1024))
         filter_manga = self._cfg_bool("filter_manga", True)
 
         request_state = SourceRequest()
@@ -372,9 +370,7 @@ class SearchMixin:
         deadline: float | None = selection_deadline
         failure_message = "❌ 图片源请求失败或无结果，换个标签试试"
 
-        async def deliver_images(
-            content, images, *, context: str, forward_transport: str = "file"
-        ) -> None:
+        async def deliver_images(content, images, *, context: str) -> None:
             """按实际提交阶段维护计费、去重占用和文件读取窗口。"""
             ids = {str(illust["id"]) for illust, *_ in images if illust.get("id")}
 
@@ -384,9 +380,7 @@ class SearchMixin:
                     retained_paths.update(path for _, path, *_ in images)
 
             try:
-                status = await send_once(
-                    event, content, context=context, forward_transport=forward_transport
-                )
+                status = await send_once(event, content, context=context)
             except DeliveryNotSubmitted:
                 raise
             except asyncio.CancelledError:
@@ -461,6 +455,13 @@ class SearchMixin:
                             illusts = await self._filter_blacklisted_illusts(illusts, policy)
                             if not illusts:
                                 failure_message = "😶 可用作品都被内容安全策略过滤了，换个标签后再试"
+                                continue
+                            illusts = [
+                                item for item in illusts
+                                if selection.matches_dimensions(item.get("width"), item.get("height"))
+                            ]
+                            if not illusts:
+                                failure_message = "没有符合本次方向、比例或像素要求的图片，未放宽筛选条件。"
                         except SelectionIndexError as exc:
                             logger.warning(f"{LOG_PREFIX} 发图分页索引不可用: error_type={type(exc).__name__}")
                             failure_message = "图片去重服务暂不可用，请稍后重试"
@@ -485,9 +486,13 @@ class SearchMixin:
                     continue
                 attempted_ids.add(item_id)
                 download_attempts += 1
-                failure_message = "😢 所有图片均下载失败，请稍后再试"
+                failure_message = (
+                    "本次未找到符合筛选条件的可用图片，未放宽条件。"
+                    if selection.active else "😢 所有图片均下载失败，请稍后再试"
+                )
                 idx = download_attempts
                 download_ready = False
+                path = ""
 
                 try:
                     path, actual_q, file_size = await asyncio.wait_for(
@@ -499,12 +504,18 @@ class SearchMixin:
                         ),
                         timeout=max(0, deadline - time.monotonic()),
                     )
+                    temp_paths.append(path)
+                    if not selection.matches_file(path):
+                        logger.debug(
+                            f"{LOG_PREFIX} 下载候选跳过: illust_id={illust_id} "
+                            f"download_attempt={idx}/{SEARCH_DOWNLOAD_ATTEMPTS} reason=dimensions"
+                        )
+                        continue
                     logger.debug(
                         f"{LOG_PREFIX} 发图候选下载完成: illust_id={illust_id} "
                         f"download_attempt={idx}/{SEARCH_DOWNLOAD_ATTEMPTS} size={format_log_size(file_size)} "
                         f"quality={_search_quality_label(actual_q)}"
                     )
-                    temp_paths.append(path)
                     downloaded.append((illust, path, actual_q, file_size))
                     result.downloaded_count = len(downloaded)
                     download_ready = True
@@ -521,6 +532,8 @@ class SearchMixin:
                         f"error_type={type(e).__name__}"
                     )
                 finally:
+                    if not download_ready:
+                        cleanup(path)
                     item_id = str(illust.get("id") or "")
                     if not download_ready and self.image_index is not None and item_id in pending_illust_ids:
                         try:
@@ -540,6 +553,10 @@ class SearchMixin:
             if not downloaded:
                 result.message = failure_message
                 return result
+            if tool and len(downloaded) < count:
+                result.message = (
+                    f"本次只找到 {len(downloaded)} 张可用图片（原需 {count} 张），其余已跳过；未放宽筛选条件。"
+                )
 
             # 非 OneBot 平台不支持合并转发，自动降级。
             use_forward = self._should_use_forward(
@@ -554,29 +571,35 @@ class SearchMixin:
                 # AstrBot 的 Node.uin 是字符串，且部分平台的 self_id 不是数字。
                 self_id = "0" if raw_self_id is None else str(raw_self_id)
                 nodes = Nodes([])
-                # 多图共用节点，减少协议端逐节点生成消息的次数。
-                for start in range(0, len(downloaded), FORWARD_IMAGES_PER_NODE):
-                    content = []
-                    for illust, path, _actual_q, _file_size in downloaded[
-                        start:start + FORWARD_IMAGES_PER_NODE
-                    ]:
-                        title = illust.get("title", "无标题")
-                        illust_id = illust.get("id", "?")
-                        content.extend([
-                            Plain(f"🎨 {title} (ID: {illust_id})"),
-                            Image.fromFileSystem(path),
-                        ])
-                    nodes.nodes.append(Node(uin=self_id, name="Pixiv", content=content))
-                # 缺图说明并入最后节点，不再为纯文本多建一个节点。
+                for illust, path, _actual_q, _file_size in downloaded:
+                    title = illust.get("title", "无标题")
+                    illust_id = illust.get("id", "?")
+                    content = [
+                        Plain(f"🎨 {title} (ID: {illust_id})"),
+                        Image.fromFileSystem(path),
+                    ]
+                    nodes.nodes.append(
+                        Node(
+                            uin=self_id,
+                            name="Pixiv",
+                            content=content,
+                        )
+                    )
+                # 如果有下载失败的图片，在合并消息末尾提示
                 failed_count = count - len(downloaded)
                 if failed_count > 0:
-                    nodes.nodes[-1].content.append(
-                        Plain(f"⚠️ 少 {failed_count} 张符合画质和大小限制的可用图片，已跳过")
+                    nodes.nodes.append(
+                        Node(
+                            uin=self_id,
+                            name="Pixiv",
+                            content=[
+                                Plain(
+                                    f"⚠️ 少 {failed_count} 张符合画质和筛选条件的可用图片，已跳过"
+                                )
+                            ],
+                        )
                     )
-                await deliver_images(
-                    [nodes], downloaded, context="send_mode=forward",
-                    forward_transport=forward_transport,
-                )
+                await deliver_images([nodes], downloaded, context="send_mode=forward")
             else:
                 for illust, path, actual_q, file_size in downloaded:
                     illust_id = illust.get("id", "?")
