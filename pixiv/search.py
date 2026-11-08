@@ -13,6 +13,7 @@ from .delivery import DeliveryNotSubmitted, DeliveryStatus, log_delivery_error, 
 from .downloader import cleanup, format_log_size
 from .pagination import SourceRequest, SourceResponseError, SelectionIndexError
 from .safety import ContentSafetyPolicy, STRICT_CONTENT_SAFETY_POLICY
+from .search_result import SearchResult
 
 
 LOG_PREFIX = "[GetPx]"
@@ -52,16 +53,9 @@ class SearchMixin:
     def _p_unit_cost(self) -> int:
         return self._cfg_int("p_coin_cost", 20, 0, 200)
 
-    def _p_charging_active(self) -> bool:
-        return (
-            self._p_unit_cost() > 0
-            and self._cfg_bool("checkin_enabled", True)
-            and getattr(self, "checkin_store", None) is not None
-        )
-
-    async def _p_balance_error(self, user_id: str, count: int) -> str:
+    async def _p_balance_error(self, user_id: str, count: int, *, unit_cost: int | None = None) -> str:
         """返回余额不足提示；余额充足或钱包不可用时返回空串。"""
-        cost = self._p_unit_cost()
+        cost = self._p_unit_cost() if unit_cost is None else unit_cost
         if not user_id or cost <= 0 or count <= 0:
             return ""
         try:
@@ -253,39 +247,78 @@ class SearchMixin:
         tag: str,
         count_str: str,
     ):
-        """搜索并发送图片，按配置顺序尝试图片源。"""
+        """命令展示层；图片发送、清理和结算由共享执行完成。"""
+        result = await self._execute_search(event, tag, count_str)
+        if result.message:
+            yield event.plain_result(result.message)
+
+    async def _execute_search(
+        self, event: AstrMessageEvent, tag: str, count_str: str, *,
+        tool: bool = False, result: SearchResult | None = None,
+        selection_deadline: float | None = None,
+    ) -> SearchResult:
+        """执行一次取图；Tool 与命令只在余额预检和展示上不同。"""
+        result = result if result is not None else SearchResult(1)
+        sender_id = str(event.get_sender_id() or "")
+        unit_cost = self._p_unit_cost()
+        charge_requested = unit_cost > 0 and self._cfg_bool("checkin_enabled", True)
+        wallet = getattr(self, "checkin_store", None)
+        charging = charge_requested and wallet is not None
+        forward_threshold = self._forward_threshold()
         # 频率限制
         wait = self._check_rate_limit(event.get_sender_id())
         if wait > 0:
             logger.debug(
                 f"{LOG_PREFIX} 搜索请求触发频率限制: retry_after_seconds={wait}"
             )
-            yield event.plain_result(f"⏳ 请求太频繁，请 {wait} 秒后再试")
-            return
+            result.message = f"⏳ 请求太频繁，请 {wait} 秒后再试"
+            return result
 
         # 参数解析
         max_count = self._cfg_int("max_count", 5, 1, MAX_IMAGE_COUNT)
         try:
-            count = max(1, min(int(count_str), max_count)) if count_str else 1
+            requested_count = max(1, int(count_str)) if count_str else 1
         except (TypeError, ValueError):
-            count = 1
+            requested_count = 1
+        count = min(requested_count, max_count)
 
-        # 金币预检：请求张数 × 单价，余额不足直接提醒并终止。
-        if self._p_charging_active():
-            sender_id = str(event.get_sender_id() or "")
-            balance_error = await self._p_balance_error(sender_id, count)
-            if balance_error:
-                yield event.plain_result(balance_error)
-                return
+        result.requested_count = requested_count
+        result.count = count
+        reduced = False
+        if tool and (not sender_id or (charge_requested and wallet is None)):
+            result.message = "发图服务暂不可用，本次未执行。"
+            return result
+        if charging:
+            if tool:
+                try:
+                    profile = await wallet.find_profile(sender_id)
+                    affordable = (profile.coins if profile is not None else 0) // unit_cost
+                except Exception as exc:
+                    logger.warning(f"{LOG_PREFIX} Tool 余额读取失败，请求已拒绝: error_type={type(exc).__name__}")
+                    result.message = "暂时无法确认可用余额，这次先不取图。"
+                    return result
+                if affordable <= 0:
+                    result.message = "现在的金币不够取图，签到后再来吧。"
+                    return result
+                if affordable < count:
+                    count = affordable
+                    result.count = count
+                    reduced = True
+                    result.notice = f"现在的金币只够取 {count} 张，这次先取这些。"
+            else:
+                balance_error = await self._p_balance_error(sender_id, count, unit_cost=unit_cost)
+                if balance_error:
+                    result.message = balance_error
+                    return result
 
         try:
             policy = await self._content_safety_policy(event)
             if tag and await self._blocked_query_term(tag, policy):
-                yield event.plain_result("🚫 搜索词不符合内容安全要求")
-                return
+                result.message = "🚫 搜索词不符合内容安全要求"
+                return result
         except RuntimeError:
-            yield event.plain_result("🚫 内容安全服务暂不可用，本次请求已拒绝")
-            return
+            result.message = "🚫 内容安全服务暂不可用，本次请求已拒绝"
+            return result
         timeout_sec = self._cfg_float("request_timeout", 30.0, 5.0, 120.0)
         quality = self._cfg_str("image_quality", "original")
         size_limit_mb = self._cfg_float(
@@ -306,8 +339,8 @@ class SearchMixin:
             try:
                 await self.image_index.set_retention_days(dedupe_days)
             except Exception:
-                yield event.plain_result("图片去重索引更新失败，请稍后重试")
-                return
+                result.message = "图片去重索引更新失败，请稍后重试"
+                return result
 
         pending_illust_ids: set[str] = set()
         sent_illust_ids: set[str] = set()
@@ -327,7 +360,7 @@ class SearchMixin:
         illusts: list[dict] = []
         source_key = ""
         queue: list[dict] = []
-        deadline: float | None = None
+        deadline: float | None = selection_deadline
         failure_message = "❌ 图片源请求失败或无结果，换个标签试试"
 
         async def deliver_images(content, images, *, context: str) -> None:
@@ -346,7 +379,9 @@ class SearchMixin:
             except asyncio.CancelledError:
                 # 取消发生在提交期间也可能已送达，保留占用与协议端读取窗口。
                 retain_unknown()
+                result.record_delivery(DeliveryStatus.UNKNOWN, len(images))
                 raise
+            result.record_delivery(status, len(images))
             if status is DeliveryStatus.UNKNOWN:
                 retain_unknown()
             if status in (DeliveryStatus.CONFIRMED, DeliveryStatus.ACCEPTED, DeliveryStatus.TIMED_OUT):
@@ -394,6 +429,8 @@ class SearchMixin:
                                 illusts, raw_count, source_key = await asyncio.wait_for(
                                     fetch, timeout=max(0, deadline - time.monotonic()),
                                 )
+                            if batch_attempts == 0:
+                                deadline = min(deadline, time.monotonic() + timeout_sec * max(3, count))
                             batch_attempts += 1
                             logger.info(
                                 f"{LOG_PREFIX} 图源候选批次已返回: source={_search_source_label(source_key)} "
@@ -456,6 +493,7 @@ class SearchMixin:
                     )
                     temp_paths.append(path)
                     downloaded.append((illust, path, actual_q, file_size))
+                    result.downloaded_count = len(downloaded)
                     download_ready = True
                 except asyncio.TimeoutError:
                     logger.debug(
@@ -487,11 +525,10 @@ class SearchMixin:
 
             # 统一发送（避免 yield 和 send 混用导致消息拆分）
             if not downloaded:
-                yield event.plain_result(failure_message)
-                return
+                result.message = failure_message
+                return result
 
             # 非 OneBot 平台不支持合并转发，自动降级。
-            forward_threshold = self._forward_threshold()
             use_forward = self._should_use_forward(
                 downloaded_count=len(downloaded),
                 threshold=forward_threshold,
@@ -544,53 +581,94 @@ class SearchMixin:
                         content, [(illust, path, actual_q, file_size)],
                         context=f"send_mode=single illust_id={illust_id}",
                     )
+        except asyncio.CancelledError:
+            result.interrupted = True
+            raise
         finally:
-            if self._p_charging_active() and sent_illust_ids:
-                total_cost = self._p_unit_cost() * len(sent_illust_ids)
+            cleanup_task = asyncio.create_task(self._finish_search(
+                event, result, wallet=wallet, charging=charging, unit_cost=unit_cost,
+                sender_id=sender_id, tool=tool, reduced=reduced,
+                sent_illust_ids=sent_illust_ids, temp_paths=temp_paths,
+                retained_paths=retained_paths, pending_illust_ids=pending_illust_ids,
+                unknown_illust_ids=unknown_illust_ids, image_sources=image_sources,
+            ))
+            cancelled = False
+            while True:
                 try:
-                    result = await self.checkin_store.spend_coins(
-                        user_id=str(event.get_sender_id() or ""),
+                    await asyncio.shield(cleanup_task)
+                    break
+                except asyncio.CancelledError:
+                    result.interrupted = True
+                    cancelled = True
+                    if cleanup_task.cancelled():
+                        raise
+            if cancelled:
+                raise asyncio.CancelledError
+        return result
+
+    async def _finish_search(
+        self, event, outcome, *, wallet, charging, unit_cost, sender_id, tool, reduced,
+        sent_illust_ids, temp_paths, retained_paths, pending_illust_ids,
+        unknown_illust_ids, image_sources,
+    ):
+        try:
+            if charging and sent_illust_ids:
+                total_cost = unit_cost * len(sent_illust_ids)
+                outcome.settlement = "unknown"
+                try:
+                    result = await wallet.spend_coins(
+                        user_id=sender_id,
                         cost=total_cost,
                     )
                     if not result.success:
+                        outcome.settlement = "failed"
+                        if tool:
+                            outcome.message = "图片发送已尝试，但金币结算未完成，请联系管理员核对；不要重复取图。"
                         logger.warning(
                             f"{LOG_PREFIX} /p 金币结算未完成: "
                             f"sent_count={len(sent_illust_ids)} cost={total_cost} "
                             f"result_message={result.message}"
                         )
                         try:
-                            await event.send(
-                                event.plain_result(
-                                    f"⚠️ 金币结算未完成：{result.message}"
-                                )
-                            )
+                            if not tool:
+                                await event.send(event.plain_result(f"⚠️ 金币结算未完成：{result.message}"))
                         except Exception as exc:
                             logger.warning(
                                 f"{LOG_PREFIX} 发送金币结算警告失败: "
                                 f"error_type={type(exc).__name__}"
                             )
                     else:
+                        outcome.settlement = "completed"
+                        # spend_coins 返回事务内的扣款后余额；反推同事务的扣款前余额。
+                        after = result.profile.coins // unit_cost
+                        before = (result.profile.coins + total_cost) // unit_cost
+                        if tool and not reduced and before > 2 and after <= 2:
+                            outcome.notice = "剩下的金币快不够取图了，记得签到补充一下。"
                         logger.info(
                             f"{LOG_PREFIX} /p 金币结算完成: "
                             f"sent_count={len(sent_illust_ids)} cost={total_cost}"
                         )
                         try:
-                            await event.send(
-                                event.plain_result(
-                                    f"💰 本次发图消耗 {total_cost} 金币"
-                                    f"（{len(sent_illust_ids)} 张），余额 {result.profile.coins}。"
+                            if not tool:
+                                await event.send(
+                                    event.plain_result(
+                                        f"💰 本次发图消耗 {total_cost} 金币"
+                                        f"（{len(sent_illust_ids)} 张），余额 {result.profile.coins}。"
+                                    )
                                 )
-                            )
                         except Exception as exc:
                             logger.warning(
                                 f"{LOG_PREFIX} 发送金币结算提醒失败: "
                                 f"error_type={type(exc).__name__}"
                             )
                 except Exception as exc:
+                    if tool:
+                        outcome.message = "金币结算状态暂时无法确认，请联系管理员核对；不要重复取图。"
                     logger.warning(
                         f"{LOG_PREFIX} /p 金币结算调用异常，扣费状态待核对: "
                         f"error_type={type(exc).__name__}"
                     )
+        finally:
             for p in temp_paths:
                 if p in retained_paths:
                     self.downloader.defer_cleanup(p)

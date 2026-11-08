@@ -33,6 +33,7 @@ def main() -> int:
             "group_safety.py",
             "checkin",
             "pixiv",
+            "tools",
             "plugin_api",
             "scripts/ci",
             "tests",

@@ -72,12 +72,6 @@ def test_p_unit_cost_defaults_to_20_and_zero_disables() -> None:
     assert mixin._p_unit_cost() == 20
     mixin.config["p_coin_cost"] = 0
     assert mixin._p_unit_cost() == 0
-    assert mixin._p_charging_active() is False
-
-
-def test_p_charging_active_requires_checkin_store() -> None:
-    mixin = _MinSearch()
-    assert mixin._p_charging_active() is False  # checkin_store 为 None
 
 
 @pytest.mark.asyncio

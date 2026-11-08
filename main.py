@@ -45,6 +45,7 @@ from astrbot.core.star.filter.command import GreedyStr
 from astrbot.core.star.star_tools import StarTools
 from .checkin import CheckinStore, UnversionedCheckinDatabaseError
 from .group_safety import SessionSafetyService
+from .tools.images import ImageToolService
 from .checkin.application import CheckinApplicationMixin
 from .checkin.artwork import CheckinArtworkMixin
 from .checkin.cache import CheckinCardCache
@@ -130,6 +131,7 @@ class GetPxPlugin(
         self.holiday_calendar: HolidayCalendar | None = None
         self._holiday_refresh_task: asyncio.Task | None = None
         self._termination_task: asyncio.Task[None] | None = None
+        self.image_tools: ImageToolService | None = None
         self._checkin_flow_locks: weakref.WeakValueDictionary[str, asyncio.Lock] = (
             weakref.WeakValueDictionary()
         )
@@ -197,6 +199,8 @@ class GetPxPlugin(
             self._refresh_holiday_calendar()
         )
         self.plugin_web_api.register()
+        self.image_tools = ImageToolService(self)
+        self.image_tools.register()
         logger.info(f"{LOG_PREFIX} 插件已加载: version={PLUGIN_VERSION}")
 
     async def _refresh_holiday_calendar(self) -> None:
@@ -286,6 +290,10 @@ class GetPxPlugin(
 
     async def _terminate_resources(self) -> None:
         """执行一次插件资源清理。"""
+        image_tools = getattr(self, "image_tools", None)
+        if image_tools is not None:
+            await image_tools.close()
+            self.image_tools = None
         plugin_web_api = getattr(self, "plugin_web_api", None)
         if plugin_web_api is not None:
             plugin_web_api.unregister()

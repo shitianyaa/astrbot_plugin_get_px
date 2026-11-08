@@ -14,6 +14,7 @@
   - `main.py`: 插件生命周期、指令装饰器、配置读取和领域对象装配
   - `checkin/`: 签到业务（数据模型、规则、存储、商店、卡片渲染）
   - `pixiv/`: 作品获取（搜索、下载、安全过滤、多日去重索引）
+  - `tools/` & `skills/`: 原生模型取图入口、请求内幂等、随包使用说明
   - `plugin_api/` & `pages/`: Plugin Pages 后端 API 与前端管理界面（原生 HTML/CSS/JS）
   - `tests/` & `docs/`: 自动化测试、项目文档
   - `Progress/`: 本地开发进度记录（仅本地使用，不入库）
@@ -39,6 +40,7 @@
 - **配置读取**: 统一通过 `main.py` 封装方法读取，严禁散落调用 `self.context.get_config(...)`；schema 仅保留六个正式分组，配置升级基线为已完成迁移的 v3.8.0，兼容边界见 `docs/project/configuration.md`。
 - **数据库迁移**: SQLite schema 变更必须在 `checkin/schema.py` 提供版本迁移与备份机制。
 - **安全规则**: 全局词、单一匹配模式、全局作品 ID 与完整 UMO 命名分组统一存配置；无内置词，分组 R18 默认关闭。旧键只作备份桥接，核对归档后停用；不恢复旧策略，不回退旧库作有效规则。
+- **模型取图**: 复用共享选图／发送／结算；只当前会话、正常账单不外发、实际状态文本返回。同事件只执行一次，不补发未知送达；停用先取消并等待在途结算／清理再关闭资源。Skill 不是安全边界。
 - **主题自包含**: 签到卡主题生成必须内联 CSS/base64 字体，严禁外部网络 URL。
 - **日志规范**: logger 统一通过 `from astrbot.api import logger` 导入，禁止使用 Python 内置 `logging` 或以其作为导入失败的回退；独立测试如需替代日志器，在测试侧注入 mock。日志使用“中文结果描述 + `snake_case=value` 字段”，区分调用返回、已受理、送达未知和已确认，不将待核对状态写成成功；禁止直接拼接凭据、完整响应或任意异常原文，禁止吞掉异常。
 
@@ -56,7 +58,7 @@
 
 ```bash
 python -m json.tool _conf_schema.json
-python -m compileall -q main.py checkin pixiv plugin_api tests
+python -m compileall -q main.py group_safety.py checkin pixiv tools plugin_api tests
 node --check pages/pluginCenter/app.js
 node --check pages/pluginCenter/safety.mjs
 node --test tests/js/safety.test.mjs

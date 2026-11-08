@@ -26,7 +26,8 @@ checkin/
 │  ├─ artwork.py         卡片渲染与背景作品选择
 │  └─ holiday.py         联网节假日数据更新与查询
 pixiv/
-│  ├─ search.py          可选 Lolicon/Pixiv 优先级与双向请求回退流程
+│  ├─ search.py          命令／Tool 共用取图、发送、固定价格结算与清理
+│  ├─ search_result.py   执行事实摘要，不携带图片路径／URL／正常账单
 │  ├─ delivery.py        消息发送错误处理
 │  ├─ filters.py         普通分级、漫画和安全策略过滤
 │  ├─ safety.py          有效规则快照与关键词匹配
@@ -37,11 +38,25 @@ pixiv/
 │  ├─ index.py           多自然日去重索引、黑名单辅助元信息与旧词归档读取
 plugin_api/
 └─ api.py                Plugin Pages 后端 API
+tools/
+└─ images.py             原生 Tool、同事件幂等与在途取消生命周期
+skills/get-px-image/
+└─ SKILL.md              随包取图使用说明
 ```
 
 根目录保留会话策略服务 `group_safety.py`；签到、取图和 Web API 业务分别位于对应包中。根 `__init__.py` 只有模块说明，不注册旧包路径别名；新代码和测试直接导入真实模块。
 
 模块按职责划分，不按行数强制拆分。`__init__.py` 和组合入口可以很小；普通业务模块只有在具备独立职责和测试边界时才单独存在。
+
+## 原生模型取图
+
+初始化成功后 `ImageToolService` 注册 `get_px_image`／`get_px_context`，显式将 `handler_module_path` 绑定实际插件入口，以兼容旧框架模块解析；终止时先停新请求，取消并等待在途工具，再清理客户端／索引。仅按对象身份移除本实例注册的工具，不删除同名外部对象。
+
+`SearchMixin._execute_search()` 返回 `SearchResult`，`_handle_search()` 保留命令 yield 展示。两个入口复用同一选图、发送、结算和 finally 清理；收费开关、单价和转发阈值在执行开始固定。Tool 余额使用 `find_profile()`，未知用户按零余额不建档，故障拒绝；`/p` 既有预检故障跳过行为不扩改。成功结算低余额提醒用 `spend_coins()` 返回的事务后余额与扣款额反推同事务前余额，不用预检值判断。
+
+Tool 只回文本事实，图片由插件发送，不返回图片内容或路径。`event` 内只记录本次执行结果和在途状态，重复调用不再消费；追加取图需新事件，不为框架合并 follow-up 猜测授权。选图截止时间受实际 Tool 超时约束，余留一半（最多30秒）给发送/结算/清理；不后台化、不改全局超时。取消继续传播，已开始的结算/清理通过持有并等待的任务完成，保持回执、占用和文件保护期。
+
+随包 Skill 原位发现，只有说明，无脚本或配置复制。安全仍由固定 `ContentSafetyPolicy` 执行，Skill 不是权限边界。最低插件版本声明不变，随包 Skill 能力需框架支持（本地核对 v4.24.1 起），真实旧版端到端仍未验证。
 
 ## 签到指令入口
 

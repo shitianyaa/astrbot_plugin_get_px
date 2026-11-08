@@ -14,7 +14,7 @@
 
 | 场景 | 工作目录 | 命令 |
 | --- | --- | --- |
-| Python 语法检查 | 插件目录 | `python -m compileall -q main.py checkin pixiv plugin_api scripts/ci tests` |
+| Python 语法检查 | 插件目录 | `python -m compileall -q main.py group_safety.py checkin pixiv tools plugin_api scripts/ci tests` |
 | JSON schema 检查 | 插件目录 | `python -m json.tool _conf_schema.json` |
 | JavaScript 语法检查 | 插件目录 | `node --check pages/pluginCenter/app.js` |
 | 管理页状态测试 | 插件目录 | `node --test tests/js/safety.test.mjs` |
@@ -25,7 +25,7 @@
 > [!TIP]
 > 这些是测试与检查命令，不是插件的独立运行命令。实际集成验证入口见 [`setup.md`](./setup.md#本地集成验证)。
 
-本地全量测试显式指定 `tests`，避免收集被 Git 忽略的 `REFERENCE/` 等参考工程。当前质量门禁脚本仍调用无目录参数的 pytest；本地存在嵌套参考工程时应使用上表命令，不能把参考插件的导入错误当成本插件测试失败。
+本地全量测试显式指定 `tests`，避免收集被 Git 忽略的 `REFERENCE/` 等参考工程。质量门禁脚本也显式指定 `tests`，不能把参考插件的导入错误当成本插件测试失败。
 
 ## PR 快速 CI
 
@@ -39,7 +39,7 @@ python scripts/ci/check_plugin_quality_gate.py
 
 ## PR 生命周期 CI
 
-PR 生命周期 CI（`AstrBot Plugin Lifecycle`，`.github/workflows/plugin-lifecycle.yml`）不运行全量 pytest，也不承担基础静态检查；它只安装官方 AstrBot 和插件依赖，然后通过官方公开 `PluginManager.load()`、`reload()` 和 `uninstall_plugin()` 走完 `load → initialize → terminate → unbind` 路径。harness 只观察本轮新增的 handler、Web API 和后台任务并确认最终清理，不规定插件必须注册哪一类资源。
+PR 生命周期 CI（`AstrBot Plugin Lifecycle`，`.github/workflows/plugin-lifecycle.yml`）不运行全量 pytest，也不承担基础静态检查；它只安装官方 AstrBot 和插件依赖，然后通过官方公开 `PluginManager.load()`、`reload()` 和 `uninstall_plugin()` 走完 `load → initialize → terminate → unbind` 路径。harness 只观察本轮新增的 handler、Web API、原生工具和后台任务并确认最终清理，不规定插件必须注册哪一类资源。
 
 本地等价生命周期检查需要先准备 AstrBot 源码目录：
 
@@ -76,6 +76,12 @@ python scripts/ci/check_plugin_lifecycle.py \
 | SQLite schema | 数据丢失或损坏 | 提供迁移逻辑和回滚备份。 |
 | 内容安全过滤 | 误杀或漏过 | 补充测试用例和日志观测。 |
 | Lolicon 反代 | 下载失败或超时 | 覆盖全部失败、部分失败场景。 |
+
+## 原生工具验证
+
+`python -m pytest -q tests/test_image_tools.py tests/test_p_coin_cost.py` 验证共享消费边界，不锁 Skill 台词。真实本机执行器测试含工具超时、提交中取消、重复取消时等待事务结算；网络与 QQ 消息发送在测试侧替代，不能宣称真实图片送达。
+
+上线前另验证当前人格／会话的工具允许列表、插件停用／重载、Skill 发现与读取、模型一次调用完整数量、正常不报账单、余额缩减及未知送达不重试。随包 Skill 本地核对 v4.24.1 起支持；当前 `>=4.16` 只保留插件基础兼容声明，真实旧版本整链尚未测试。框架工具结果预览或自定义人格提示可能展示数值，插件不修改这些全局设置。
 
 ## T2I 回归
 
@@ -115,6 +121,7 @@ python scripts/ci/check_plugin_lifecycle.py \
 - `test_downloader.py` - 图片下载、大小上限、固定画质与背景回退
 - `test_image_index.py` - 去重索引、并发占用和黑名单
 - `test_filtering.py` - 内容安全过滤
+- `test_image_tools.py` - 原生 Tool 严格参数、完整 UMO、只读不建档、余额缩减／故障拒绝、静默结算、同事件重复保护、取消与卸载；真实本机框架执行器验证仅文本返回且不重发
 
 ### API 测试
 

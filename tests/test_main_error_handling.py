@@ -835,7 +835,7 @@ class MainErrorHandlingTest(unittest.IsolatedAsyncioTestCase):
         plugin.downloader = SimpleNamespace(temp_dir=None, resume_cleanup=AsyncMock())
         order = []
         plugin.config = {}
-        plugin.context = SimpleNamespace()
+        plugin.context = SimpleNamespace(add_llm_tools=Mock())
         plugin._cleanup_retired_transport_config = Mock()
         plugin._init_client = Mock()
         plugin._cfg_bool = Mock(return_value=False)
