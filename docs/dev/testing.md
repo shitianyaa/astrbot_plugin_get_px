@@ -1,5 +1,15 @@
 # 测试与回归检查
 
+## 测试原则
+
+只保留值得长期维护的功能与边界测试；短期诊断、历史修复过程和文案快照不进入长期测试集。测试按领域组织，优先复用现有场景覆盖行为、数据安全、单位切换和异常分类。
+
+- UI布局、CSS取值、类名、固定帮助图高度与中文提示由人工／浏览器检查，不通过源码字符串快照锁定。
+- 前端长期测试保留打包资源与相对桥接路径检查，实际草稿、列表编辑、作用域隔离和批量请求由Node状态测试验证。状态测试不代替页面实际接线与交互检查。
+- 模板保留自包含、资源可解码性和渲染画布边界，不绑定字体名字或页面区域类名。
+- 当前仍支持的旧数据库迁移、备份及回滚是长期数据安全边界，不能因为名称包含旧版本就删除。
+- 共用场景能覆盖同一功能时合并，独立调用路径、失败时点与安全边界不因相似命名删掉。
+
 ## 基础命令
 
 | 场景 | 工作目录 | 命令 |
@@ -7,6 +17,7 @@
 | Python 语法检查 | 插件目录 | `python -m compileall -q main.py checkin pixiv plugin_api scripts/ci tests` |
 | JSON schema 检查 | 插件目录 | `python -m json.tool _conf_schema.json` |
 | JavaScript 语法检查 | 插件目录 | `node --check pages/pluginCenter/app.js` |
+| 管理页状态测试 | 插件目录 | `node --test tests/js/policy-state.test.mjs` |
 | pytest 全部测试 | 插件目录 | `python -m pytest -v tests` |
 | pytest 快速测试 | 插件目录 | `python -m pytest -q tests` |
 | pytest 特定模块 | 插件目录 | `python -m pytest tests/test_checkin_*.py -v` |
@@ -144,7 +155,8 @@ python -m pytest tests/test_command_registration.py -v
 
 ```bash
 node --check pages/pluginCenter/app.js
-# 手工验证：打开 Plugin Pages 管理中心
+node --test tests/js/policy-state.test.mjs
+# 手工验证：页面加载、导航、草稿确认、读写、重置与移动端
 ```
 
 ## 快速全面检查
@@ -248,7 +260,7 @@ python -m pytest -q tests/test_checkin_cache.py tests/test_checkin_calendar.py t
 
 ## 发布信息回归
 
-运行 `python -m pytest -q tests/test_release_metadata.py`，核对 metadata、运行时常量、README 徽章、CHANGELOG 首个正式版本及日期一致，更新日志链接指向对应版本，用户和项目文档没有分支临时措辞。版本段前插入“待发布”标题会导致测试失败，不再跳过该标题继续匹配历史版本。发布触发与风险见 [发布前检查](contributing.md#发布前检查)。
+运行 `python -m pytest -q tests/test_release_metadata.py`，核对 metadata、运行时常量、README 徽章、CHANGELOG 首个正式版本及日期一致，更新日志链接指向对应版本，文档措辞由审查核对，不保留禁止词快照。首个版本段仍要求正式版本，避免误读取历史版本。发布触发与风险见 [发布前检查](contributing.md#发布前检查)。
 
 ## 配置升级回归
 
@@ -266,29 +278,20 @@ python -m pytest -q tests/test_checkin_cache.py tests/test_checkin_calendar.py t
 
 ### 双图源补选与分页
 
-运行 `python -m pytest -q tests/test_image_selection.py tests/test_pixiv_client.py tests/test_lolicon.py tests/test_checkin_background_selection.py tests/test_p_coin_cost.py tests/test_image_index.py`。覆盖首批全漫画／安全过滤／已用后的补取、服务故障停止、合法空列表与畸形响应、官方 continuation 主机／路径／参数校验、推荐 offset=0 和收藏游标、空页续取及另一源回退、分页循环拒绝、Lolicon 不传 offset／不写游标、最后一批耗尽后保存真实位置，以及取消时等待 SQLite 占用完成后释放。使用 SDK／HTTP 测试替身和临时 SQLite，不访问真实图源或 QQ。
+运行 `python -m pytest -q tests/test_image_selection.py tests/test_pixiv_pagination.py tests/test_pixiv_client.py tests/test_lolicon.py tests/test_checkin_background_selection.py tests/test_p_coin_cost.py tests/test_image_index.py`。测试使用SDK／HTTP替身与临时SQLite，不访问真实图源或QQ。
 
-`tests/test_pagination_review_fixes.py` 另覆盖推荐已浏览／书签列表聚合、SDK 参数编码与回放、含列表的循环检测、重复／缺号／混合索引等非法列表拒绝。索引测试使用真实 `set_page_offset()` 验证精确替换、scope／source 隔离、重开持久化、TTL 与重置，不再按结果数推算位置。
+- `test_image_selection.py`：过滤后补取、服务故障停止、空页跨源回退与续页、循环终止、末批位置保存，以及普通发图／签到占用写入途中取消后的清理。
+- `test_pixiv_pagination.py`：推荐正数及0／-1边界、列表参数与SDK编码回放；非可信地址、非法数值／列表、畸形响应拒绝；空页、多页与缺失可选信息；异常信息不泄露。
+- 既有客户端、Lolicon、签到背景测试：认证搜索、图源响应归一化、标签竖图路由、本地0.60–0.90精筛与背景占用失败。
+- 既有索引测试：精确写入／覆盖／清零、scope／source隔离、重开持久化和TTL过期。
 
-Pixiv 标签签到搜索另验证通过已有认证请求入口发送竖图粗筛，并保留本地 0.60–0.90 精筛；新增签到入口到客户端的显式 `portrait=True` 接线测试，改变 Lolicon 比例字符串不影响 Pixiv 粗筛，其他调用方默认关闭。推荐和日历不套用该搜索参数。跨请求推荐 continuation 仍只有数字 offset 持久化，不把请求内测试作为完整断点续读的证据。
+跨请求推荐continuation仍只有数字offset持久化，请求内测试不代表完整断点续读。
 
-#### 日志契约
+### 日志安全与状态
 
-运行 `python -m pytest -q tests/test_logging_contract.py tests/test_group_safety_config.py tests/test_checkin_omnidraw_bridge.py tests/test_delivery.py`。AST检查所有运行时模块只从AstrBot导入logger，不允许logging回退；覆盖空回执只报告调用返回／已受理、私聊策略故障使用会话表述、访问触发清理不声称定时任务，以及私有接口错误只暴露固定成员名，不回显异常原文。日志文案调整不改变送达、结算、过滤或退款行为。
+错误信息脱敏、空回执状态及安全故障降级随对应的分页、发送、安全过滤和生图桥接领域测试验证，不单独维护中文措辞或诊断类别快照。logger导入约定通过代码审查核对。大小格式的1MiB单位边界在下载器测试中验证；API和大小限制仍按字节计算。
 
-#### 推荐边界兼容与相邻响应校验
-
-运行 `python -m pytest -q tests/test_source_response_compatibility.py tests/test_continuation_diagnostics.py tests/test_pagination_review_fixes.py`。使用线上报告的 `min=0`／`max=-1` 合成样本，验证解析、SDK原样编码、请求内续取和重复位置终止；保留正数推荐游标回归。offset负数、min负数、max小于-1或其他负号形式、非整数与非正作品ID列表仍拒绝。
-
-相邻校验另覆盖合法空页、没有offset但含推荐边界的空页、多页作品、空meta_single_page、翻译标签为null、缺失所选画质、三类有效分级及Lolicon页码0／空标签／未知AI标识；有效响应交给原安全策略与下载换图处理，不因非必需内容缺失拒绝整批。缺失分级、非法作品ID和错误容器仍拒绝。只改变已有证据的推荐游标边界，不猜测未知参数或其他负数哨兵。
-
-#### 续页拒绝诊断
-
-运行 `python -m pytest -q tests/test_continuation_diagnostics.py`。覆盖地址类型／语法、协议、主机、路径、fragment、query语法、未知参数、重复标量、数字／布尔／静态值、列表格式／数值／索引和空参数的拒绝分类，验证日志不泄露地址、用户信息、搜索词、未知参数名或参数值，并维持原两源回退行为。
-
-`reason=invalid_continuation` 不变；`continuation_detail` 给出固定类别，`continuation_field` 仅输出已知字段名（列表统一为 `viewed`／`bookmark_illust_ids`），未知字段为 `unknown`，无相关字段为 `none`。这些字段只解释为什么拒绝，不放宽允许范围，也不记录完整 `next_url`。
-
-线上定位时先确认插件已加载对应代码并重载，再提供带这两个新增字段的单条日志。2026-11-08线上报告的通用拒绝码未能在本机复现：随后通过10808代理登录一次、取3批推荐（72／65／68条），含72／100／100项viewed均由提交 `19e541f` 解析成功。此次有限样本不能证明线上问题消失；不根据未复现结果调整白名单。
+日志中的`raw_candidate_count`表示过滤前作品数，“下载尝试”表示作品下载次数，而不是本批大小。续页诊断字段仅输出固定类别与已知字段名，不记录完整地址、未知参数名和参数值。
 
 #### 真实图源验证记录（2026-11-07）
 

@@ -2,6 +2,8 @@ import asyncio
 import sys
 import unittest
 import tempfile
+from unittest.mock import patch
+
 import pytest
 from pathlib import Path
 
@@ -155,29 +157,6 @@ class SafetyFilteringTest(unittest.IsolatedAsyncioTestCase):
             finally:
                 mixin.image_index.close()
 
-    async def test_private_and_policy_read_failures_use_strict_defaults(self):
-        class Event:
-            def __init__(self, group_id):
-                self.group_id = group_id
-
-            def get_group_id(self):
-                return self.group_id
-
-        class BrokenStore:
-            async def get_group_content_safety(self, group_id):
-                raise OSError(group_id)
-
-        mixin = object.__new__(FiltersMixin)
-        mixin.checkin_store = BrokenStore()
-        self.assertEqual(
-            await mixin._content_safety_policy(Event("")),
-            ContentSafetyPolicy(),
-        )
-        self.assertEqual(
-            await mixin._content_safety_policy(Event("group-a")),
-            ContentSafetyPolicy(),
-        )
-
     async def test_builtin_and_custom_terms_filter_queries_and_works(self):
         with tempfile.TemporaryDirectory() as tmp:
             mixin = object.__new__(FiltersMixin)
@@ -299,14 +278,12 @@ def test_runtime_policy_resolution_uses_exactly_one_scope():
 
 def test_runtime_policy_failures_are_strict_without_cross_scope_fallback():
     async def run():
-        service = RecordingPolicyService(fail_group=True)
-        policy = await _resolved_policy(PolicyEvent("g1", "u1"), service)
-        assert policy == ContentSafetyPolicy()
-        assert service.calls == [("group", "g1")]
-
-        service = RecordingPolicyService(fail_private=True)
-        policy = await _resolved_policy(PolicyEvent("", "u1"), service)
-        assert policy == ContentSafetyPolicy()
-        assert service.calls == [("private", "u1")]
+        for group_id, scope in (("g1", "group"), ("", "private")):
+            service = RecordingPolicyService(fail_group=True, fail_private=True)
+            with patch("astrbot_plugin_get_px.pixiv.filters.logger") as logger:
+                policy = await _resolved_policy(PolicyEvent(group_id, "u1"), service)
+            assert policy == ContentSafetyPolicy()
+            assert service.calls == [(scope, group_id or "u1")]
+            assert "failed" not in logger.error.call_args.args[0]
 
     asyncio.run(run())

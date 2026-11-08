@@ -244,32 +244,14 @@ class ImageIndexStoreTest(unittest.IsolatedAsyncioTestCase):
 
     # ── page-cursor tests ──────────────────────────────────────────
 
-    async def test_page_offset_starts_at_zero(self):
+    async def test_page_offset_write_replace_and_clear(self):
         with tempfile.TemporaryDirectory() as tmp:
             store = FrozenImageIndexStore(tmp)
             try:
-                offset = await store.get_page_offset("group:1", "search:blue_archive")
-                self.assertEqual(offset, 0)
-            finally:
-                store.close()
-
-    async def test_set_page_offset_preserves_exact_upstream_position(self):
-        with tempfile.TemporaryDirectory() as tmp:
-            store = FrozenImageIndexStore(tmp)
-            try:
-                await store.set_page_offset("group:1", "search:blue_archive", 7)
-                offset = await store.get_page_offset("group:1", "search:blue_archive")
-                self.assertEqual(offset, 7)
-            finally:
-                store.close()
-
-    async def test_set_page_offset_replaces_instead_of_accumulating(self):
-        with tempfile.TemporaryDirectory() as tmp:
-            store = FrozenImageIndexStore(tmp)
-            try:
-                await store.set_page_offset("group:1", "search:blue_archive", 30)
-                await store.set_page_offset("group:1", "search:blue_archive", 45)
-                self.assertEqual(await store.get_page_offset("group:1", "search:blue_archive"), 45)
+                self.assertEqual(await store.get_page_offset("group:1", "search:tag"), 0)
+                for offset in (7, 45, 0):
+                    await store.set_page_offset("group:1", "search:tag", offset)
+                    self.assertEqual(await store.get_page_offset("group:1", "search:tag"), offset)
             finally:
                 store.close()
 
@@ -328,31 +310,6 @@ class ImageIndexStoreTest(unittest.IsolatedAsyncioTestCase):
 
                 # 现在查询应该返回 0（TTL 过期）
                 offset = await store.get_page_offset("group:1", "search:blue_archive")
-                self.assertEqual(offset, 0)
-            finally:
-                store.close()
-
-    async def test_page_offset_ttl_valid(self):
-        """未过期游标应正常返回。"""
-        with tempfile.TemporaryDirectory() as tmp:
-            store = FrozenImageIndexStore(tmp)
-            try:
-                await store.set_page_offset("group:1", "search:blue_archive", 30)
-                # 写入后时间戳处于 TTL 内。
-                offset = await store.get_page_offset("group:1", "search:blue_archive")
-                self.assertEqual(offset, 30)
-            finally:
-                store.close()
-
-    async def test_page_offset_clears_after_reset(self):
-        """重置后再次查询应为 0。"""
-        with tempfile.TemporaryDirectory() as tmp:
-            store = FrozenImageIndexStore(tmp)
-            try:
-                await store.set_page_offset("group:1", "search:tag", 30)
-                await store.set_page_offset("group:1", "search:tag", 0)
-                # 再次查询确认
-                offset = await store.get_page_offset("group:1", "search:tag")
                 self.assertEqual(offset, 0)
             finally:
                 store.close()

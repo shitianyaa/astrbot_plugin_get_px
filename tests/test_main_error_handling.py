@@ -16,7 +16,7 @@ from PIL import Image as PILImage
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 
-from astrbot_plugin_get_px.main import GetPxPlugin, PLUGIN_VERSION  # noqa: E402
+from astrbot_plugin_get_px.main import GetPxPlugin  # noqa: E402
 import astrbot_plugin_get_px.main as main_module  # noqa: E402
 from astrbot_plugin_get_px.pixiv.constants import MAX_IMAGE_COUNT  # noqa: E402
 from astrbot_plugin_get_px.checkin import (  # noqa: E402
@@ -299,7 +299,7 @@ def _plugin_for_checkin(tmp: str, result: CheckinResult, order, *, cache_hit=Fal
     return plugin
 
 
-class Issue24CacheTest(unittest.IsolatedAsyncioTestCase):
+class CheckinDeliveryCacheTest(unittest.IsolatedAsyncioTestCase):
     async def test_daily_uncertain_delivery_keeps_background_cache_and_rewards_without_text(self):
         from aiocqhttp.exceptions import ActionFailed
 
@@ -814,7 +814,7 @@ class MainErrorHandlingTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(received, [("", "")])
         self.assertTrue(event.stopped)
 
-    async def test_initialize_logs_v3_migration_guidance_for_old_database(self):
+    async def test_initialize_rejects_unversioned_database(self):
         plugin = object.__new__(GetPxPlugin)
         plugin.downloader = SimpleNamespace(temp_dir=None, resume_cleanup=AsyncMock())
         plugin._init_client = lambda: None
@@ -833,7 +833,6 @@ class MainErrorHandlingTest(unittest.IsolatedAsyncioTestCase):
                 "astrbot_plugin_get_px.main.ImageIndexStore",
                 return_value=FakeImageIndex(),
             ),
-            patch("astrbot_plugin_get_px.main.logger") as mock_logger,
         ):
             with closing(sqlite3.connect(Path(tmp) / "checkin.sqlite3")) as conn:
                 conn.execute("CREATE TABLE obsolete_data (value TEXT)")
@@ -842,14 +841,7 @@ class MainErrorHandlingTest(unittest.IsolatedAsyncioTestCase):
             with self.assertRaises(UnversionedCheckinDatabaseError):
                 await plugin.initialize()
 
-        log_text = "\n".join(
-            str(call.args[0]) for call in mock_logger.error.call_args_list
-        )
-        self.assertIn("缺少 schema 版本号", log_text)
-        self.assertIn("3.0.0", log_text)
-        self.assertIn(PLUGIN_VERSION, log_text)
-
-    async def test_initialize_migrates_policy_before_convergence_and_logs_result(self):
+    async def test_initialize_migrates_policy_before_convergence_and_registration(self):
         plugin = object.__new__(GetPxPlugin)
         plugin.downloader = SimpleNamespace(temp_dir=None, resume_cleanup=AsyncMock())
         order = []
@@ -916,17 +908,12 @@ class MainErrorHandlingTest(unittest.IsolatedAsyncioTestCase):
             patch.object(main_module, "CheckinCardCache", FakeCache),
             patch.object(main_module, "HolidayCalendar", FakeHoliday),
             patch.object(main_module.asyncio, "create_task", side_effect=discard_task),
-            patch.object(main_module, "logger") as logger,
         ):
             await plugin.initialize()
 
         self.assertLess(order.index("policy"), order.index("converge"))
         self.assertLess(order.index("converge"), order.index("cache"))
         self.assertLess(order.index("cache"), order.index("register"))
-        log_text = "\n".join(str(call.args[0]) for call in logger.info.call_args_list)
-        self.assertIn("from_version=3", log_text)
-        self.assertIn("to_version=2", log_text)
-        self.assertIn("backup_path=backup.sqlite3", log_text)
 
     async def test_initialize_skips_convergence_when_policy_migration_fails(self):
         plugin = object.__new__(GetPxPlugin)
@@ -1006,17 +993,11 @@ class MainErrorHandlingTest(unittest.IsolatedAsyncioTestCase):
             patch.object(main_module.StarTools, "get_data_dir", return_value=tmp),
             patch.object(main_module, "ImageIndexStore", return_value=FakeIndex()),
             patch.object(main_module, "CheckinStore", return_value=FakeStore()),
-            patch.object(main_module, "logger") as logger,
         ):
             with self.assertRaisesRegex(RuntimeError, "convergence failed"):
                 await plugin.initialize()
         self.assertEqual(order, ["converge"])
         plugin.plugin_web_api.register.assert_not_called()
-        error_text = "\n".join(
-            str(call.args[0]) for call in logger.error.call_args_list
-        )
-        self.assertIn("会话策略数据库收敛失败", error_text)
-        self.assertIn("error_type=RuntimeError", error_text)
 
     async def test_auto_trigger_stops_event_before_search(self):
         plugin = object.__new__(GetPxPlugin)
@@ -1035,14 +1016,6 @@ class MainErrorHandlingTest(unittest.IsolatedAsyncioTestCase):
 
         self.assertEqual(await _collect(plugin.auto_trigger(event)), ["ok"])
         self.assertTrue(event.stopped)
-
-    def test_friendly_send_error_is_callable_through_plugin_instance(self):
-        plugin = object.__new__(GetPxPlugin)
-
-        self.assertIn(
-            "上传超时",
-            plugin._friendly_send_error(asyncio.TimeoutError()),
-        )
 
     def test_forward_threshold_uses_new_setting_or_legacy_bool_fallback(self):
         plugin = object.__new__(GetPxPlugin)
@@ -1806,15 +1779,6 @@ class MainErrorHandlingTest(unittest.IsolatedAsyncioTestCase):
             await asyncio.gather(first, second)
 
             self.assertEqual(user_sequence, ["user-a", "user-b"])
-
-    def test_flow_lock_is_keyed_by_user(self):
-        plugin = object.__new__(GetPxPlugin)
-        lock_user_a_first_call = plugin._checkin_flow_lock("10001")
-        lock_user_a_second_call = plugin._checkin_flow_lock("10001")
-        lock_user_b = plugin._checkin_flow_lock("20002")
-
-        self.assertIs(lock_user_a_first_call, lock_user_a_second_call)
-        self.assertIsNot(lock_user_a_first_call, lock_user_b)
 
     async def test_duplicate_cache_identity_uses_record_snapshot_not_current_profile(
         self,

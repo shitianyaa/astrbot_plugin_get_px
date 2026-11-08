@@ -13,7 +13,7 @@ from quart import jsonify, request, send_file
 
 try:
     from ..checkin import load_checkin_snapshot_json
-    from ..pixiv.downloader import cleanup, pick_image_url_exact
+    from ..pixiv.downloader import cleanup, format_log_size, pick_image_url_exact
     from ..pixiv.safety import (
         BUILTIN_SAFETY_TERMS,
         illustration_texts,
@@ -25,7 +25,7 @@ try:
 except ImportError:
     # Direct imports used by the test suite.
     from checkin import load_checkin_snapshot_json
-    from pixiv.downloader import cleanup, pick_image_url_exact
+    from pixiv.downloader import cleanup, format_log_size, pick_image_url_exact
     from pixiv.safety import (
         BUILTIN_SAFETY_TERMS,
         illustration_texts,
@@ -739,7 +739,7 @@ class PluginWebApi:
             raw = await self.plugin._read_uploaded_file_bytes(upload)
             logger.info(
                 f"{self.log_prefix} 签到 JSON 备份请求已接收: "
-                f"size_bytes={len(raw)}"
+                f"size={format_log_size(len(raw))}"
             )
             snapshot = load_checkin_snapshot_json(raw)
             rollback_path, result = (

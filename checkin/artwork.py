@@ -72,11 +72,11 @@ _CALENDAR_BG_ASPECT_PARAM = "gt1.7lt1.8"
 try:
     from ..pixiv.index import ordered_by_unused
     from ..pixiv.pagination import SourceRequest, SelectionIndexError
-    from ..pixiv.downloader import cleanup
+    from ..pixiv.downloader import cleanup, format_log_size
 except ImportError:  # Direct imports used by the test suite.
     from pixiv.index import ordered_by_unused
     from pixiv.pagination import SourceRequest, SelectionIndexError
-    from pixiv.downloader import cleanup
+    from pixiv.downloader import cleanup, format_log_size
 
 
 LOG_PREFIX = "[GetPx]"
@@ -856,7 +856,7 @@ class CheckinArtworkMixin:
                 logger.debug(
                     f"{LOG_PREFIX} 签到背景选择完成: mode=pixiv_daily "
                     f"source={source_key.partition(':')[0] or 'unknown'} "
-                    f"illust_id={illust_id} quality={actual_q} file_size={file_size}"
+                    f"illust_id={illust_id} quality={actual_q} size={format_log_size(file_size)}"
                 )
                 return background
             except asyncio.TimeoutError:

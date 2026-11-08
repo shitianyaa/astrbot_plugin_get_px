@@ -58,7 +58,7 @@ class _DeployedOmnidraw(FakeOmnidraw):
 
 
 class _BrokenOmnidraw:
-    """缺少桥所依赖的私有成员，模拟版本过旧。"""
+    """缺少桥所依赖的私有成员，模拟接口不兼容。"""
 
     plugin_config = SimpleNamespace(enable_checkin=False)
 
@@ -92,8 +92,7 @@ def _ctx(*, registered=None, all_stars=()):
 
 
 class _ProbePassGrantFails:
-    """探测过（_usage_lock + _daily_image_limit 在）但 _grant_sync 访问
-    _normalize_usage_stats 时抛 AttributeError，用于锁定发放失败的日志路径。"""
+    """探测所需成员存在，但发放所需成员缺失。"""
 
     def __init__(self):
         self.plugin_config = SimpleNamespace(
@@ -112,6 +111,9 @@ class _ProbePassGrantFails:
 
     def _daily_image_limit(self):
         return 20
+
+    def __getattr__(self, name):
+        raise AttributeError(f"missing {name} secret-token-value")
 
 
 def test_snapshot_without_plugin_reports_not_installed():
@@ -264,7 +266,7 @@ def test_all_candidates_bad_reports_incompatible():
 
 
 @pytest.mark.asyncio
-async def test_grant_logs_missing_member_on_attribute_error(monkeypatch):
+async def test_grant_missing_member_degrades_without_exposing_exception(monkeypatch):
     captured = []
     spy = SimpleNamespace(
         warning=lambda msg, *a, **k: captured.append(msg),
@@ -277,9 +279,9 @@ async def test_grant_logs_missing_member_on_attribute_error(monkeypatch):
         _ctx(registered=_meta(star), all_stars=(_meta(star),))
     )
     status = await bridge.grant("10001", 5)
-    assert not status.granted
-    assert any("member=_normalize_usage_stats" in m and "reason=private_api_unavailable" in m for m in captured)
-    assert any("私有成员" in m for m in captured)
+    assert not status.granted and not status.compatible
+    assert captured
+    assert all("secret-token-value" not in message for message in captured)
 
 
 def test_snapshot_without_quota_reservations_attribute():

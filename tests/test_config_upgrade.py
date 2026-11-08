@@ -36,8 +36,6 @@ def test_schema_contains_only_formal_groups_and_required_policy_marker():
         assert group["type"] == "object"
         assert not RETIRED.intersection(group["items"])
     assert MIGRATION_KEY in SCHEMA["content_dedupe"]["items"]
-    assert not hasattr(GetPxPlugin, "_migrate_grouped_config")
-    assert not hasattr(GetPxPlugin, "_migrate_dedupe_config")
 
 
 @pytest.mark.asyncio

@@ -56,6 +56,13 @@ class ImageSizeLimitError(RuntimeError):
     """超限一律交给调用方换作品，不参与画质或反代回退。"""
 
 
+def format_log_size(size_bytes: int) -> str:
+    """日志按二进制单位展示大小，不改变实际字节限制。"""
+    if size_bytes >= 1024 * 1024:
+        return f"{size_bytes / (1024 * 1024):.2f}MiB"
+    return f"{size_bytes / 1024:.2f}KiB"
+
+
 def _too_large_error(size_bytes: float) -> RuntimeError:
     return RuntimeError(
         f"图片过大: {size_bytes / 1024 / 1024:.1f} MiB，"
@@ -418,7 +425,7 @@ class ImageDownloader:
                     f"{LOG_PREFIX} {log_context} 图片下载完成: "
                     f"quality={quality_label} route={route_label} "
                     f"attempts={attempts} "
-                    f"size_bytes={file_size} "
+                    f"size={format_log_size(file_size)} "
                     f"duration_ms={int((time.monotonic() - started_at) * 1000)}"
                 )
                 return path, actual_quality, file_size

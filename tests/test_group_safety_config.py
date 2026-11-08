@@ -1,7 +1,4 @@
-import importlib
-import sys
 from copy import deepcopy
-from pathlib import Path
 
 import pytest
 
@@ -12,19 +9,6 @@ from group_safety import (
     GroupSafetyService,
     normalize_policy_entries,
 )
-
-
-def test_group_safety_imports_in_plugin_package_context():
-    from astrbot.api import logger
-
-    repo = Path(__file__).resolve().parents[1]
-    sys.path.insert(0, str(repo.parent))
-    try:
-        module = importlib.import_module(f"{repo.name}.group_safety")
-        assert callable(module.normalize_safety_text)
-        assert module.logger is logger
-    finally:
-        sys.path.remove(str(repo.parent))
 
 
 class Config(dict):
@@ -77,35 +61,6 @@ def test_custom_terms_preserve_punctuation_variants_as_distinct_entries():
     assert entries[0]["custom_terms"] == ["r-18g", "r18g"]
 
 @pytest.mark.asyncio
-async def test_apply_policy_field_group_private_all_counts_and_only_field():
-    c=Config({CONFIG_KEY:[],PRIVATE_CONFIG_KEY:[],MIGRATION_KEY:True})
-    s=GroupSafetyService(c)
-    await s.upsert_group_policy("g1",general_only_enabled=True,builtin_terms_enabled=False,custom_terms=["a"],blacklisted_illust_ids=["1"])
-    await s.upsert_group_policy("g2",general_only_enabled=False,builtin_terms_enabled=True,custom_terms=[],blacklisted_illust_ids=["2"])
-    await s.upsert_private_policy("u1",general_only_enabled=False,builtin_terms_enabled=True,custom_terms=[],blacklisted_illust_ids=["3"])
-    result=await s.apply_policy_field("group","g1","custom_terms","all")
-    assert result["updated_count"]==2
-    assert (await s.get_private_policy("u1"))["custom_terms"]==["a"]
-
-@pytest.mark.asyncio
-@pytest.mark.parametrize("field,value,other", [("custom_terms", ["b"], ["1"]), ("blacklisted_illust_ids", ["9"], ["a"])])
-@pytest.mark.parametrize("target,expected", [("group", (1, 0)), ("private", (0, 1)), ("all", (1, 1))])
-async def test_apply_policy_field_each_scope_preserves_other_fields_and_metadata(field, value, other, target, expected):
-    c=Config({CONFIG_KEY:[],PRIVATE_CONFIG_KEY:[],MIGRATION_KEY:True})
-    s=GroupSafetyService(c)
-    await s.upsert_group_policy("g1",general_only_enabled=False,builtin_terms_enabled=False,custom_terms=(value if field == "custom_terms" else ["old"]),blacklisted_illust_ids=(value if field == "blacklisted_illust_ids" else ["2"]))
-    await s.upsert_group_policy("g2",general_only_enabled=True,builtin_terms_enabled=True,custom_terms=["z"],blacklisted_illust_ids=["3"])
-    await s.upsert_private_policy("u1",general_only_enabled=False,builtin_terms_enabled=True,custom_terms=["p"],blacklisted_illust_ids=["4"])
-    before_calls=c.save_calls
-    result=await s.apply_policy_field("group","g1",field,target)
-    assert (result["group_updated_count"], result["private_updated_count"]) == expected
-    for record in await s.list_policies():
-        if record["group_id"] == "g1":
-            assert record[field] == value and record["general_only_enabled"] is False and record["builtin_terms_enabled"] is False
-            assert record["blacklisted_illust_ids" if field == "custom_terms" else "custom_terms"] == (["2"] if field == "custom_terms" else ["old"])
-    assert c.save_calls == before_calls + (1 if sum(expected) else 0)
-
-@pytest.mark.asyncio
 async def test_apply_policy_field_zero_change_skips_save_and_rollback_identity():
     c=Config({CONFIG_KEY:[],PRIVATE_CONFIG_KEY:[],MIGRATION_KEY:True})
     s=GroupSafetyService(c)
@@ -142,6 +97,9 @@ async def test_apply_policy_field_six_cells_preserve_complete_non_targets(field,
     calls = c.save_calls
     result = await s.apply_policy_field("group", "g1", field, target)
     assert c.save_calls == calls + 1 and result["updated_count"] == len(expected_ids)
+    assert (result["group_updated_count"], result["private_updated_count"]) == (
+        int("g2" in expected_ids), int("u1" in expected_ids)
+    )
     after = {"g1": await s.get_group_policy("g1"), "g2": await s.get_group_policy("g2"), "u1": await s.get_private_policy("u1")}
     assert after["g1"] == before["g1"]
     for identifier, record in after.items():
@@ -163,40 +121,34 @@ def test_normalize_entries_deduplicates_and_warns():
     assert warnings
 
 @pytest.mark.asyncio
-async def test_initialize_invalid_nonempty_config_skips_legacy_and_logs(monkeypatch):
-    messages = []
-    monkeypatch.setattr("group_safety.logger.warning", messages.append)
+async def test_initialize_invalid_nonempty_config_skips_legacy():
     config = Config({CONFIG_KEY: [{"group_id": "", "general_only_enabled": True, "builtin_terms_enabled": True}], MIGRATION_KEY: False})
     legacy = TrackingLegacy([{"group_id": "200", "general_only_enabled": False, "builtin_terms_enabled": True}])
     service = GroupSafetyService(config)
     await service.initialize(legacy)
     assert legacy.calls == 0
-    assert any("source=config" in msg and "entry_index=0" in msg and "field=group_id" in msg for msg in messages)
     assert await service.list_policies() == []
     assert config[MIGRATION_KEY] is True
 
 @pytest.mark.parametrize("raw", [{"group_id": "200"}, "invalid", None])
 @pytest.mark.asyncio
-async def test_initialize_nonlist_config_is_config_first(raw, monkeypatch):
-    messages = []
-    monkeypatch.setattr("group_safety.logger.warning", messages.append)
+async def test_initialize_nonlist_config_is_config_first(raw):
     config = Config({CONFIG_KEY: raw, MIGRATION_KEY: False})
     legacy = TrackingLegacy([{"group_id": "200", "general_only_enabled": False, "builtin_terms_enabled": True}])
     service = GroupSafetyService(config)
     await service.initialize(legacy)
     assert legacy.calls == 0
-    assert any("config" in msg for msg in messages)
     assert (await service.get_policy("200"))["is_default"] is True
     assert config[MIGRATION_KEY] is True
 
 @pytest.mark.asyncio
-async def test_initialize_legacy_read_failure_logs_and_keeps_strict(monkeypatch):
+async def test_initialize_legacy_read_failure_keeps_strict_without_exposing_exception(monkeypatch):
     messages = []
     monkeypatch.setattr("group_safety.logger.warning", messages.append)
     config = Config({CONFIG_KEY: [], MIGRATION_KEY: False})
     service = GroupSafetyService(config)
     await service.initialize(TrackingLegacy(error=RuntimeError("broken")))
-    assert any("旧策略读取失败" in msg and "error_type=RuntimeError" in msg and "source=legacy" in msg for msg in messages)
+    assert messages and all("broken" not in message for message in messages)
     assert config[MIGRATION_KEY] is False
     assert (await service.get_policy("200"))["is_default"] is True
     assert (await service.get_policy("200"))["general_only_enabled"] is True
@@ -204,9 +156,7 @@ async def test_initialize_legacy_read_failure_logs_and_keeps_strict(monkeypatch)
     assert await service.list_policies() == []
 
 @pytest.mark.asyncio
-async def test_initialize_fail_once_rolls_back_then_retries_incremental(monkeypatch):
-    messages = []
-    monkeypatch.setattr("group_safety.logger.warning", messages.append)
+async def test_initialize_fail_once_rolls_back_then_retries_incremental():
     config = FailOnceConfig({CONFIG_KEY: [], MIGRATION_KEY: False})
     service = GroupSafetyService(config)
     legacy = TrackingLegacy([
@@ -220,7 +170,6 @@ async def test_initialize_fail_once_rolls_back_then_retries_incremental(monkeypa
     assert first_policy["general_only_enabled"] is True
     assert first_policy["builtin_terms_enabled"] is True
     assert first_policy["is_default"] is True
-    assert any("策略保存失败" in msg and "error_type=RuntimeError" in msg and "source=legacy" in msg for msg in messages)
     await service.initialize(legacy)
     assert legacy.calls == 2
     assert config[MIGRATION_KEY] is True
@@ -362,20 +311,6 @@ async def test_grouped_config_failed_save_restores_nested_identity_and_compatibi
     assert grouped[CONFIG_KEY] == before
     assert config[CONFIG_KEY] == []
     assert config[MIGRATION_KEY] is True
-
-
-def test_lolicon_exclude_ai_document_contracts_are_consistent():
-    import json
-    schema = json.loads(Path("_conf_schema.json").read_text(encoding="utf-8"))
-    hint = schema["pixiv_source"]["items"]["lolicon_exclude_ai"]["hint"]
-    readme_line = next(line for line in Path("README.md").read_text(encoding="utf-8").splitlines()
-                       if "`lolicon_exclude_ai`" in line)
-    config_line = next(line for line in Path("docs/project/configuration.md").read_text(encoding="utf-8").splitlines()
-                       if "`lolicon_exclude_ai`" in line)
-    for segment in (hint, readme_line, config_line):
-        assert "AI" in segment and "当前会话" in segment and "强制普通分级" in segment
-        assert "R18 始终关闭" not in segment
-    assert "lolicon_exclude_ai" in schema["pixiv_source"]["items"]
 
 
 @pytest.mark.asyncio

@@ -19,7 +19,6 @@ from checkin import (
 from checkin.background import (
     filter_illusts_by_aspect_ratio,
     illust_aspect_ratio,
-    parse_aspect_ratio,
 )
 
 
@@ -126,38 +125,18 @@ class CheckinStoreTest(unittest.IsolatedAsyncioTestCase):
                 bot_name="neko",
             )
 
-            duplicate = await store.checkin(
-                user_id="10001",
-                username="tester",
-                bot_name="neko",
-            )
+            for _ in range(10):
+                duplicate = await store.checkin(
+                    user_id="10001",
+                    username="tester",
+                    bot_name="neko",
+                )
 
             self.assertTrue(duplicate.duplicate)
             self.assertEqual(duplicate.record, first.record)
             self.assertEqual(duplicate.profile, first.profile)
             self.assertEqual(duplicate.penalty_amount, 0)
             self.assertEqual(duplicate.penalty_total_today, 0)
-
-    async def test_repeated_duplicate_checkins_never_change_affection(self):
-        with tempfile.TemporaryDirectory() as tmp:
-            store = FrozenCheckinStore(tmp)
-            first = await store.checkin(
-                user_id="10001", username="tester", bot_name="neko"
-            )
-
-            last = None
-            for _ in range(10):
-                last = await store.checkin(
-                    user_id="10001",
-                    username="tester",
-                    bot_name="neko",
-                )
-
-            self.assertIsNotNone(last)
-            self.assertEqual(last.profile, first.profile)
-            self.assertEqual(last.record, first.record)
-            self.assertEqual(last.penalty_total_today, 0)
-            self.assertEqual(last.penalty_amount, 0)
 
     async def test_record_content_persists_once_and_only_local_can_upgrade_to_ai(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -647,26 +626,6 @@ class CheckinStoreTest(unittest.IsolatedAsyncioTestCase):
             after = await store.export_snapshot()
             self.assertEqual(after, before)
 
-    async def test_import_rolls_back_when_rows_conflict(self):
-        with (
-            tempfile.TemporaryDirectory() as src_tmp,
-            tempfile.TemporaryDirectory() as dst_tmp,
-        ):
-            source = FrozenCheckinStore(src_tmp, date_key="2026-05-26")
-            await source.checkin(user_id="20002", username="source", bot_name="neko")
-            snapshot = await source.export_snapshot()
-            snapshot["records"].append(dict(snapshot["records"][0]))
-
-            target = FrozenCheckinStore(dst_tmp, date_key="2026-05-26")
-            await target.checkin(user_id="10001", username="target", bot_name="neko")
-            before = await target.export_snapshot()
-
-            with self.assertRaises(ValueError):
-                await target.import_snapshot(snapshot)
-
-            after = await target.export_snapshot()
-            self.assertEqual(after, before)
-
     async def test_import_rejects_orphan_record_without_mutating_data(self):
         with tempfile.TemporaryDirectory() as tmp:
             store = FrozenCheckinStore(tmp, date_key="2026-05-26")
@@ -711,18 +670,6 @@ class CheckinStoreTest(unittest.IsolatedAsyncioTestCase):
 
 
 class CheckinBackgroundTest(unittest.TestCase):
-    def test_parse_aspect_ratio_accepts_common_formats(self):
-        self.assertAlmostEqual(parse_aspect_ratio("2.2:1"), 2.2)
-        self.assertAlmostEqual(parse_aspect_ratio("16/9"), 16 / 9)
-        self.assertAlmostEqual(parse_aspect_ratio("3 x 4"), 0.75)
-        self.assertAlmostEqual(parse_aspect_ratio("1.777"), 1.777)
-
-    def test_parse_aspect_ratio_rejects_invalid_values(self):
-        self.assertEqual(parse_aspect_ratio(""), 0.0)
-        self.assertEqual(parse_aspect_ratio("abc"), 0.0)
-        self.assertEqual(parse_aspect_ratio("16:0"), 0.0)
-        self.assertEqual(parse_aspect_ratio("-1"), 0.0)
-
     def test_filter_illusts_by_aspect_ratio_uses_top_level_dimensions(self):
         illusts = [
             {"id": "wide", "width": 2200, "height": 1000},

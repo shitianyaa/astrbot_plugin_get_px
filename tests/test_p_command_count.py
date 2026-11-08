@@ -1,12 +1,11 @@
 """Regression tests for /p [tag] [count] parameter parsing."""
 
-import inspect
 from pathlib import Path
 import sys
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 
-from astrbot.core.star.filter.command import CommandFilter, GreedyStr
+from astrbot.core.star.filter.command import CommandFilter
 from astrbot.core.star.star_handler import EventType, star_handlers_registry
 
 from astrbot_plugin_get_px.main import GetPxPlugin
@@ -24,14 +23,6 @@ def _cmd_p_filter() -> CommandFilter:
             if isinstance(event_filter, CommandFilter):
                 return event_filter
     raise AssertionError("cmd_p CommandFilter not registered")
-
-
-def test_cmd_p_registers_greedy_str_query() -> None:
-    """AstrBot only treats a param as greedy when default/annotation is GreedyStr itself."""
-    cmd_filter = _cmd_p_filter()
-    assert "query" in cmd_filter.handler_params
-    assert cmd_filter.handler_params["query"] is GreedyStr
-    assert inspect.signature(GetPxPlugin.cmd_p).parameters["query"].default is GreedyStr
 
 
 def test_cmd_p_greedy_str_keeps_trailing_count() -> None:

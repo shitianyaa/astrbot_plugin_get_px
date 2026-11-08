@@ -227,6 +227,11 @@ def test_calendar_event_names_are_html_escaped() -> None:
         {"day": 31, "name": "&lt;b&gt;万圣节&lt;/b&gt; &amp; &quot;夜&quot;"}
     ]
     assert data["events_hidden_count"] == 0
+    credit = build_checkin_calendar_data(
+        month="2026-10", today_key="2026-10-01", records=[],
+        background_credit='<b>画师</b> & "夜樱"',
+    )["background_credit"]
+    assert credit == "&lt;b&gt;画师&lt;/b&gt; &amp; &quot;夜樱&quot;"
 
 def _make_jpeg(path: Path, size: tuple[int, int]) -> None:
     PILImage.new("RGB", size, "white").save(path, format="JPEG")
@@ -615,14 +620,16 @@ def test_calendar_command_returns_text_for_bad_month_render_and_send_failures(
     assert not rendered.exists()
 
 
-def test_calendar_cache_key_reflects_actual_event_content(tmp_path) -> None:
+@pytest.mark.parametrize("with_custom_events", [False, True])
+def test_calendar_cache_key_reflects_actual_event_content(tmp_path, with_custom_events) -> None:
     rendered = tmp_path / "rendered.jpg"
     _make_jpeg(rendered, size=(1600, 900))
     plugin = object.__new__(GetPxPlugin)
     plugin.config = {"checkin_enabled": True}
-    plugin.checkin_store = _CalendarStore(
-        records=[],
-        global_events=(type("Event", (), {"event_id": 7, "name": "周年", "date_value": "08-15"})(),),
+    plugin.checkin_store = (
+        _CalendarStore(records=[], global_events=(
+            type("Event", (), {"event_id": 7, "name": "周年", "date_value": "08-15"})(),
+        )) if with_custom_events else _StoreWithoutEventSource(records=[])
     )
     cache = _KeyCapturingCache(published=rendered)
     plugin.checkin_cache = cache
@@ -640,7 +647,7 @@ def test_calendar_cache_key_reflects_actual_event_content(tmp_path) -> None:
         {
             "month": "2026-08",
             "events": sorted((item.start, item.end, item.name, item.is_off_day)
-                             for item in collect_calendar_events(month="2026-08", holiday_lookup=None, custom_events=plugin.checkin_store.global_events)),
+                             for item in collect_calendar_events(month="2026-08", holiday_lookup=None, custom_events=getattr(plugin.checkin_store, "global_events", ()))),
             "records": "",
             "background_quality": "medium",
             "output_size": "1600x900",
@@ -648,36 +655,6 @@ def test_calendar_cache_key_reflects_actual_event_content(tmp_path) -> None:
         }
     ]
     assert len(event.sent) == 1
-
-
-def test_calendar_cache_key_keeps_builtin_events_without_custom_event_source(tmp_path) -> None:
-    rendered = tmp_path / "rendered.jpg"
-    _make_jpeg(rendered, size=(1600, 900))
-    plugin = object.__new__(GetPxPlugin)
-    plugin.config = {"checkin_enabled": True}
-    plugin.checkin_store = _StoreWithoutEventSource(records=[])
-    cache = _KeyCapturingCache(published=rendered)
-    plugin.checkin_cache = cache
-    plugin._prepare_checkin_calendar_background = AsyncMock(
-        return_value=CardBackground(mode="fallback", source="fallback")
-    )
-    plugin._render_checkin_calendar = AsyncMock(return_value=str(rendered))
-    event = _FakeEvent()
-
-    output = asyncio.run(_collect(plugin._handle_checkin_calendar(event, "2026-08")))
-
-    assert output == []
-    assert cache.view_models == [
-        {
-            "month": "2026-08",
-            "events": sorted((item.start, item.end, item.name, item.is_off_day)
-                             for item in collect_calendar_events(month="2026-08", holiday_lookup=None)),
-            "records": "",
-            "background_quality": "medium",
-            "output_size": "1600x900",
-            "content_safety_policy": ContentSafetyPolicy().cache_identity(),
-        }
-    ]
 
 
 @pytest.mark.asyncio
@@ -950,20 +927,3 @@ def test_collect_calendar_raw_events_degrades_when_global_events_fail() -> None:
     assert asyncio.run(degraded._collect_calendar_raw_events("2026-08")) == (
         asyncio.run(healthy._collect_calendar_raw_events("2026-08"))
     )
-
-
-def test_calendar_data_escapes_background_credit_markup() -> None:
-    # 背景署名来自 Pixiv 抓取文案，t2i 端点 Jinja2 不开 autoescape，出模块前必须转义
-    data = build_checkin_calendar_data(
-        month="2026-08",
-        today_key="2026-08-15",
-        records=[],
-        background_credit='<b>画师</b> & "夜樱"',
-    )
-    assert data["background_credit"] == (
-        "&lt;b&gt;画师&lt;/b&gt; &amp; &quot;夜樱&quot;"
-    )
-
-def test_checkin_calendar_module_retains_default_safety_independence():
-    from pixiv.safety import STRICT_CONTENT_SAFETY_POLICY
-    assert STRICT_CONTENT_SAFETY_POLICY.general_only_enabled is True

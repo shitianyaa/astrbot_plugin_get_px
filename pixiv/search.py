@@ -10,7 +10,7 @@ from astrbot.api.message_components import Node, Nodes
 
 from .constants import AIOCQHTTP_PLATFORM, MAX_IMAGE_COUNT
 from .delivery import DeliveryNotSubmitted, DeliveryStatus, log_delivery_error, send_once
-from .downloader import cleanup
+from .downloader import cleanup, format_log_size
 from .pagination import SourceRequest, SourceResponseError, SelectionIndexError
 from .safety import ContentSafetyPolicy, STRICT_CONTENT_SAFETY_POLICY
 
@@ -396,8 +396,8 @@ class SearchMixin:
                                 )
                             batch_attempts += 1
                             logger.info(
-                                f"{LOG_PREFIX} 搜索候选获取完成: source={_search_source_label(source_key)} "
-                                f"batch={batch_attempts}/{SEARCH_BATCH_ATTEMPTS} candidate_count={raw_count}"
+                                f"{LOG_PREFIX} 图源候选批次已返回: source={_search_source_label(source_key)} "
+                                f"batch={batch_attempts}/{SEARCH_BATCH_ATTEMPTS} raw_candidate_count={raw_count}"
                             )
                             if not illusts:
                                 if request_state.failure_reason:
@@ -444,14 +444,14 @@ class SearchMixin:
                         self.downloader.download_for_send(
                             illust, quality, timeout=timeout_sec,
                             size_limit_bytes=size_limit_bytes,
-                            log_context=f"[候选 {idx}/{SEARCH_DOWNLOAD_ATTEMPTS}] 作品 {illust_id}",
+                            log_context=f"[下载尝试 {idx}/{SEARCH_DOWNLOAD_ATTEMPTS}] 作品 {illust_id}",
                             allow_quality_fallback=False,
                         ),
                         timeout=max(0, deadline - time.monotonic()),
                     )
                     logger.debug(
                         f"{LOG_PREFIX} 发图候选下载完成: illust_id={illust_id} "
-                        f"candidate={idx}/{SEARCH_DOWNLOAD_ATTEMPTS} size_bytes={file_size} "
+                        f"download_attempt={idx}/{SEARCH_DOWNLOAD_ATTEMPTS} size={format_log_size(file_size)} "
                         f"quality={_search_quality_label(actual_q)}"
                     )
                     temp_paths.append(path)
@@ -460,13 +460,13 @@ class SearchMixin:
                 except asyncio.TimeoutError:
                     logger.debug(
                         f"{LOG_PREFIX} 下载候选跳过: illust_id={illust_id} "
-                        f"candidate={idx}/{SEARCH_DOWNLOAD_ATTEMPTS} reason=timeout "
+                        f"download_attempt={idx}/{SEARCH_DOWNLOAD_ATTEMPTS} reason=timeout "
                         f"timeout_seconds={timeout_sec}"
                     )
                 except Exception as e:
                     logger.debug(
                         f"{LOG_PREFIX} 下载候选跳过: illust_id={illust_id} "
-                        f"candidate={idx}/{SEARCH_DOWNLOAD_ATTEMPTS} reason=download_error "
+                        f"download_attempt={idx}/{SEARCH_DOWNLOAD_ATTEMPTS} reason=download_error "
                         f"error_type={type(e).__name__}"
                     )
                 finally:

@@ -1,4 +1,3 @@
-import json
 import asyncio
 import sys
 import tempfile
@@ -15,7 +14,7 @@ from astrbot_plugin_get_px.checkin.artwork import (  # noqa: E402
 )
 from astrbot_plugin_get_px.checkin.card import CardBackground  # noqa: E402
 from astrbot_plugin_get_px.pixiv.index import ImageIndexStore  # noqa: E402
-from astrbot_plugin_get_px.pixiv.pagination import PixivPage
+from astrbot_plugin_get_px.pixiv.pagination import PixivPage, SelectionIndexError
 from astrbot_plugin_get_px.main import GetPxPlugin  # noqa: E402
 
 
@@ -33,6 +32,7 @@ class FakePixivClient:
         self.search_pages = search_pages or {}
         self.recommended_offsets = []
         self.search_calls = []
+        self.portrait_requests = []
 
     async def recommended(self, offset: int = 0, *, continuation=None):
         offset = continuation["offset"] if continuation is not None else offset
@@ -43,6 +43,7 @@ class FakePixivClient:
     async def search(self, tag: str, offset: int = 0, *, continuation=None, portrait=False):
         offset = continuation["offset"] if continuation is not None else offset
         self.search_calls.append((tag, offset))
+        self.portrait_requests.append(portrait)
         next_offsets = sorted(value for key, value in self.search_pages if key == tag and value > offset)
         return PixivPage(list(self.search_pages.get((tag, offset), [])), {"offset": next_offsets[0]} if next_offsets else None)
 
@@ -116,22 +117,6 @@ class CheckinBackgroundSelectionTest(unittest.IsolatedAsyncioTestCase):
         ):
             candidates = plugin._checkin_background_tag_candidates("alpha,beta,gamma")
         self.assertEqual(candidates, ["gamma", "beta", "alpha"])
-
-    def test_greeting_schema_defaults_to_hitokoto(self):
-        schema_path = Path(__file__).resolve().parents[1] / "_conf_schema.json"
-        schema = json.loads(schema_path.read_text(encoding="utf-8"))
-
-        basic = schema["checkin_basic"]["items"]
-        self.assertEqual(basic["checkin_greeting_mode"]["default"], "hitokoto")
-        self.assertEqual(
-            basic["checkin_greeting_mode"]["options"],
-            ["local", "hitokoto", "ai"],
-        )
-        categories = basic["checkin_hitokoto_categories"]
-        self.assertEqual(categories["type"], "list")
-        self.assertEqual(categories["default"], ["全部"])
-        self.assertIn("动画", categories["options"])
-        self.assertIn("诗词", categories["options"])
 
     def test_checkin_artwork_ratio_uses_fixed_closed_portrait_range(self):
         self.assertEqual(
@@ -312,6 +297,12 @@ class CheckinBackgroundSelectionTest(unittest.IsolatedAsyncioTestCase):
                     plugin.client.search_calls,
                     [("empty", 0), ("available", 0)],
                 )
+                self.assertTrue(all(plugin.client.portrait_requests))
+                await plugin._fetch_source_candidates(
+                    FakeEvent(), "available", aspect_ratio="gt0.60lt0.90",
+                    use_page_cursor=False,
+                )
+                self.assertFalse(plugin.client.portrait_requests[-1])
             finally:
                 plugin.image_index.close()
 
@@ -395,6 +386,11 @@ class CheckinBackgroundSelectionTest(unittest.IsolatedAsyncioTestCase):
                     ),
                     set(),
                 )
+                with patch.object(plugin.image_index, "claim_usage", side_effect=OSError("fixture")):
+                    with self.assertRaises(SelectionIndexError):
+                        await plugin._claim_checkin_background_usage(
+                            FakeEvent(), "pixiv:recommended", "30"
+                        )
             finally:
                 plugin.image_index.close()
 

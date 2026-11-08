@@ -9,7 +9,8 @@ import pytest
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 
 from astrbot_plugin_get_px.pixiv.lolicon import DEFAULT_API_URL, LoliconClient
-from astrbot_plugin_get_px.pixiv.pagination import PixivPage
+from astrbot_plugin_get_px.pixiv.pagination import PixivPage, SourceResponseError
+from astrbot_plugin_get_px.pixiv.downloader import pick_image_url_exact
 from astrbot_plugin_get_px.pixiv.constants import AIOCQHTTP_PLATFORM
 from astrbot_plugin_get_px.pixiv.search import SearchMixin
 from astrbot_plugin_get_px.pixiv.safety import ContentSafetyPolicy
@@ -179,6 +180,26 @@ class LoliconClientTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual([value for key, value in params if key == "size"], [
             "original", "regular", "small", "thumb", "mini"
         ])
+
+    async def test_response_boundaries_and_optional_metadata(self):
+        client = LoliconClient()
+        response = _FakeResponse()
+        client._session = SimpleNamespace(closed=False, get=lambda *args, **kwargs: response)
+        for payload in ({}, {"data": [{"pid": 1, "p": 0, "r18": "false"}]},
+                        {"error": "private upstream details", "data": []}):
+            with self.subTest(payload=payload):
+                response.payload = payload
+                with self.assertRaises(SourceResponseError) as caught:
+                    await client.random()
+                self.assertNotIn("private", str(caught.exception))
+        response.payload = {"error": "", "data": []}
+        self.assertEqual(await client.random(), [])
+        response.payload = {"error": "", "data": [
+            {"pid": 1, "p": 0, "r18": False, "tags": [], "aiType": 0, "urls": {}}
+        ]}
+        item, = await client.random()
+        self.assertEqual((item["id"], item["x_restrict"]), ("1:0", 0))
+        self.assertEqual(pick_image_url_exact(item, "large"), "")
 
     async def test_r18_mode_accepts_only_strict_or_mixed(self):
         client = LoliconClient()

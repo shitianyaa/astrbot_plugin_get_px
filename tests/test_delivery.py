@@ -174,6 +174,10 @@ async def test_automatic_onebot_delivery(tmp_path, group, forward, outcome):
             segments = segments[0]["data"]["content"]
         file = segments[1]["data"]["file"]
         assert file.startswith("base64://") if index else file == path.resolve().as_uri()
+    if outcome == "empty":
+        info = " ".join(call.args[0] for call in logger.info.call_args_list)
+        assert "delivery_status=accepted" in info
+        assert "delivery_status=confirmed" not in info
     logs = " ".join(call.args[0] for call in logger.warning.call_args_list)
     if outcome in ("file_error", "retry_error"):
         assert "ENOENT copyfile" in logs and "to_transport=base64" in logs

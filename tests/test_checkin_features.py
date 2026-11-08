@@ -56,9 +56,6 @@ def test_qq_birthday_parser_accepts_common_shapes_and_leap_day() -> None:
     assert parse_month_day(20000711) == (7, 11)
     assert birthday_matches("2028-02-29", 2, 29)
     assert not birthday_matches("2027-02-28", 2, 29)
-
-
-def test_month_day_parser_does_not_fall_through_invalid_mappings() -> None:
     assert parse_month_day({"month": 13, "day": 40, "note": "05-06"}) is None
 
 

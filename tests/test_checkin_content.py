@@ -175,6 +175,11 @@ def test_online_off_day_preserves_builtin_calendar_and_workday_does_not_override
     assert online.event_key == "national_day"
     assert online.event_label == "国庆节"
     assert workday.event_key == "national_day"
+    spring = resolve_checkin_content(
+        make_record(date_key="2026-02-17"), profile,
+        online_holiday=OnlineHoliday("春节", True),
+    )
+    assert spring.event_key == "spring_festival"
 
 
 def test_event_stack_keeps_secondary_events_and_workday_note() -> None:
@@ -212,17 +217,6 @@ def test_workday_uses_specific_local_greeting_without_replacing_normal_title() -
     assert content.title == "今日签到"
     assert content.secondary_note == "今日为调休工作日"
     assert "调休" in content.greeting or "补班" in content.greeting
-
-
-def test_online_holiday_keeps_builtin_event_key_and_specific_copy() -> None:
-    content = resolve_checkin_content(
-        make_record(date_key="2026-02-17"),
-        make_profile(),
-        online_holiday=OnlineHoliday("春节", True),
-    )
-    assert content.event_key == "spring_festival"
-    assert content.title == "新春相遇"
-    assert "春节" in content.greeting or "新春" in content.greeting
 
 
 def test_content_limits_badges_and_greeting_and_accepts_plain_birthday_data() -> None:

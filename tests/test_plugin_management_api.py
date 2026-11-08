@@ -79,13 +79,6 @@ async def test_apply_field_quart_contract(group_policy_harness):
     assert (await response.get_json())["updated_count"] == 0
 
 @pytest.mark.asyncio
-async def test_policy_crud_round_trip_lists(group_policy_harness):
-    c=group_policy_harness.app.test_client()
-    r=await c.post("/content-safety/group-policy",json={"group_id":"g2","general_only_enabled":True,"builtin_terms_enabled":False,"custom_terms":["x"],"blacklisted_illust_ids":["001"]})
-    assert r.status_code==200
-    assert (await r.get_json())["group_policy"]["custom_terms"]==["x"]
-
-@pytest.mark.asyncio
 @pytest.mark.parametrize("endpoint,identifier", [("/content-safety/group-policy", "group_id"), ("/content-safety/private-policy", "user_id")])
 @pytest.mark.parametrize("field", ["custom_terms", "blacklisted_illust_ids"])
 async def test_policy_api_requires_arrays_when_list_fields_are_present(group_policy_harness, endpoint, identifier, field):
@@ -125,12 +118,6 @@ async def test_apply_field_bad_source_returns_404(group_policy_harness):
 async def test_apply_field_invalid_returns_400(group_policy_harness):
     r=await group_policy_harness.app.test_client().post("/content-safety/policies/apply-field",json={"source_scope":"x","source_id":"1","field":"custom_terms","target":"all"})
     assert r.status_code==400
-
-@pytest.mark.asyncio
-async def test_policy_service_unavailable_returns_503(group_policy_harness):
-    group_policy_harness.plugin.group_safety_service=None
-    r=await group_policy_harness.app.test_client().post("/content-safety/policies/apply-field",json={})
-    assert r.status_code==503
 
 
 class FakePixivClient:
@@ -176,7 +163,7 @@ async def test_update_replaces_existing_without_duplicate(group_policy_harness):
     async with group_policy_harness.app.test_app():
         client = group_policy_harness.app.test_client()
         await client.post("/content-safety/group-policy", json={"group_id": "1", "general_only_enabled": True, "builtin_terms_enabled": True})
-        response = await client.post("/content-safety/group-policy", json={"group_id": "1", "general_only_enabled": False, "builtin_terms_enabled": False})
+        response = await client.post("/content-safety/group-policy", json={"group_id": "1", "general_only_enabled": False, "builtin_terms_enabled": False, "custom_terms": ["x"], "blacklisted_illust_ids": ["001"]})
         listed = await (await client.get("/content-safety/group-policies")).get_json()
     assert response.status_code == 200
     assert len(listed["group_policies"]) == 1
@@ -186,6 +173,8 @@ async def test_update_replaces_existing_without_duplicate(group_policy_harness):
     assert response_payload["group_policy"]["group_id"] == "1"
     assert response_payload["group_policy"]["general_only_enabled"] is False
     assert response_payload["group_policy"]["builtin_terms_enabled"] is False
+    assert response_payload["group_policy"]["custom_terms"] == ["x"]
+    assert response_payload["group_policy"]["blacklisted_illust_ids"] == ["1"]
     assert listed["group_policies"][0]["group_id"] == "1"
     assert len(group_policy_harness.plugin.config[CONFIG_KEY]) == 1
     assert group_policy_harness.plugin.config[CONFIG_KEY][0]["group_id"] == "1"
@@ -238,44 +227,25 @@ async def test_remove_rejects_invalid_payloads(group_policy_harness, payload):
     assert listed["group_policies"] == []
 
 @pytest.mark.asyncio
-async def test_lookup_returns_503_without_service(group_policy_harness):
+async def test_policy_routes_return_503_without_service(group_policy_harness):
     group_policy_harness.plugin.group_safety_service = None
-    async with group_policy_harness.app.test_app():
-        client = group_policy_harness.app.test_client()
-        response = await client.get("/content-safety?group_id=1")
+    client = group_policy_harness.app.test_client()
+    routes = (
+        ("GET", "/content-safety?group_id=1"),
+        ("GET", "/content-safety?user_id=1"),
+        ("GET", "/content-safety/group-policies"),
+        ("GET", "/content-safety/private-policies"),
+        ("POST", "/content-safety/group-policy"),
+        ("POST", "/content-safety/private-policy"),
+        ("POST", "/content-safety/group-policy/remove"),
+        ("POST", "/content-safety/private-policy/remove"),
+        ("POST", "/content-safety/policies/apply-field"),
+    )
+    for method, path in routes:
+        response = await client.open(path, method=method, **({"json": {}} if method == "POST" else {}))
+        assert response.status_code == 503, path
         payload = await response.get_json()
-    assert response.status_code == 503
-    assert payload["success"] is False and payload["error"]
-
-@pytest.mark.asyncio
-async def test_upsert_returns_503_without_service(group_policy_harness):
-    group_policy_harness.plugin.group_safety_service = None
-    async with group_policy_harness.app.test_app():
-        client = group_policy_harness.app.test_client()
-        response = await client.post("/content-safety/group-policy", json={})
-        payload = await response.get_json()
-    assert response.status_code == 503
-    assert payload["success"] is False and payload["error"]
-
-@pytest.mark.asyncio
-async def test_list_returns_503_without_service(group_policy_harness):
-    group_policy_harness.plugin.group_safety_service = None
-    async with group_policy_harness.app.test_app():
-        client = group_policy_harness.app.test_client()
-        response = await client.get("/content-safety/group-policies")
-        payload = await response.get_json()
-    assert response.status_code == 503
-    assert payload["success"] is False and payload["error"]
-
-@pytest.mark.asyncio
-async def test_remove_returns_503_without_service(group_policy_harness):
-    group_policy_harness.plugin.group_safety_service = None
-    async with group_policy_harness.app.test_app():
-        client = group_policy_harness.app.test_client()
-        response = await client.post("/content-safety/group-policy/remove", json={})
-        payload = await response.get_json()
-    assert response.status_code == 503
-    assert payload["success"] is False and payload["error"]
+        assert payload["success"] is False and payload["error"], path
 
 @pytest.mark.asyncio
 async def test_global_content_safety_remains_200_without_group_service(group_policy_harness):
@@ -322,30 +292,6 @@ async def test_remove_save_failure_rolls_back_config_and_runtime(group_policy_ha
     assert group_policy_harness.plugin.config[MIGRATION_KEY] is marker
     assert [p["group_id"] for p in listed["group_policies"]] == ["1"]
     assert await group_policy_harness.plugin.group_safety_service.list_policies() == service_snapshot
-
-
-@pytest.mark.asyncio
-async def test_management_overview_omits_legacy_cleanup_stats() -> None:
-    with tempfile.TemporaryDirectory() as tmp:
-        plugin = build_plugin(tmp)
-        api = PluginWebApi(
-            plugin,
-            plugin_name="astrbot_plugin_get_px",
-            log_prefix="[GetPx]",
-            internal_error_message="internal",
-        )
-        app = Quart(__name__)
-        app.add_url_rule("/overview", view_func=api.overview, methods=["GET"])
-        try:
-            async with app.test_app():
-                response = await app.test_client().get("/overview")
-                payload = await response.get_json()
-
-            assert response.status_code == 200
-            assert payload["success"]
-            assert "cache_cleanup" not in payload
-        finally:
-            plugin.image_index.close()
 
 
 @pytest.mark.asyncio

@@ -437,13 +437,10 @@ class CheckinCardRenderQualityTest(unittest.IsolatedAsyncioTestCase):
         )
 
         self.assertEqual(result, "cache-key")
+        from astrbot_plugin_get_px.checkin.themes import CHECKIN_THEMES
         self.assertEqual(
             plugin.checkin_cache.cache_key.call_args.kwargs["template_version"],
-            "yellow:1",
-        )
-        self.assertEqual(
-            plugin.checkin_cache.cache_key.call_args.kwargs["view_model"]["resource_version"],
-            3,
+            CHECKIN_THEMES["yellow"].template_version,
         )
 
 

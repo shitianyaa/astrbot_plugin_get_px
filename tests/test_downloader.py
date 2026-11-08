@@ -119,40 +119,25 @@ class ImageDownloaderSizeLimitTest(unittest.IsolatedAsyncioTestCase):
             "square_medium",
         )
 
-    async def test_rejects_when_declared_content_length_exceeds_limit(self):
-        # 服务器声明的体积已超限：走快速路径，不读 body
-        with mock.patch.object(dl, "MAX_DOWNLOAD_BYTES", 10):
-            resp = _FakeResponse(content_length=11, chunks=[b"x"])
-            downloader = _downloader_with(resp)
-            with self.assertRaises(RuntimeError):
-                await downloader.download("http://x/a.jpg", timeout=5)
-
-    async def test_rejects_when_streamed_body_exceeds_limit(self):
-        # content_length 未声明：分块累计超限应立即中止
-        with mock.patch.object(dl, "MAX_DOWNLOAD_BYTES", 10):
-            resp = _FakeResponse(
-                content_length=None, chunks=[b"123", b"456", b"7890ABC"]
-            )
-            downloader = _downloader_with(resp)
-            with self.assertRaises(RuntimeError):
-                await downloader.download("http://x/a.jpg", timeout=5)
-
-    async def test_soft_limit_rejects_headers_and_stops_unknown_length_stream(self):
-        for declared in (11, None):
-            with self.subTest(content_length=declared), tempfile.TemporaryDirectory() as tmp:
-                consumed = []
-                resp = _FakeResponse(content_length=declared)
-                async def chunks(_size):
-                    for chunk in (b"12345", b"678901", b"must-not-read"):
-                        consumed.append(chunk)
-                        yield chunk
-                resp.content.iter_chunked = chunks
-                downloader = _downloader_with(resp)
-                downloader.temp_dir = Path(tmp)
-                with self.assertRaises(dl.ImageSizeLimitError):
-                    await downloader.download("http://x/a.jpg", timeout=5, size_limit_bytes=10)
-                self.assertEqual(len(consumed), 0 if declared else 2)
-                self.assertEqual(list(Path(tmp).iterdir()), [])
+    async def test_hard_and_soft_limits_stop_headers_or_stream_and_clean_partials(self):
+        for soft in (False, True):
+            for declared in (11, None):
+                with self.subTest(soft=soft, content_length=declared), tempfile.TemporaryDirectory() as tmp:
+                    consumed = []
+                    resp = _FakeResponse(content_length=declared)
+                    async def chunks(_size):
+                        for chunk in (b"12345", b"678901", b"must-not-read"):
+                            consumed.append(chunk)
+                            yield chunk
+                    resp.content.iter_chunked = chunks
+                    downloader = _downloader_with(resp)
+                    downloader.temp_dir = Path(tmp)
+                    error = dl.ImageSizeLimitError if soft else RuntimeError
+                    with mock.patch.object(dl, "MAX_DOWNLOAD_BYTES", 50 if soft else 10):
+                        with self.assertRaises(error):
+                            await downloader.download("http://x/a.jpg", timeout=5, size_limit_bytes=10 if soft else 0)
+                    self.assertEqual(len(consumed), 0 if declared else 2)
+                    self.assertEqual(list(Path(tmp).iterdir()), [])
 
     async def test_non_200_status_raises(self):
         resp = _FakeResponse(status=404, chunks=[b"x"])
@@ -181,29 +166,6 @@ class ImageDownloaderSizeLimitTest(unittest.IsolatedAsyncioTestCase):
             if os.path.exists(path):
                 os.remove(path)
 
-    async def test_cleans_partial_temp_file_when_stream_exceeds_limit(self):
-        created_paths = []
-
-        def fake_mkstemp(prefix, suffix, dir):
-            self.assertEqual(dir, downloader.temp_dir)
-            path = Path(tmp) / f"{prefix}partial{suffix}"
-            fd = os.open(path, os.O_CREAT | os.O_EXCL | os.O_RDWR)
-            created_paths.append(path)
-            return fd, str(path)
-
-        with tempfile.TemporaryDirectory() as tmp:
-            with mock.patch.object(dl, "MAX_DOWNLOAD_BYTES", 10):
-                resp = _FakeResponse(
-                    content_length=None, chunks=[b"12345", b"67890", b"x"]
-                )
-                downloader = _downloader_with(resp)
-                with mock.patch.object(dl.tempfile, "mkstemp", fake_mkstemp):
-                    with self.assertRaises(RuntimeError):
-                        await downloader.download("http://x/a.jpg", timeout=5)
-
-            self.assertTrue(created_paths)
-            self.assertFalse(any(path.exists() for path in created_paths))
-
 
 def _illust_urls():
     return {
@@ -217,6 +179,17 @@ def _illust_urls():
 
 
 class ImageDownloaderQualityTest(unittest.IsolatedAsyncioTestCase):
+    def test_log_size_uses_binary_units_at_mib_boundary(self):
+        for size, expected in (
+            (0, "0.00KiB"),
+            (1024, "1.00KiB"),
+            (1024 * 1024 - 1, "1024.00KiB"),
+            (1024 * 1024, "1.00MiB"),
+            (1536 * 1024, "1.50MiB"),
+        ):
+            with self.subTest(size=size):
+                self.assertEqual(dl.format_log_size(size), expected)
+
     async def test_oversized_image_is_removed_without_trying_other_quality(self):
         with tempfile.TemporaryDirectory() as tmp:
             for quality in ("original", "large", "medium"):

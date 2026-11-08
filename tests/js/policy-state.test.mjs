@@ -27,18 +27,6 @@ const user = (id, general = true, builtin = true) => ({
   builtin_terms_enabled: builtin,
 });
 
-test("independent lists are deep copied and normalized", () => {
-  let bucket = selectPolicyRecord(createPolicyBucket(), "group", "1");
-  bucket = { ...bucket, draft: { group_id: "1", general_only_enabled: true, builtin_terms_enabled: false, custom_terms: [], blacklisted_illust_ids: [] }, baseline: { group_id: "1", general_only_enabled: true, builtin_terms_enabled: false, custom_terms: [], blacklisted_illust_ids: [] } };
-  bucket = addPolicyListItem(bucket, "custom_terms", " Ａ‐Ｂ ");
-  assert.deepEqual(bucket.draft.custom_terms, ["Ａ‐Ｂ"]);
-  assert.equal(hasUnsavedPolicyDraft(bucket), true);
-  bucket = addPolicyListItem(bucket, "blacklisted_illust_ids", "001");
-  assert.deepEqual(bucket.draft.blacklisted_illust_ids, ["1"]);
-  bucket = removePolicyListItem(bucket, "custom_terms", 0);
-  assert.deepEqual(bucket.draft.custom_terms, []);
-});
-
 test("separator-only terms are rejected without changing the draft", () => {
   let bucket = selectPolicyRecord(createPolicyBucket(), "group", "1");
   bucket = { ...bucket, draft: { group_id: "1", custom_terms: ["keep"], blacklisted_illust_ids: [] }, baseline: { group_id: "1", custom_terms: ["keep"], blacklisted_illust_ids: [] } };
@@ -85,30 +73,6 @@ test("replace preserves a valid selection and falls back to the first record", (
   assert.equal(replaced.selectedId, "3");
 });
 
-test("select creates independent baseline and draft copies", () => {
-  let bucket = replacePolicyRecords(createPolicyBucket("private"), "private", [user("u1")]);
-  bucket = selectPolicyRecord(bucket, "private", "u1");
-  bucket.draft.general_only_enabled = false;
-  assert.equal(bucket.baseline.general_only_enabled, true);
-  assert.equal(hasUnsavedPolicyDraft(bucket), true);
-});
-
-test("upsert replaces without duplication and marks the saved record clean", () => {
-  let bucket = replacePolicyRecords(createPolicyBucket("group"), "group", [group("1")]);
-  bucket = upsertPolicyRecord(bucket, "group", group("1", false, false));
-  assert.equal(bucket.records.length, 1);
-  assert.equal(bucket.draft.general_only_enabled, false);
-  assert.equal(hasUnsavedPolicyDraft(bucket), false);
-});
-
-test("discard restores the saved baseline", () => {
-  let bucket = replacePolicyRecords(createPolicyBucket("private"), "private", [user("u1")]);
-  bucket.draft.builtin_terms_enabled = false;
-  bucket = discardPolicyDraft(bucket);
-  assert.equal(bucket.draft.builtin_terms_enabled, true);
-  assert.equal(hasUnsavedPolicyDraft(bucket), false);
-});
-
 test("remove selects the adjacent record", () => {
   let bucket = replacePolicyRecords(createPolicyBucket("group"), "group", [group("1"), group("2"), group("3")], "2");
   bucket = removePolicyRecord(bucket, "group", "2");
@@ -150,7 +114,12 @@ test("real policy state chain preserves deep-copy boundaries and rejects invalid
   assert.notEqual(bucket.records[0], input);
   assert.notEqual(bucket.draft, bucket.baseline);
   bucket = addPolicyListItem(bucket, "custom_terms", "beta");
-  bucket = addPolicyListItem(bucket, "blacklisted_illust_ids", "2");
+  bucket = addPolicyListItem(bucket, "blacklisted_illust_ids", "002");
+  assert.deepEqual(bucket.draft.blacklisted_illust_ids, ["1", "2"]);
+  bucket.draft.general_only_enabled = false;
+  assert.equal(bucket.baseline.general_only_enabled, true);
+  assert.deepEqual(input.custom_terms, ["alpha"]);
+  assert.deepEqual(bucket.baseline.custom_terms, ["alpha"]);
   assert.equal(hasUnsavedPolicyDraft(bucket), true);
   const dirtySnapshot = structuredClone(bucket);
   for (const invalid of ["", "0", "-1", "1.2"]) {
@@ -163,8 +132,11 @@ test("real policy state chain preserves deep-copy boundaries and rejects invalid
   bucket = removePolicyListItem(bucket, "custom_terms", 0);
   bucket = discardPolicyDraft(bucket);
   assert.equal(hasUnsavedPolicyDraft(bucket), false);
+  assert.deepEqual(bucket.draft, bucket.baseline);
   const saved = upsertPolicyRecord(bucket, "group", { ...bucket.baseline, custom_terms: ["saved"], blacklisted_illust_ids: ["3"] });
   assert.equal(hasUnsavedPolicyDraft(saved), false);
+  assert.equal(saved.records.length, 1);
+  assert.deepEqual(saved.records[0].custom_terms, ["saved"]);
   const privateBucket = replacePolicyRecords(createPolicyBucket("private"), "private", [{ ...user("g1"), custom_terms: ["private"] }]);
   assert.equal(privateBucket.records[0].user_id, "g1");
   assert.equal(privateBucket.records[0].group_id, undefined);

@@ -26,29 +26,12 @@ async def test_spend_coins_deducts_and_returns_new_profile() -> None:
         await store.update_checkin_member(
             user_id="10001", coins=100, affection=0.0, total_days=0, streak_days=0
         )
-        result = await store.spend_coins(user_id="10001", cost=30)
-        assert isinstance(result, CoinSpendResult)
-        assert result.success is True
-        assert result.profile.coins == 70
-        profile = await store.get_profile("10001")
-        assert profile.coins == 70
-
-
-@pytest.mark.asyncio
-async def test_spend_coins_success_does_not_reread_profile_after_commit() -> None:
-    """扣费提交后不得回读档案：回读失败不得把已扣费误报为异常/未扣费。"""
-    with tempfile.TemporaryDirectory() as tmp:
-        store = CheckinStore(tmp)
-        await store.get_profile("10001")
-        await store.update_checkin_member(
-            user_id="10001", coins=100, affection=0.0, total_days=0, streak_days=0
-        )
         with patch.object(
-            store,
-            "_get_or_create_profile_sync",
+            store, "_get_or_create_profile_sync",
             side_effect=RuntimeError("提交后回读不应发生"),
         ):
             result = await store.spend_coins(user_id="10001", cost=30)
+        assert isinstance(result, CoinSpendResult)
         assert result.success is True
         assert result.profile.coins == 70
         profile = await store.get_profile("10001")
