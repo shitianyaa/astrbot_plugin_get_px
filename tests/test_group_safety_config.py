@@ -171,7 +171,7 @@ async def test_initialize_invalid_nonempty_config_skips_legacy_and_logs(monkeypa
     service = GroupSafetyService(config)
     await service.initialize(legacy)
     assert legacy.calls == 0
-    assert any("config" in msg and "entry 0" in msg and "group_id is required" in msg for msg in messages)
+    assert any("source=config" in msg and "entry_index=0" in msg and "field=group_id" in msg for msg in messages)
     assert await service.list_policies() == []
     assert config[MIGRATION_KEY] is True
 
@@ -196,7 +196,7 @@ async def test_initialize_legacy_read_failure_logs_and_keeps_strict(monkeypatch)
     config = Config({CONFIG_KEY: [], MIGRATION_KEY: False})
     service = GroupSafetyService(config)
     await service.initialize(TrackingLegacy(error=RuntimeError("broken")))
-    assert any("legacy: read failed error_type=RuntimeError" in msg for msg in messages)
+    assert any("旧策略读取失败" in msg and "error_type=RuntimeError" in msg and "source=legacy" in msg for msg in messages)
     assert config[MIGRATION_KEY] is False
     assert (await service.get_policy("200"))["is_default"] is True
     assert (await service.get_policy("200"))["general_only_enabled"] is True
@@ -220,7 +220,7 @@ async def test_initialize_fail_once_rolls_back_then_retries_incremental(monkeypa
     assert first_policy["general_only_enabled"] is True
     assert first_policy["builtin_terms_enabled"] is True
     assert first_policy["is_default"] is True
-    assert any("legacy: save failed error_type=RuntimeError" in msg for msg in messages)
+    assert any("策略保存失败" in msg and "error_type=RuntimeError" in msg and "source=legacy" in msg for msg in messages)
     await service.initialize(legacy)
     assert legacy.calls == 2
     assert config[MIGRATION_KEY] is True

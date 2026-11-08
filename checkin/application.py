@@ -397,7 +397,7 @@ class CheckinApplicationMixin:
                         f"error_type={type(exc).__name__}"
                     )
                 logger.info(
-                    f"{LOG_PREFIX} 签到卡发送完成: tier={actual_tier} "
+                    f"{LOG_PREFIX} 签到卡发送调用已结束: tier={actual_tier} "
                     f"cache_hit={'yes' if cache_hit else 'no'} "
                     f"delivery_status={delivery_status.value} "
                     f"background_mode={getattr(background, 'mode', 'none')}"
@@ -717,7 +717,7 @@ class CheckinApplicationMixin:
             bot = getattr(event, "bot", None)
             if bot is None or not hasattr(bot, "call_action"):
                 logger.warning(
-                    f"{LOG_PREFIX} QQ 生日读取失败: 当前事件不支持 call_action"
+                    f"{LOG_PREFIX} QQ 生日未读取: reason=call_action_unavailable"
                 )
                 return QQBirthdayLookup(None, False)
             payload = await asyncio.wait_for(
@@ -730,7 +730,7 @@ class CheckinApplicationMixin:
             )
             parsed = parse_qq_birthday(payload)
             if parsed is None:
-                logger.info(f"{LOG_PREFIX} QQ 生日未读取: 用户未公开生日")
+                logger.info(f"{LOG_PREFIX} QQ 生日未读取: reason=birthday_not_available")
             else:
                 logger.info(f"{LOG_PREFIX} QQ 生日读取成功")
             return QQBirthdayLookup(parsed, True)

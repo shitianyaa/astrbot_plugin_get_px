@@ -37,7 +37,7 @@ BASE = "https://app-api.pixiv.net/v1/illust/recommended?"
         (BASE + "offset=1&offset=2", "scalar_count", "offset"),
         (BASE + "offset=-12345", "number", "offset"),
         (
-            BASE + "min_bookmark_id_for_recent_illust=0",
+            BASE + "min_bookmark_id_for_recent_illust=-1",
             "number",
             "min_bookmark_id_for_recent_illust",
         ),

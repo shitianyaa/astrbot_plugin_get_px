@@ -161,13 +161,13 @@ class GetPxPlugin(
                 f"{LOG_PREFIX} 签到数据库缺少 schema 版本号且已包含数据表，"
                 "无法确认其格式。如果是从 v2.8.x 升级，请先使用插件 3.0.0 "
                 f"启动一次完成数据迁移，再升级到 {PLUGIN_VERSION}；"
-                "否则请检查或移除 checkin.sqlite3 后重启。"
+                "数据库未自动修改；请先备份并核对格式，不要直接删除生产数据库。"
             )
             raise
         database_action = "已加载" if checkin_database_existed else "已创建"
         logger.info(
             f"{LOG_PREFIX} 签到数据库{database_action}: "
-            f"version={PLUGIN_VERSION}, path={self.checkin_store._db_path}"
+            f"version={PLUGIN_VERSION} database=checkin.sqlite3"
         )
         policy_migration_succeeded = await self.group_safety_service.initialize(
             self.checkin_store
@@ -397,7 +397,7 @@ class GetPxPlugin(
         event.stop_event()
         if not CHECKIN_HELP_IMAGE.is_file():
             logger.error(
-                f"{LOG_PREFIX} 签到帮助图片不存在: {CHECKIN_HELP_IMAGE}"
+                f"{LOG_PREFIX} 签到帮助图片不存在: asset=checkin_help"
             )
             yield event.plain_result("签到帮助图片缺失，请联系管理员重新安装插件")
             return

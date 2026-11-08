@@ -98,7 +98,7 @@ def _download_route_log_label(route: str, source: object) -> str:
         return "反代地址"
     if str(source or "").casefold() == "lolicon":
         return "图片源返回地址"
-    return "直连地址"
+    return "源图片地址"
 
 
 def parse_proxy_origins(raw_origins: object) -> tuple[str, ...]:
@@ -418,8 +418,8 @@ class ImageDownloader:
                     f"{LOG_PREFIX} {log_context} 图片下载完成: "
                     f"quality={quality_label} route={route_label} "
                     f"attempts={attempts} "
-                    f"size={file_size / 1024:.2f}KB "
-                    f"duration={int((time.monotonic() - started_at) * 1000)}ms"
+                    f"size_bytes={file_size} "
+                    f"duration_ms={int((time.monotonic() - started_at) * 1000)}"
                 )
                 return path, actual_quality, file_size
 
@@ -432,8 +432,8 @@ class ImageDownloader:
                 break
             if quality_error is not None:
                 logger.debug(
-                    f"{LOG_PREFIX} {log_context} quality={actual_quality} 不可用，"
-                    "尝试下一画质"
+                    f"{LOG_PREFIX} {log_context} 当前画质下载未成功: "
+                    f"quality={actual_quality} fallback_enabled={'yes' if allow_quality_fallback else 'no'}"
                 )
 
         if last_error is not None:

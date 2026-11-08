@@ -228,8 +228,8 @@ class CheckinShopMixin:
                         user_id=user_id, amount=cost
                     )
                     logger.warning(
-                        f"{LOG_PREFIX} 生图额度发放失败，金币已退回: "
-                        f"user_id={user_id} cost={cost} reason={granted.message or 'unknown'}"
+                        f"{LOG_PREFIX} 生图额度未发放，退款调用已完成: "
+                        f"user_id={user_id} cost={cost} reason=quota_not_granted"
                     )
                     yield event.plain_result(
                         f"生图额度发放失败（{granted.message or '未知原因'}），"
@@ -239,7 +239,7 @@ class CheckinShopMixin:
                     logger.error(
                         f"{LOG_PREFIX} 生图额度发放失败且退款异常: "
                         f"user_id={user_id} cost={cost} "
-                        f"error_type={type(exc).__name__} reason={exc}"
+                        f"error_type={type(exc).__name__}"
                     )
                     yield event.plain_result(
                         f"生图额度发放失败（{granted.message or '未知原因'}），"
@@ -247,8 +247,8 @@ class CheckinShopMixin:
                     )
             else:
                 logger.warning(
-                    f"{LOG_PREFIX} 生图额度发放失败: "
-                    f"user_id={user_id} cost={cost} reason={granted.message or 'unknown'}"
+                    f"{LOG_PREFIX} 生图额度未发放: "
+                    f"user_id={user_id} cost={cost} reason=quota_not_granted"
                 )
                 yield event.plain_result(
                     f"生图额度发放失败（{granted.message or '未知原因'}）。"

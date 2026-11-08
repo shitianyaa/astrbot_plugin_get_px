@@ -106,11 +106,11 @@ def _normalize_entries(raw: object, *, private: bool = False):
     template = PRIVATE_TEMPLATE_KEY if private else TEMPLATE_KEY
     normalize_id = normalize_user_id if private else normalize_group_id
     if not isinstance(raw, list):
-        return [], [f"{key} policy list must be a list"]
+        return [], [f"策略列表已忽略: field={key} reason=invalid_list"]
     entries, warnings, seen = [], [], set()
     for index, item in enumerate(raw):
         if not isinstance(item, dict):
-            warnings.append(f"entry {index}: must be an object")
+            warnings.append(f"策略条目已忽略: entry_index={index} reason=invalid_object")
             continue
         try:
             identifier = normalize_id(item.get(key))
@@ -122,18 +122,20 @@ def _normalize_entries(raw: object, *, private: bool = False):
             raw_terms = item.get("custom_terms", [])
             raw_ids = item.get("blacklisted_illust_ids", [])
             if isinstance(raw_terms, list):
-                warnings.extend(f"entry {index}: custom_terms[{i}] invalid and dropped" for i, v in enumerate(raw_terms) if not isinstance(v, str) or not v.strip() or not normalize_safety_text(v.strip()))
+                warnings.extend(f"无效安全词已忽略: entry_index={index} field=custom_terms item_index={i}" for i, v in enumerate(raw_terms) if not isinstance(v, str) or not v.strip() or not normalize_safety_text(v.strip()))
             elif "custom_terms" in item:
-                warnings.append(f"entry {index}: custom_terms must be a list; dropped")
+                warnings.append(f"安全词列表已忽略: entry_index={index} field=custom_terms reason=invalid_list")
             if isinstance(raw_ids, list):
-                warnings.extend(f"entry {index}: blacklisted_illust_ids[{i}] invalid and dropped" for i, v in enumerate(raw_ids) if not isinstance(v, str) or not v.strip().isdigit() or int(v.strip()) <= 0)
+                warnings.extend(f"无效黑名单作品已忽略: entry_index={index} field=blacklisted_illust_ids item_index={i}" for i, v in enumerate(raw_ids) if not isinstance(v, str) or not v.strip().isdigit() or int(v.strip()) <= 0)
             elif "blacklisted_illust_ids" in item:
-                warnings.append(f"entry {index}: blacklisted_illust_ids must be a list; dropped")
+                warnings.append(f"作品黑名单列表已忽略: entry_index={index} field=blacklisted_illust_ids reason=invalid_list")
         except ValueError as exc:
-            warnings.append(f"entry {index}: {exc}")
+            field = next((name for name in (key, "general_only_enabled", "builtin_terms_enabled")
+                          if name in str(exc)), "unknown")
+            warnings.append(f"策略条目已忽略: entry_index={index} field={field} reason=invalid_value")
             continue
         if identifier in seen:
-            warnings.append(f"entry {index}: duplicate {key} {identifier}")
+            warnings.append(f"重复策略条目已忽略: entry_index={index} field={key} reason=duplicate")
             continue
         seen.add(identifier)
         entries.append(
@@ -289,7 +291,7 @@ class SessionSafetyService:
 
     def _log_warnings(self, source: str, warnings):
         for warning in warnings:
-            logger.warning(f"{self.log_prefix} {source}: {warning}")
+            logger.warning(f"{self.log_prefix} {warning} source={source.replace(' ', '_')}")
 
     async def initialize(self, legacy_store):
         async with self._lock:
@@ -308,7 +310,7 @@ class SessionSafetyService:
                     migration_succeeded = False
                     self._log_warnings(
                         "private config",
-                        [f"save failed error_type={type(exc).__name__}"],
+                        [f"策略保存失败，已回退严格默认策略: error_type={type(exc).__name__}"],
                     )
 
             raw_group = self._get_config(CONFIG_KEY, [])
@@ -326,7 +328,7 @@ class SessionSafetyService:
                     self._install([], private=False)
                     migration_succeeded = False
                     self._log_warnings(
-                        "legacy", [f"read failed error_type={type(exc).__name__}"]
+                        "legacy", [f"旧策略读取失败，已使用严格默认策略: error_type={type(exc).__name__}"]
                     )
                     return False
             self._install(group_entries, private=False)
@@ -343,7 +345,7 @@ class SessionSafetyService:
                 migration_succeeded = False
                 self._log_warnings(
                     "legacy" if use_legacy else "config",
-                    [f"save failed error_type={type(exc).__name__}"],
+                    [f"策略保存失败，已回退严格默认策略: error_type={type(exc).__name__}"],
                 )
             return migration_succeeded
 

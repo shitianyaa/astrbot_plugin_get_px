@@ -243,7 +243,7 @@ async def send_once(event, content: list, *, context: str) -> DeliveryStatus:
             # 正常返回仍结算，但协议端可能只受理，保留文件读取窗口。
             status = DeliveryStatus.ACCEPTED
         logger.info(
-            f"[GetPx] 作品发送调用成功: {attempt_context} delivery_status={status.value} duration_ms={int((time.monotonic() - started) * 1000)}"
+            f"[GetPx] 作品发送调用返回: {attempt_context} delivery_status={status.value} duration_ms={int((time.monotonic() - started) * 1000)}"
         )
         return status
 

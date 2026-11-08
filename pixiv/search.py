@@ -68,7 +68,7 @@ class SearchMixin:
             profile = await self.checkin_store.get_profile(user_id)
         except Exception as exc:
             logger.warning(
-                f"{LOG_PREFIX} /p 金币预检失败，本次免检放行: "
+                f"{LOG_PREFIX} /p 金币余额预检失败，已跳过余额检查: "
                 f"error_type={type(exc).__name__}"
             )
             return ""
@@ -184,7 +184,7 @@ class SearchMixin:
                     return illusts, len(illusts), source_key
                 if source == "pixiv":
                     await self._advance_source_page(event, source_key, state, use_page_cursor=use_page_cursor)
-                logger.info(f"{LOG_PREFIX} 图片源无结果，继续尝试可用来源: source={source}")
+                logger.info(f"{LOG_PREFIX} 图片源返回空批次: source={source}")
             except SelectionIndexError:
                 raise
             except Exception as exc:
@@ -197,7 +197,7 @@ class SearchMixin:
                         f" continuation_detail={exc.detail} continuation_field={exc.field}"
                     )
                 logger.warning(
-                    f"{LOG_PREFIX} 图片源请求失败，继续尝试可用来源: "
+                    f"{LOG_PREFIX} 图片源请求失败: "
                     f"source={source} tag_configured={'yes' if tag else 'no'} "
                     f"reason={state.failure_reason} error_type={type(exc).__name__}{diagnostic}"
                 )
@@ -450,8 +450,9 @@ class SearchMixin:
                         timeout=max(0, deadline - time.monotonic()),
                     )
                     logger.debug(
-                        f"{LOG_PREFIX} [候选 {idx}/{SEARCH_DOWNLOAD_ATTEMPTS}] 作品 {illust_id} "
-                        f"下载完成（大小={file_size / 1024:.2f}KB，画质={_search_quality_label(actual_q)}）"
+                        f"{LOG_PREFIX} 发图候选下载完成: illust_id={illust_id} "
+                        f"candidate={idx}/{SEARCH_DOWNLOAD_ATTEMPTS} size_bytes={file_size} "
+                        f"quality={_search_quality_label(actual_q)}"
                     )
                     temp_paths.append(path)
                     downloaded.append((illust, path, actual_q, file_size))
@@ -570,7 +571,7 @@ class SearchMixin:
                             )
                     else:
                         logger.info(
-                            f"{LOG_PREFIX} /p 金币结算: "
+                            f"{LOG_PREFIX} /p 金币结算完成: "
                             f"sent_count={len(sent_illust_ids)} cost={total_cost}"
                         )
                         try:
@@ -587,7 +588,7 @@ class SearchMixin:
                             )
                 except Exception as exc:
                     logger.warning(
-                        f"{LOG_PREFIX} /p 金币结算失败，本次不扣费: "
+                        f"{LOG_PREFIX} /p 金币结算调用异常，扣费状态待核对: "
                         f"error_type={type(exc).__name__}"
                     )
             for p in temp_paths:

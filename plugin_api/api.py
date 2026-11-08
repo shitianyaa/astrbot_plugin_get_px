@@ -559,7 +559,7 @@ class PluginWebApi:
             except Exception as exc:
                 logger.warning(
                     f"{self.log_prefix} 黑名单作品信息获取失败: "
-                    f"illust_id={illust_id} error={type(exc).__name__}"
+                    f"illust_id={illust_id} error_type={type(exc).__name__}"
                 )
         try:
             await self.plugin.image_index.add_blacklist_illust(
@@ -622,7 +622,7 @@ class PluginWebApi:
         except Exception as exc:
             logger.warning(
                 f"{self.log_prefix} 黑名单缩略图获取失败: "
-                f"illust_id={illust_id} error={type(exc).__name__}"
+                f"illust_id={illust_id} error_type={type(exc).__name__}"
             )
         finally:
             cleanup(temp_path)
@@ -636,7 +636,7 @@ class PluginWebApi:
         except Exception as exc:
             logger.warning(
                 f"{self.log_prefix} 黑名单缩略图安全检查失败: "
-                f"error={type(exc).__name__}"
+                f"error_type={type(exc).__name__}"
             )
             return False
         return not any(
@@ -738,7 +738,7 @@ class PluginWebApi:
                 return jsonify({"success": False, "error": "只支持 JSON 备份文件"}), 400
             raw = await self.plugin._read_uploaded_file_bytes(upload)
             logger.info(
-                f"{self.log_prefix} 开始导入签到 JSON 备份: "
+                f"{self.log_prefix} 签到 JSON 备份请求已接收: "
                 f"size_bytes={len(raw)}"
             )
             snapshot = load_checkin_snapshot_json(raw)
@@ -756,7 +756,7 @@ class PluginWebApi:
             )
             logger.warning(
                 f"{self.log_prefix} 现有签到数据已由 JSON 备份覆盖: "
-                f"users={result['users']}, records={result['records']}"
+                f"users={result['users']} records={result['records']}"
             )
             return jsonify(
                 {

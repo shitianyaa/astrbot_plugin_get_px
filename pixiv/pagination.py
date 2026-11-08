@@ -151,7 +151,9 @@ def parse_continuation(
             raw = values[0]
             if key in numbers:
                 detail = "number"
-                if not raw.isdecimal() or (key != "offset" and int(raw) <= 0):
+                # 推荐边界不是作品 ID；上游可返回 min=0 / max=-1 哨兵。
+                max_sentinel = recommended and key == "max_bookmark_id_for_recommend" and raw == "-1"
+                if not raw.isdecimal() and not max_sentinel:
                     raise ValueError
                 params[key] = int(raw)
             elif key in booleans:

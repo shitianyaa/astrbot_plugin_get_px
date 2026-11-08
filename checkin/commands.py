@@ -756,7 +756,7 @@ class CheckinCommandMixin:
                 event.chain_result([Image.fromFileSystem(str(calendar_path))])
             )
             logger.info(
-                f"{LOG_PREFIX} 签到日历发送完成: month={target_month} "
+                f"{LOG_PREFIX} 签到日历发送调用已返回: month={target_month} "
                 f"record_count={len(records)} "
                 f"cached={'no' if directly_rendered else 'yes'} "
                 f"background_mode={getattr(background, 'mode', 'none') or 'none'}"

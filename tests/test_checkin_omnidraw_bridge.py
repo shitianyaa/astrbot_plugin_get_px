@@ -278,7 +278,7 @@ async def test_grant_logs_missing_member_on_attribute_error(monkeypatch):
     )
     status = await bridge.grant("10001", 5)
     assert not status.granted
-    assert any("_normalize_usage_stats" in m and "reason=" in m for m in captured)
+    assert any("member=_normalize_usage_stats" in m and "reason=private_api_unavailable" in m for m in captured)
     assert any("私有成员" in m for m in captured)
 
 

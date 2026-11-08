@@ -197,7 +197,7 @@ class CheckinBackupWebTest(unittest.IsolatedAsyncioTestCase):
                 for method in (mock_logger.info, mock_logger.warning)
                 for call in method.call_args_list
             )
-            self.assertIn("开始导入签到 JSON 备份", log_text)
+            self.assertIn("签到 JSON 备份请求已接收", log_text)
             self.assertIn("现有签到数据已备份", log_text)
             self.assertIn("现有签到数据已由 JSON 备份覆盖", log_text)
 

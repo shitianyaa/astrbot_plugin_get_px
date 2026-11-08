@@ -44,7 +44,7 @@ class FiltersMixin:
             group_id = str(event.get_group_id() or "").strip()
         except Exception as exc:
             logger.error(
-                f"{LOG_PREFIX} failed to read group context for content safety: "
+                f"{LOG_PREFIX} 内容安全会话读取失败，已使用严格默认策略: "
                 f"error_type={type(exc).__name__}"
             )
             return STRICT_CONTENT_SAFETY_POLICY
@@ -69,12 +69,9 @@ class FiltersMixin:
             blacklisted_ids = value.get("blacklisted_illust_ids", [])
             return ContentSafetyPolicy(general_only, builtin_terms, **identity, custom_terms=tuple(custom_terms), blacklisted_illust_ids=tuple(blacklisted_ids))
         except Exception as exc:
-            logged_group_id = (
-                group_id.replace("\r", "\\r").replace("\n", "\\n")[:128]
-            )
             logger.error(
-                f"{LOG_PREFIX} failed to read group content-safety policy; "
-                f"using strict defaults: group_id={logged_group_id} "
+                f"{LOG_PREFIX} 会话安全策略读取失败，已使用严格默认策略: "
+                f"scope={'group' if group_id else 'private'} "
                 f"error_type={type(exc).__name__}"
             )
             return STRICT_CONTENT_SAFETY_POLICY
@@ -94,7 +91,7 @@ class FiltersMixin:
         try:
             terms.update(await self.image_index.get_custom_safety_terms())
         except Exception as exc:
-            logger.error(f"{LOG_PREFIX} 读取自定义安全词失败: {type(exc).__name__}")
+            logger.error(f"{LOG_PREFIX} 自定义安全词读取失败: error_type={type(exc).__name__}")
             raise RuntimeError("内容安全服务暂不可用") from exc
         return terms
 
@@ -106,7 +103,7 @@ class FiltersMixin:
         try:
             return set(await self.image_index.get_blacklisted_illust_ids())
         except Exception as exc:
-            logger.error(f"{LOG_PREFIX} 读取图片黑名单失败: {type(exc).__name__}")
+            logger.error(f"{LOG_PREFIX} 图片黑名单读取失败: error_type={type(exc).__name__}")
             raise RuntimeError("内容安全服务暂不可用") from exc
 
     async def _blocked_query_term(
@@ -194,7 +191,7 @@ class FiltersMixin:
         try:
             return await self.image_index.is_blacklisted(illust_id)
         except Exception as e:
-            logger.error(f"{LOG_PREFIX} 读取图片黑名单失败: {type(e).__name__}")
+            logger.error(f"{LOG_PREFIX} 图片黑名单读取失败: error_type={type(e).__name__}")
             return True
 
     async def _pick_illusts(

@@ -272,6 +272,16 @@ python -m pytest -q tests/test_checkin_cache.py tests/test_checkin_calendar.py t
 
 Pixiv 标签签到搜索另验证通过已有认证请求入口发送竖图粗筛，并保留本地 0.60–0.90 精筛；新增签到入口到客户端的显式 `portrait=True` 接线测试，改变 Lolicon 比例字符串不影响 Pixiv 粗筛，其他调用方默认关闭。推荐和日历不套用该搜索参数。跨请求推荐 continuation 仍只有数字 offset 持久化，不把请求内测试作为完整断点续读的证据。
 
+#### 日志契约
+
+运行 `python -m pytest -q tests/test_logging_contract.py tests/test_group_safety_config.py tests/test_checkin_omnidraw_bridge.py tests/test_delivery.py`。AST检查所有运行时模块只从AstrBot导入logger，不允许logging回退；覆盖空回执只报告调用返回／已受理、私聊策略故障使用会话表述、访问触发清理不声称定时任务，以及私有接口错误只暴露固定成员名，不回显异常原文。日志文案调整不改变送达、结算、过滤或退款行为。
+
+#### 推荐边界兼容与相邻响应校验
+
+运行 `python -m pytest -q tests/test_source_response_compatibility.py tests/test_continuation_diagnostics.py tests/test_pagination_review_fixes.py`。使用线上报告的 `min=0`／`max=-1` 合成样本，验证解析、SDK原样编码、请求内续取和重复位置终止；保留正数推荐游标回归。offset负数、min负数、max小于-1或其他负号形式、非整数与非正作品ID列表仍拒绝。
+
+相邻校验另覆盖合法空页、没有offset但含推荐边界的空页、多页作品、空meta_single_page、翻译标签为null、缺失所选画质、三类有效分级及Lolicon页码0／空标签／未知AI标识；有效响应交给原安全策略与下载换图处理，不因非必需内容缺失拒绝整批。缺失分级、非法作品ID和错误容器仍拒绝。只改变已有证据的推荐游标边界，不猜测未知参数或其他负数哨兵。
+
 #### 续页拒绝诊断
 
 运行 `python -m pytest -q tests/test_continuation_diagnostics.py`。覆盖地址类型／语法、协议、主机、路径、fragment、query语法、未知参数、重复标量、数字／布尔／静态值、列表格式／数值／索引和空参数的拒绝分类，验证日志不泄露地址、用户信息、搜索词、未知参数名或参数值，并维持原两源回退行为。

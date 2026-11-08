@@ -205,7 +205,8 @@ class CheckinArtworkMixin:
                 CHECKIN_ARTWORK_TOLERANCE,
             ):
                 logger.warning(
-                    f"{LOG_PREFIX} 签到背景恢复拒绝非 3:4 作品 {record.background_illust_id}"
+                    f"{LOG_PREFIX} 签到背景恢复已拒绝: reason=aspect_ratio "
+                    f"illust_id={record.background_illust_id}"
                 )
                 return replace(saved, mode="fallback")
             if source.startswith("lolicon:"):
@@ -431,13 +432,13 @@ class CheckinArtworkMixin:
             )
             if cached is not None:
                 logger.debug(
-                    f"{LOG_PREFIX} 签到卡缓存命中: 画质={spec.name} "
-                    f"日期={record.date_key} 输出尺寸={spec.expected_size[0]}x{spec.expected_size[1]}"
+                    f"{LOG_PREFIX} 签到卡缓存命中: quality={spec.name} "
+                    f"date={record.date_key} output_size={spec.expected_size[0]}x{spec.expected_size[1]}"
                 )
                 return Path(cached), spec.name
             logger.debug(
-                f"{LOG_PREFIX} 签到卡缓存未命中: 画质={spec.name} "
-                f"日期={record.date_key} 输出尺寸={spec.expected_size[0]}x{spec.expected_size[1]}"
+                f"{LOG_PREFIX} 签到卡缓存未命中: quality={spec.name} "
+                f"date={record.date_key} output_size={spec.expected_size[0]}x{spec.expected_size[1]}"
             )
         return None, normalize_checkin_render_tier(preferred_tier)
 
@@ -489,9 +490,9 @@ class CheckinArtworkMixin:
 
             try:
                 logger.debug(
-                    f"{LOG_PREFIX} 签到卡开始渲染: 画质={spec.name} "
-                    f"输出尺寸={spec.expected_size[0]}x{spec.expected_size[1]} "
-                    f"背景模式={_checkin_background_mode_label(background)}"
+                    f"{LOG_PREFIX} 签到卡渲染已开始: quality={spec.name} "
+                    f"output_size={spec.expected_size[0]}x{spec.expected_size[1]} "
+                    f"background_mode={_checkin_background_mode_label(background)}"
                 )
                 if cache is None:
                     card_path = Path(await render_card())
@@ -524,9 +525,9 @@ class CheckinArtworkMixin:
                     )
                 render_succeeded = True
                 logger.info(
-                    f"{LOG_PREFIX} 签到卡渲染完成：画质={spec.name} "
-                    f"输出尺寸={spec.expected_size[0]}x{spec.expected_size[1]} "
-                    f"耗时={int((time.monotonic() - started_at) * 1000)}ms"
+                    f"{LOG_PREFIX} 签到卡输出已就绪: quality={spec.name} "
+                    f"output_size={spec.expected_size[0]}x{spec.expected_size[1]} "
+                    f"duration_ms={int((time.monotonic() - started_at) * 1000)}"
                 )
                 return card_path, spec.name
             except BackgroundEncodingError:
@@ -536,10 +537,10 @@ class CheckinArtworkMixin:
                 last_error = exc
                 has_lower_tier = tier_index + 1 < len(fallback_specs)
                 logger.warning(
-                    f"{LOG_PREFIX} 签到卡渲染失败: 画质={spec.name} "
-                    f"输出尺寸={spec.expected_size[0]}x{spec.expected_size[1]} "
-                    f"是否降档={'是' if has_lower_tier else '否'} "
-                    f"错误类型={type(exc).__name__}"
+                    f"{LOG_PREFIX} 签到卡输出未就绪: quality={spec.name} "
+                    f"output_size={spec.expected_size[0]}x{spec.expected_size[1]} "
+                    f"fallback_available={'yes' if has_lower_tier else 'no'} "
+                    f"error_type={type(exc).__name__}"
                 )
             finally:
                 if cache is not None or not render_succeeded:
@@ -771,7 +772,8 @@ class CheckinArtworkMixin:
                     event, source_key, request_state, use_page_cursor=not preview_nonce,
                 )
                 logger.info(
-                    f"{LOG_PREFIX} 签到背景第 {page_attempt} 页候选均已使用\uff0c切换下一页"
+                    f"{LOG_PREFIX} 签到背景批次无未用候选: "
+                    f"batch={page_attempt}/{CHECKIN_BACKGROUND_PAGE_ATTEMPTS}"
                 )
             except Exception as e:
                 logger.warning(
@@ -781,7 +783,8 @@ class CheckinArtworkMixin:
                 return None
         else:
             logger.info(
-                f"{LOG_PREFIX} 签到背景连续 {CHECKIN_BACKGROUND_PAGE_ATTEMPTS} 页无可用竖向作品"
+                f"{LOG_PREFIX} 签到背景候选补取已结束: "
+                f"batch_count={CHECKIN_BACKGROUND_PAGE_ATTEMPTS} result=no_portrait_candidate"
             )
             return None
 
@@ -824,7 +827,7 @@ class CheckinArtworkMixin:
                     return None
                 if not claimed:
                     logger.debug(
-                        f"{LOG_PREFIX} 签到背景跳过\uff1a作品 {illust_id} 已被其他签到占用"
+                        f"{LOG_PREFIX} 签到背景候选已跳过: reason=usage_conflict illust_id={illust_id}"
                     )
                     continue
             title = illust.get("title", "无标题")
@@ -927,7 +930,7 @@ class CheckinArtworkMixin:
                 feature="checkin_pending",
             )
             logger.debug(
-                f"{LOG_PREFIX} 签到背景占用已释放: "
+                f"{LOG_PREFIX} 签到背景占用释放调用已完成: "
                 f"source={source_key.partition(':')[0] or 'unknown'} "
                 f"illust_id={illust_id}"
             )
