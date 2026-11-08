@@ -498,6 +498,68 @@ async def test_delivery_state_controls_charge_pending_and_file_lifetime(
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("forward_transport", ["file", "astrbot"])
+@pytest.mark.parametrize("requested,available,node_sizes", [
+    (1, 1, [1]), (9, 9, [9]), (10, 10, [9, 1]), (20, 20, [9, 9, 2]),
+    (10, 9, [9]),
+])
+async def test_forward_groups_images_without_losing_titles_or_charging_by_node(
+    tmp_path, forward_transport, requested, available, node_sizes
+):
+    import base64
+    from types import SimpleNamespace
+    from PIL import Image
+    from astrbot.core.platform.sources.aiocqhttp.aiocqhttp_message_event import AiocqhttpMessageEvent
+
+    paths = [tmp_path / f"image-{i}.png" for i in range(1, available + 1)]
+    for i, path in enumerate(paths):
+        Image.new("RGB", (8, 8), (i, 0, 0)).save(path)
+    expected_files = [
+        "base64://" + base64.b64encode(path.read_bytes()).decode()
+        if forward_transport == "astrbot" else path.resolve().as_uri()
+        for path in paths
+    ]
+    harness = _SearchFlowHarness(illusts=[_illust(i) for i in range(1, available + 1)])
+    harness.config.update(max_count=20, forward_transport=forward_transport)
+    harness._forward_threshold = lambda: 0
+    harness._fetch_source_candidates = AsyncMock(side_effect=[
+        (harness.illusts, available, "lolicon:random"), RuntimeError("source unavailable"),
+    ])
+    harness.checkin_store, _ = _settle_store()
+    harness.downloader = SimpleNamespace(download_for_send=AsyncMock(
+        side_effect=[(str(path), "original", path.stat().st_size) for path in paths]
+    ))
+    event = _FlowEvent(platform="aiocqhttp")
+    event.get_group_id = lambda: "456"
+    event.bot = SimpleNamespace(call_action=AsyncMock(return_value={"message_id": 123}))
+    if forward_transport == "astrbot":
+        framework_sender = getattr(AiocqhttpMessageEvent, "_send", None) or AiocqhttpMessageEvent.send_message
+
+        async def framework_send(chain):
+            if isinstance(chain, list):
+                await framework_sender(
+                    event.bot, SimpleNamespace(chain=chain), is_group=True, session_id="456"
+                )
+            else:
+                event.sent.append(chain)
+        event.send = framework_send
+    await _run_search(harness, event, str(requested))
+    event.bot.call_action.assert_awaited_once()
+    assert event.bot.call_action.await_args.args == ("send_group_forward_msg",)
+    nodes = event.bot.call_action.await_args.kwargs["messages"]
+    assert [sum(part["type"] == "image" for part in node["data"]["content"]) for node in nodes] == node_sizes
+    contents = [part for node in nodes for part in node["data"]["content"]]
+    for i, file in enumerate(expected_files):
+        assert contents[2 * i] == {"type": "text", "data": {"text": f"🎨 t{i + 1} (ID: {i + 1})"}}
+        assert contents[2 * i + 1] == {"type": "image", "data": {"file": file}}
+    assert len(contents) == 2 * available + (requested > available)
+    if requested > available:
+        assert contents[-1]["type"] == "text" and "少 1 张" in contents[-1]["data"]["text"]
+    harness.checkin_store.spend_coins.assert_awaited_once_with(user_id="10001", cost=20 * available)
+    assert all(not path.exists() for path in paths)
+
+
+@pytest.mark.asyncio
 async def test_mixed_single_batch_charges_success_and_timeout_but_not_build_failure(tmp_path):
     from PIL import Image
     from astrbot_plugin_get_px.pixiv.downloader import ImageDownloader

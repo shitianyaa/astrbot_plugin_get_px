@@ -125,6 +125,8 @@ Pages 后端规则写入配置；`image_index.sqlite3` 仅为黑名单保存辅�
 
 `send_once()` 在 aiocqhttp 且事件存在 bot 时直接调用已有客户端的 call_action()，不另建连接。单图调用 send_group_msg/send_private_msg，合并转发调用 send_group_forward_msg/send_private_forward_msg，保留 self_id 路由。默认 file URI；构建或提交明确报文件不存在、权限不足、ENOENT/copyfile 等读取问题时，记录本次异常和 file → base64 切换，再重建同一消息尝试一次。第二次失败也独立记录；发送超时优先分类，绝不触发换编码。其他平台继续使用框架链路。
 
+合并构造将成功下载图片按每节点最多 9 张分组，节点内依次放置每张标题／ID和图片。所有节点仍一次提交为一条转发，缺图说明附加在最后节点；实际图片集合用于回执、去重、费用和清理，不以节点数计费，不拆分成多次发送。
+
 搜索开始固定 `forward_transport=file/astrbot`，仅合并发送时传给 `send_once()`：file 为上述原始 OneBot 链路；astrbot 使用 `event.chain_result([Nodes])` 与 `event.send()`，由框架编码图片为 base64。直发／签到卡未传此覆盖，仍为原自动策略；Tool 的发送方式只决定是否合并，不覆盖配置链路。框架发送不接入 file 回退或内容拆分，构建期取消仍为 `DeliveryNotSubmitted`，`event.send()` 内的编码／提交失败保守归为未知或超时，沿用结算和文件保护，不另发一遍。
 
 `onebot_image_transport` 已从 schema 和配置映射移除，真实 AstrBot 加载时按 schema 先裁剪旧键，运行时不依赖其存在。`_cleanup_retired_transport_config()` 只处理未经框架裁剪的残留配置（例如直接传入 dict），删除后尝试保存，保存失败恢复原值；不承担框架裁剪前的迁移，也不能恢复已被裁剪的值。

@@ -136,6 +136,7 @@ Tool 领域测试覆盖 48 字符标签边界、短名称原样透传、非法�
 ### 合并转发链路对比
 
 - `python -m pytest -q tests/test_delivery.py tests/test_p_coin_cost.py tests/test_image_tools.py tests/test_config_upgrade.py`：真实框架发送方法（`send_message()`／旧源码 `_send()`）与 Node/Nodes 编码到替代 OneBot 客户端，覆盖 file/astrbot、群聊/私聊、单图不受影响、配置保存重载与请求中固定、结算/文件保护/未知不补发。不代表真实 QQ 送达。
+- 合并打包领域场景覆盖 1／9／10／20 张的节点分组、两链路图文顺序与实际图片内容、缺图提示并入末节点及按图片数结算；多节点仍仅提交一次。两张图的既有回执场景继续覆盖同节点多图的去重占用和文件清理。
 - 手工保持相同数量与画质，将 `forward_transport` 分别设为 `file`／`astrbot` 并保存重载，用 `/p 标签 2` 对比；确保 `forward_threshold=1`，或让 Tool 显式选 `send_mode="forward"`。
 - 核对日志 `send_mode=forward transport=file/astrbot duration_ms=...`；耗时只代表发送调用返回，不能推断用户已经收到。已提交的慢请求不要换链路补发，下一条新消息再测试。
 

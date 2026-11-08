@@ -212,8 +212,10 @@ async def test_tool_send_mode_routes_without_changing_config_or_resending(
             for call in calls
         )
         if forward:
-            assert len(calls[0].kwargs["messages"]) == 2
-            image = calls[0].kwargs["messages"][0]["data"]["content"][1]
+            assert len(calls[0].kwargs["messages"]) == 1
+            content = calls[0].kwargs["messages"][0]["data"]["content"]
+            assert [part["type"] for part in content] == ["text", "image", "text", "image"]
+            image = content[1]
         else:
             image = calls[0].kwargs["message"][1]
         framework = forward and forward_transport == "astrbot"

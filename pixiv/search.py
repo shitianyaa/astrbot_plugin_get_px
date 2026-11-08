@@ -21,6 +21,7 @@ DEFAULT_IMAGE_SIZE_LIMIT_MB = 10.0
 SEARCH_BATCH_SIZE = 20
 SEARCH_BATCH_ATTEMPTS = 3
 SEARCH_DOWNLOAD_ATTEMPTS = 20
+FORWARD_IMAGES_PER_NODE = 9
 
 
 def _search_quality_label(value: object) -> str:
@@ -553,33 +554,24 @@ class SearchMixin:
                 # AstrBot 的 Node.uin 是字符串，且部分平台的 self_id 不是数字。
                 self_id = "0" if raw_self_id is None else str(raw_self_id)
                 nodes = Nodes([])
-                for illust, path, _actual_q, _file_size in downloaded:
-                    title = illust.get("title", "无标题")
-                    illust_id = illust.get("id", "?")
-                    content = [
-                        Plain(f"🎨 {title} (ID: {illust_id})"),
-                        Image.fromFileSystem(path),
-                    ]
-                    nodes.nodes.append(
-                        Node(
-                            uin=self_id,
-                            name="Pixiv",
-                            content=content,
-                        )
-                    )
-                # 如果有下载失败的图片，在合并消息末尾提示
+                # 多图共用节点，减少协议端逐节点生成消息的次数。
+                for start in range(0, len(downloaded), FORWARD_IMAGES_PER_NODE):
+                    content = []
+                    for illust, path, _actual_q, _file_size in downloaded[
+                        start:start + FORWARD_IMAGES_PER_NODE
+                    ]:
+                        title = illust.get("title", "无标题")
+                        illust_id = illust.get("id", "?")
+                        content.extend([
+                            Plain(f"🎨 {title} (ID: {illust_id})"),
+                            Image.fromFileSystem(path),
+                        ])
+                    nodes.nodes.append(Node(uin=self_id, name="Pixiv", content=content))
+                # 缺图说明并入最后节点，不再为纯文本多建一个节点。
                 failed_count = count - len(downloaded)
                 if failed_count > 0:
-                    nodes.nodes.append(
-                        Node(
-                            uin=self_id,
-                            name="Pixiv",
-                            content=[
-                                Plain(
-                                    f"⚠️ 少 {failed_count} 张符合画质和大小限制的可用图片，已跳过"
-                                )
-                            ],
-                        )
+                    nodes.nodes[-1].content.append(
+                        Plain(f"⚠️ 少 {failed_count} 张符合画质和大小限制的可用图片，已跳过")
                     )
                 await deliver_images(
                     [nodes], downloaded, context="send_mode=forward",
