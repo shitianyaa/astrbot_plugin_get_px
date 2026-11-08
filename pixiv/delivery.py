@@ -182,12 +182,18 @@ def _is_file_read_error(error: Exception) -> bool:
     )
 
 
-async def send_once(event, content: list, *, context: str) -> DeliveryStatus:
-    """路径读取失败才换编码；超时按已发送结算，不重复提交。"""
+async def send_once(
+    event, content: list, *, context: str, forward_transport: str = "file"
+) -> DeliveryStatus:
+    """合并可选框架链路；直传仅文件读取失败换编码，未知送达不重发。"""
     started = time.monotonic()
     direct = (
         getattr(event, "get_platform_name", lambda: "")() == "aiocqhttp"
         and getattr(event, "bot", None) is not None
+        and not (
+            forward_transport == "astrbot"
+            and any(isinstance(item, (Node, Nodes)) for item in content)
+        )
     )
     transport = "file" if direct else "astrbot"
     while True:

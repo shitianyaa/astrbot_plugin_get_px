@@ -88,6 +88,16 @@
         },
         "hint": "成功下载的图片数量严格大于此值时以合并转发发送。设为 0 时始终合并转发；设为 1 时超过 1 张才合并转发。仅 aiocqhttp 平台支持合并转发，其他平台会自动逐条发送。"
       },
+      "forward_transport": {
+        "description": "合并转发发送链路",
+        "type": "string",
+        "default": "file",
+        "options": [
+          "file",
+          "astrbot"
+        ],
+        "hint": "仅 OneBot 合并转发生效：file 使用本地文件直传，明确文件读取失败时回退 base64；astrbot 使用框架 Node/Nodes，由框架将图片编码为 base64，可用于对比耗时。默认 file，保存并重载后生效；不影响逐张直发或签到卡。两种链路均不在超时或送达未知后换链路补发。"
+      },
       "auto_trigger_enabled": {
         "description": "自然语言自动触发",
         "type": "bool",

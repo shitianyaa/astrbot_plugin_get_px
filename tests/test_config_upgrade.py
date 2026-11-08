@@ -66,9 +66,12 @@ async def test_v3_8_0_grouped_config_survives_framework_load_save_and_reload(tmp
     assert config["content_dedupe"][LEGACY_KEYS[0]] == []
     assert config["content_dedupe"][VERSION_KEY] == 1
     config["pixiv_source"]["preferred_image_source"] = "Pixiv"
+    config["pixiv_source"]["forward_transport"] = "astrbot"
     config.save_config()
     reloaded = AstrBotConfig(config_path=str(path), schema=deepcopy(SCHEMA))
     assert reloaded["pixiv_source"]["preferred_image_source"] == "Pixiv"
+    plugin.config = reloaded
+    assert plugin._cfg_str("forward_transport", "file") == "astrbot"
     assert reloaded["content_dedupe"][LEGACY_KEYS[0]] == []
     from group_safety import CONFIG_KEY
     reloaded["content_dedupe"][CONFIG_KEY] = [{"__template_key": "safety_group", "name": "新分组", "sessions": ["qq:GroupMessage:10001"], "allow_r18": True, "custom_terms": ["人工词"]}]
@@ -110,6 +113,8 @@ def test_new_install_has_grouped_defaults_without_retired_keys(tmp_path):
     assert config["content_dedupe"][LEGACY_KEYS[1]] == []
     assert config["runtime"]["request_timeout"] == 30.0
     assert config["pixiv_source"]["preferred_image_source"] == "Lolicon"
+    assert config["pixiv_source"]["forward_transport"] == "file"
+    assert SCHEMA["pixiv_source"]["items"]["forward_transport"]["options"] == ["file", "astrbot"]
     assert SCHEMA["pixiv_source"]["items"]["preferred_image_source"]["options"] == ["Lolicon", "Pixiv"]
 
 

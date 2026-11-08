@@ -15,6 +15,7 @@
 | `image_quality` | `enum` | `original` | `original`/`large`/`medium`；固定所选画质，超限／不可用时换作品 |
 | `auto_downgrade_original_mb` | `float` | `10.0` | 图片大小上限（MiB），适用于所选画质，范围 0–25；0 关闭软上限；保留旧键并沿用已有数值 |
 | `forward_threshold` | `int` | `1` | 下载张数严格大于此值时合并转发（仅 aiocqhttp）；0 始终合并，范围 0–20 |
+| `forward_transport` | `string` | `file` | OneBot 合并链路：`file` 本地文件直传，`astrbot` 框架 Node/Nodes base64；不影响逐张直发或签到卡 |
 | `auto_trigger_enabled` | `bool` | `false` | 群内自然语言（「来份/张图」）自动触发发图 |
 
 `preferred_image_source` 保存并重载后生效，普通发图、签到背景与日历背景共用请求顺序。Lolicon 有标签时搜索、无标签时随机；Pixiv 有标签时搜索、无标签时推荐。无 Pixiv token 时直接使用 Lolicon；两源均失败或无结果时按各入口现有失败路径处理。单张候选被过滤、去重或下载失败不直接触发换源；普通发图耗尽本批可用候选后按相同优先级补取，请求失败或空结果时仍可回退另一源；有效缓存及已保存背景继续复用，不因切换优先级强制重选。无效选项记录日志并使用默认 Lolicon 优先。
@@ -30,6 +31,8 @@ Lolicon 补取是重新随机请求，不支持 offset 或 continuation，不更
 Lolicon 请求地址固定为 `https://api.lolicon.app/setu/v2`。旧 `lolicon_api_url` 从 schema 删除，由 AstrBot 加载时裁剪；简单 dict 中的残留值也不参与请求，旧自定义地址和留空停用不再生效。图片反代 origin 配置仍只代理图片，不代理 API。
 
 OneBot 发图默认使用本地 `file:///` 路径；仅在明确文件读取失败时，将同一条消息回退到 base64 编码重试一次，超时不回退、不重发。base64 是图片编码，与 AstrBot 4.27.3 的 OneBot 默认发图编码相同；回退仍直接调用 OneBot，不额外尝试 AstrBot 框架发送。file 发送正常返回但没有有效 `message_id` 时仍扣费，并保留图片 10 分钟供协议端读取，不重发。旧 `onebot_image_transport`（顶层及 `pixiv_source` 内）由 AstrBot 在加载时按 schema 裁剪；插件不依赖旧键，也不能恢复框架已裁剪的值。发送异常仅记日志，详见 [OneBot 图片发送](../../README.md#onebot-图片发送)。
+
+`forward_transport` 保存并重载后生效，每次搜索开始固定链路，无效值记录日志并按 `file` 处理。仅 `/p`、自然语言及 Tool 的 OneBot 合并转发使用：`file` 沿用原始 OneBot 接口和文件读取失败时的 base64 回退；`astrbot` 通过 `event.send(Node/Nodes)` 让框架编码图片，不在失败后切 file 或拆分补发。两者保持相同画质、发送结果结算及未知文件保护；框架正常返回按 confirmed 清理，超时／未知／提交期间取消保守保留文件 10 分钟。日志 `transport` 和 `duration_ms` 可对照发送调用耗时，无法保证实际送达速度。
 
 ## 2. 图片筛选与去重（`content_dedupe`）
 

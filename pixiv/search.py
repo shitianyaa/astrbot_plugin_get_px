@@ -255,9 +255,9 @@ class SearchMixin:
     async def _execute_search(
         self, event: AstrMessageEvent, tag: str, count_str: str, *,
         tool: bool = False, result: SearchResult | None = None,
-        selection_deadline: float | None = None,
+        selection_deadline: float | None = None, send_mode: str = "auto",
     ) -> SearchResult:
-        """执行一次取图；Tool 与命令只在余额预检和展示上不同。"""
+        """执行一次取图；Tool 可覆盖本次发送方式，复用命令的消费规则。"""
         result = result if result is not None else SearchResult(1)
         sender_id = str(event.get_sender_id() or "")
         unit_cost = self._p_unit_cost()
@@ -265,6 +265,14 @@ class SearchMixin:
         wallet = getattr(self, "checkin_store", None)
         charging = charge_requested and wallet is not None
         forward_threshold = self._forward_threshold()
+        forward_transport = self._cfg_str("forward_transport", "file")
+        if forward_transport not in ("file", "astrbot"):
+            logger.warning(f"{LOG_PREFIX} 合并转发链路配置无效，使用默认链路: forward_transport=file")
+            forward_transport = "file"
+        if tool and send_mode == "single":
+            forward_threshold = MAX_IMAGE_COUNT
+        elif tool and send_mode == "forward":
+            forward_threshold = 0
         # 频率限制
         wait = self._check_rate_limit(event.get_sender_id())
         if wait > 0:
@@ -363,7 +371,9 @@ class SearchMixin:
         deadline: float | None = selection_deadline
         failure_message = "❌ 图片源请求失败或无结果，换个标签试试"
 
-        async def deliver_images(content, images, *, context: str) -> None:
+        async def deliver_images(
+            content, images, *, context: str, forward_transport: str = "file"
+        ) -> None:
             """按实际提交阶段维护计费、去重占用和文件读取窗口。"""
             ids = {str(illust["id"]) for illust, *_ in images if illust.get("id")}
 
@@ -373,7 +383,9 @@ class SearchMixin:
                     retained_paths.update(path for _, path, *_ in images)
 
             try:
-                status = await send_once(event, content, context=context)
+                status = await send_once(
+                    event, content, context=context, forward_transport=forward_transport
+                )
             except DeliveryNotSubmitted:
                 raise
             except asyncio.CancelledError:
@@ -569,7 +581,10 @@ class SearchMixin:
                             ],
                         )
                     )
-                await deliver_images([nodes], downloaded, context="send_mode=forward")
+                await deliver_images(
+                    [nodes], downloaded, context="send_mode=forward",
+                    forward_transport=forward_transport,
+                )
             else:
                 for illust, path, actual_q, file_size in downloaded:
                     illust_id = illust.get("id", "?")

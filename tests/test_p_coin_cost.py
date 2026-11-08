@@ -381,12 +381,16 @@ def test_retired_transport_config_is_removed_with_save_rollback(save_fails):
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("forward", [False, True])
+@pytest.mark.parametrize("forward,forward_transport", [
+    (False, "file"), (True, "file"), (True, "astrbot"),
+])
 @pytest.mark.parametrize("outcome", [
     "confirmed", "failed", "timed_out", "protocol_timeout", "unknown", "cancelled",
     "empty_receipt", "build_cancelled",
 ])
-async def test_delivery_state_controls_charge_pending_and_file_lifetime(tmp_path, forward, outcome):
+async def test_delivery_state_controls_charge_pending_and_file_lifetime(
+    tmp_path, forward, forward_transport, outcome
+):
     import asyncio
     from PIL import Image
     from astrbot_plugin_get_px.pixiv.downloader import ImageDownloader
@@ -398,18 +402,39 @@ async def test_delivery_state_controls_charge_pending_and_file_lifetime(tmp_path
         Image.new("RGB", (8, 8), "blue").save(path)
     harness = _SearchFlowHarness(illusts=[_illust(i) for i in range(1, count + 1)])
     harness._forward_threshold = lambda: 0 if forward else 1
+    harness.config["forward_transport"] = forward_transport
     harness._dedupe_days_cfg = 1
     harness.checkin_store, _ = _settle_store()
     index = ImageIndexStore(tmp_path, retention_days=1)
     harness.image_index = index
     downloader = ImageDownloader(temp_dir=tmp_path)
-    downloader.download_for_send = AsyncMock(
-        side_effect=[(str(path), "original", path.stat().st_size) for path in paths]
-    )
+    download_paths = iter(paths)
+
+    async def download(*args, **kwargs):
+        harness.config["forward_transport"] = "file" if forward_transport == "astrbot" else "astrbot"
+        path = next(download_paths)
+        return str(path), "original", path.stat().st_size
+
+    downloader.download_for_send = AsyncMock(side_effect=download)
     harness.downloader = downloader
     event = _FlowEvent(platform="aiocqhttp")
     event.get_group_id = lambda: "456"
     event.bot = Mock(call_action=AsyncMock(return_value={"message_id": 123}))
+    framework = forward_transport == "astrbot"
+    if framework:
+        from types import SimpleNamespace
+        from astrbot.core.platform.sources.aiocqhttp.aiocqhttp_message_event import AiocqhttpMessageEvent
+
+        framework_sender = getattr(AiocqhttpMessageEvent, "_send", None) or AiocqhttpMessageEvent.send_message
+
+        async def framework_send(chain):
+            if isinstance(chain, list):
+                await framework_sender(
+                    event.bot, SimpleNamespace(chain=chain), is_group=True, session_id="456"
+                )
+            else:
+                event.sent.append(chain)
+        event.send = framework_send
     if outcome == "timed_out":
         event.bot.call_action.side_effect = TimeoutError()
     elif outcome == "protocol_timeout":
@@ -431,7 +456,12 @@ async def test_delivery_state_controls_charge_pending_and_file_lifetime(tmp_path
             )
         if outcome in ("failed", "build_cancelled"):
             error = asyncio.CancelledError() if outcome == "build_cancelled" else ValueError("invalid payload")
-            with patch("astrbot_plugin_get_px.pixiv.delivery._onebot_request", side_effect=error):
+            builder_patch = (
+                patch.object(event, "chain_result", side_effect=error)
+                if framework
+                else patch("astrbot_plugin_get_px.pixiv.delivery._onebot_request", side_effect=error)
+            )
+            with builder_patch:
                 if outcome == "failed":
                     await _run_search(harness, event, str(count))
                 else:
@@ -447,14 +477,18 @@ async def test_delivery_state_controls_charge_pending_and_file_lifetime(tmp_path
             await _run_search(harness, event, str(count))
         held = await index.get_used_illust_ids(scope, "lolicon:random")
         assert held == (set() if outcome in ("failed", "build_cancelled") else ids)
-        uncertain = outcome in ("empty_receipt", "timed_out", "protocol_timeout", "unknown", "cancelled")
+        uncertain = outcome in ("timed_out", "protocol_timeout", "unknown", "cancelled") or (
+            outcome == "empty_receipt" and not framework
+        )
         assert all(path.exists() is uncertain for path in paths)
         assert len(downloader._cleanup_tasks) == (count if uncertain else 0)
         if outcome in ("confirmed", "empty_receipt", "timed_out", "protocol_timeout"):
             args, params = event.bot.call_action.await_args
             assert args == ("send_group_forward_msg" if forward else "send_group_msg",)
             segments = params["messages"][0]["data"]["content"] if forward else params["message"]
-            assert segments[1]["data"]["file"] == paths[0].resolve().as_uri()
+            file = segments[1]["data"]["file"]
+            assert file.startswith("base64://") if framework else file == paths[0].resolve().as_uri()
+            assert event.bot.call_action.await_count == 1
             harness.checkin_store.spend_coins.assert_awaited_once_with(user_id="10001", cost=20 * count)
         else:
             harness.checkin_store.spend_coins.assert_not_awaited()

@@ -12,6 +12,9 @@ from ..pixiv.constants import MAX_IMAGE_COUNT
 from ..pixiv.search_result import SearchResult
 
 
+MAX_TOOL_TAG_LENGTH = 48
+
+
 class ImageToolService:
     """请求内幂等与生命周期；不保存图片或另起后台取图。"""
 
@@ -58,17 +61,20 @@ class ImageToolService:
         return event
 
     async def image(self, context, args):
-        if not set(args).issubset({"tag", "count"}):
-            raise ValueError("取图参数只支持标签和数量")
+        if not set(args).issubset({"tag", "count", "send_mode"}):
+            raise ValueError("取图参数只支持标签、数量和发送方式")
         tag, count = args.get("tag", ""), args.get("count", 1)
+        send_mode = args.get("send_mode", "auto")
         if (
             not isinstance(tag, str)
-            or len(tag) > 128
+            or len(tag) > MAX_TOOL_TAG_LENGTH
             or any(ord(char) < 32 for char in tag)
         ):
             raise ValueError("标签必须为不含控制字符的短文本")
         if type(count) is not int or count < 1 or count > MAX_IMAGE_COUNT:
             raise ValueError("数量必须为范围内的正整数")
+        if not isinstance(send_mode, str) or send_mode not in ("auto", "single", "forward"):
+            raise ValueError("发送方式必须为 auto、single 或 forward")
         event = self._event(context)
         # 先校验会话，不能给缺失 UMO 的请求默认全局放行。
         normalize_session(event.unified_msg_origin)
@@ -101,6 +107,7 @@ class ImageToolService:
                 tool=True,
                 result=outcome,
                 selection_deadline=deadline,
+                send_mode=send_mode,
             )
         except asyncio.CancelledError:
             outcome.interrupted = True
@@ -161,20 +168,26 @@ class GetPxImageTool(FunctionTool):
     def __init__(self, service):
         super().__init__(
             name="get_px_image",
-            description="仅在用户明确要图片时向当前聊天取图。只填标签和数量；模糊复数通常3张、可选2，明确数量优先。遵循插件安全与费用配置，不自动重试或补发。正常费用不向聊天报告。",
+            description="仅在用户明确要图片时向当前聊天取图。标签只取用户所需角色名或关键词，可换成确定的单一语言名称，不擅自加作品名、括号说明、画风或其他条件。模糊复数通常3张、可选2，明确数量优先。可自行选择直发或合并，用户指定优先，少量优先直发。遵循插件安全与费用配置，不自动重试或补发。正常费用不向聊天报告。",
             parameters={
                 "type": "object",
                 "properties": {
                     "tag": {
                         "type": "string",
-                        "description": "作品标签，空串为随机",
-                        "maxLength": 128,
+                        "description": "用户所需的短标签，最多48字符；角色可用原名或一个确定的译名，不拼多语言别名，不擅自扩写。空串为随机。",
+                        "maxLength": MAX_TOOL_TAG_LENGTH,
                     },
                     "count": {
                         "type": "integer",
                         "minimum": 1,
                         "maximum": MAX_IMAGE_COUNT,
                         "default": 1,
+                    },
+                    "send_mode": {
+                        "type": "string",
+                        "enum": ["auto", "single", "forward"],
+                        "default": "auto",
+                        "description": "single逐张直发；forward合并转发（仅OneBot，其他平台逐张直发）；auto或省略沿用配置阈值。用户指定优先，否则自行选择，少量图片优先single，多图需收纳可forward。只影响本次调用；提交后不得换方式补发。",
                     },
                 },
                 "additionalProperties": False,

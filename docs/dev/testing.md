@@ -81,7 +81,9 @@ python scripts/ci/check_plugin_lifecycle.py \
 
 `python -m pytest -q tests/test_image_tools.py tests/test_p_coin_cost.py` 验证共享消费边界，不锁 Skill 台词。真实本机执行器测试含工具超时、提交中取消、重复取消时等待事务结算；网络与 QQ 消息发送在测试侧替代，不能宣称真实图片送达。
 
-上线前另验证当前人格／会话的工具允许列表、插件停用／重载、Skill 发现与读取、模型一次调用完整数量、正常不报账单、余额缩减及未知送达不重试。随包 Skill 本地核对 v4.24.1 起支持；当前 `>=4.16` 只保留插件基础兼容声明，真实旧版本整链尚未测试。框架工具结果预览或自定义人格提示可能展示数值，插件不修改这些全局设置。
+Tool 领域测试覆盖 48 字符标签边界、短名称原样透传、非法发送方式在消费前拒绝、auto/single/forward 到实际 OneBot action 的路由、非 OneBot 不合并、配置不变，以及换发送方式的重复调用不重发；结算和未知送达仍按共享规则。
+
+上线前另验证当前人格／会话的工具允许列表、插件停用／重载、Skill 发现与读取、模型一次调用完整数量、角色名翻译不擅自扩写、发送方式遵循用户指定或合理自选、正常不报账单、余额缩减及未知送达不重试。随包 Skill 本地核对 v4.24.1 起支持；当前 `>=4.16` 只保留插件基础兼容声明，真实旧版本整链尚未测试。框架工具结果预览或自定义人格提示可能展示数值，插件不修改这些全局设置。
 
 ## T2I 回归
 
@@ -130,6 +132,12 @@ python scripts/ci/check_plugin_lifecycle.py \
 ## 回归场景
 
 修改以下部分时，建议运行对应回归场景：
+
+### 合并转发链路对比
+
+- `python -m pytest -q tests/test_delivery.py tests/test_p_coin_cost.py tests/test_image_tools.py tests/test_config_upgrade.py`：真实框架发送方法（`send_message()`／旧源码 `_send()`）与 Node/Nodes 编码到替代 OneBot 客户端，覆盖 file/astrbot、群聊/私聊、单图不受影响、配置保存重载与请求中固定、结算/文件保护/未知不补发。不代表真实 QQ 送达。
+- 手工保持相同数量与画质，将 `forward_transport` 分别设为 `file`／`astrbot` 并保存重载，用 `/p 标签 2` 对比；确保 `forward_threshold=1`，或让 Tool 显式选 `send_mode="forward"`。
+- 核对日志 `send_mode=forward transport=file/astrbot duration_ms=...`；耗时只代表发送调用返回，不能推断用户已经收到。已提交的慢请求不要换链路补发，下一条新消息再测试。
 
 ### 下载器改动
 

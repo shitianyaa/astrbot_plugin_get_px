@@ -56,6 +56,8 @@ skills/get-px-image/
 
 Tool 只回文本事实，图片由插件发送，不返回图片内容或路径。`event` 内只记录本次执行结果和在途状态，重复调用不再消费；追加取图需新事件，不为框架合并 follow-up 猜测授权。选图截止时间受实际 Tool 超时约束，余留一半（最多30秒）给发送/结算/清理；不后台化、不改全局超时。取消继续传播，已开始的结算/清理通过持有并等待的任务完成，保持回执、占用和文件保护期。
 
+Tool 标签硬上限 48 字符，超长拒绝、不截断；说明约束模型只选用户原名或一个确定的译名，不擅自扩写，不在代码中识别角色或猜译名。`send_mode=auto/single/forward` 只覆盖当前 Tool 调用的发送选择：省略／auto 沿用执行开始固定的阈值，single 不合并，forward 合并但仍受 OneBot 平台限制。不会写回配置，命令仍按原阈值；换方式的重复调用也受同事件幂等保护，未知送达不补发。
+
 随包 Skill 原位发现，只有说明，无脚本或配置复制。安全仍由固定 `ContentSafetyPolicy` 执行，Skill 不是权限边界。最低插件版本声明不变，随包 Skill 能力需框架支持（本地核对 v4.24.1 起），真实旧版端到端仍未验证。
 
 ## 签到指令入口
@@ -122,6 +124,8 @@ Pages 后端规则写入配置；`image_index.sqlite3` 仅为黑名单保存辅�
 ## OneBot 图片发送
 
 `send_once()` 在 aiocqhttp 且事件存在 bot 时直接调用已有客户端的 call_action()，不另建连接。单图调用 send_group_msg/send_private_msg，合并转发调用 send_group_forward_msg/send_private_forward_msg，保留 self_id 路由。默认 file URI；构建或提交明确报文件不存在、权限不足、ENOENT/copyfile 等读取问题时，记录本次异常和 file → base64 切换，再重建同一消息尝试一次。第二次失败也独立记录；发送超时优先分类，绝不触发换编码。其他平台继续使用框架链路。
+
+搜索开始固定 `forward_transport=file/astrbot`，仅合并发送时传给 `send_once()`：file 为上述原始 OneBot 链路；astrbot 使用 `event.chain_result([Nodes])` 与 `event.send()`，由框架编码图片为 base64。直发／签到卡未传此覆盖，仍为原自动策略；Tool 的发送方式只决定是否合并，不覆盖配置链路。框架发送不接入 file 回退或内容拆分，构建期取消仍为 `DeliveryNotSubmitted`，`event.send()` 内的编码／提交失败保守归为未知或超时，沿用结算和文件保护，不另发一遍。
 
 `onebot_image_transport` 已从 schema 和配置映射移除，真实 AstrBot 加载时按 schema 先裁剪旧键，运行时不依赖其存在。`_cleanup_retired_transport_config()` 只处理未经框架裁剪的残留配置（例如直接传入 dict），删除后尝试保存，保存失败恢复原值；不承担框架裁剪前的迁移，也不能恢复已被裁剪的值。
 

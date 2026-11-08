@@ -128,6 +128,10 @@ async def test_context_does_not_create_profiles_and_failures_are_not_free(tmp_pa
         {"count": 0},
         {"tag": []},
         {"tag": "a\nb"},
+        {"tag": "字" * 49},
+        {"send_mode": True},
+        {"send_mode": []},
+        {"send_mode": "unknown"},
         {"r18": True},
         {"target": "other"},
     ],
@@ -139,6 +143,90 @@ async def test_tool_rejects_invalid_parameters_before_consumption(tmp_path, args
         await service.image(context, args)
     assert not context.context.event.extras
     plugin.downloader.download_for_send.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("tag", ["洛茜", "ロージー", "Rosie", "名" * 48, ""])
+async def test_tool_passes_short_names_without_expanding_or_truncating(tmp_path, tag):
+    plugin, context, _ = await setup_flow(tmp_path, items=1)
+    plugin._fetch_source_candidates = AsyncMock(wraps=plugin._fetch_source_candidates)
+    with patch(
+        "astrbot_plugin_get_px.pixiv.search.send_once",
+        AsyncMock(return_value=DeliveryStatus.CONFIRMED),
+    ):
+        summary = await ImageToolService(plugin).image(context, {"tag": tag})
+    assert summary["delivery"] == {"confirmed": 1}
+    assert plugin._fetch_source_candidates.await_args.args[1] == tag
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("forward_transport", ["file", "astrbot"])
+@pytest.mark.parametrize(
+    "send_mode,threshold,platform,forward",
+    [
+        (None, 1, "aiocqhttp", True),
+        ("auto", 2, "aiocqhttp", False),
+        ("single", 0, "aiocqhttp", False),
+        ("forward", 20, "aiocqhttp", True),
+        ("forward", 0, "unsupported", False),
+    ],
+)
+async def test_tool_send_mode_routes_without_changing_config_or_resending(
+    tmp_path, send_mode, threshold, platform, forward, forward_transport
+):
+    from astrbot.core.platform.sources.aiocqhttp.aiocqhttp_message_event import AiocqhttpMessageEvent
+    from PIL import Image as PILImage
+
+    plugin, context, paths = await setup_flow(tmp_path, items=2)
+    for path in paths:
+        PILImage.new("RGB", (8, 8)).save(path)
+    plugin.config["forward_transport"] = forward_transport
+    plugin._forward_threshold = lambda: threshold
+    event = context.context.event
+    event.platform = platform
+    event.get_group_id = lambda: "1"
+    event.get_self_id = lambda: "10000"
+    event.bot.call_action = AsyncMock(return_value={"message_id": 1})
+    if platform == "aiocqhttp":
+        framework_sender = getattr(AiocqhttpMessageEvent, "_send", None) or AiocqhttpMessageEvent.send_message
+
+        async def framework_send(chain):
+            await framework_sender(
+                event.bot, SimpleNamespace(chain=chain), is_group=True, session_id="1"
+            )
+        event.send = AsyncMock(side_effect=framework_send)
+    service = ImageToolService(plugin)
+    args = {"count": 2}
+    if send_mode is not None:
+        args["send_mode"] = send_mode
+    summary = await service.image(context, args)
+    assert summary["delivery"] == {"confirmed": 2}
+    assert summary["settlement"] == "completed"
+    assert (await plugin.checkin_store.find_profile("10001")).coins == 60
+    assert plugin._forward_threshold() == threshold
+    if platform == "aiocqhttp":
+        calls = event.bot.call_action.await_args_list
+        assert len(calls) == (1 if forward else 2)
+        assert all(
+            call.args == ("send_group_forward_msg" if forward else "send_group_msg",)
+            for call in calls
+        )
+        if forward:
+            assert len(calls[0].kwargs["messages"]) == 2
+            image = calls[0].kwargs["messages"][0]["data"]["content"][1]
+        else:
+            image = calls[0].kwargs["message"][1]
+        framework = forward and forward_transport == "astrbot"
+        assert image["data"]["file"].startswith("base64://" if framework else "file://")
+        assert event.send.await_count == (1 if framework else 0)
+        assert not event.sent
+    else:
+        event.bot.call_action.assert_not_awaited()
+        assert len(event.sent) == 2
+    repeated = await service.image(context, {"send_mode": "single"})
+    assert repeated["duplicate_call"]
+    assert plugin.downloader.download_for_send.await_count == 2
+    assert plugin._forward_threshold() == threshold
 
 
 @pytest.mark.asyncio
@@ -188,10 +276,11 @@ async def test_actual_framework_executor_returns_text_and_does_not_resend(tmp_pa
         outputs = [
             r
             async for r in FunctionToolExecutor.execute(
-                GetPxImageTool(service), wrapper, count=1
+                GetPxImageTool(service), wrapper, count=1, send_mode="single"
             )
         ]
     assert sender.await_count == 1 and not context.context.event.sent
+    assert sender.await_args.kwargs["context"].startswith("send_mode=single")
     assert len(outputs) == 1
     summary = json.loads(outputs[0].content[0].text)
     assert summary["delivery"] == {"confirmed": 1}
@@ -205,17 +294,23 @@ async def test_actual_framework_executor_returns_text_and_does_not_resend(tmp_pa
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("send_mode", ["single", "forward"])
 @pytest.mark.parametrize(
     "status", [DeliveryStatus.TIMED_OUT, DeliveryStatus.UNKNOWN, DeliveryStatus.FAILED]
 )
 async def test_uncertain_or_failed_delivery_keeps_existing_charge_rules(
-    tmp_path, status
+    tmp_path, status, send_mode
 ):
     plugin, context, _ = await setup_flow(tmp_path, coins=100, items=1)
     with patch(
         "astrbot_plugin_get_px.pixiv.search.send_once", AsyncMock(return_value=status)
-    ):
-        summary = await ImageToolService(plugin).image(context, {})
+    ) as sender:
+        service = ImageToolService(plugin)
+        summary = await service.image(context, {"send_mode": send_mode})
+        repeated = await service.image(
+            context, {"send_mode": "forward" if send_mode == "single" else "single"}
+        )
+    assert repeated["duplicate_call"] and sender.await_count == 1
     charged = status is DeliveryStatus.TIMED_OUT
     assert (await plugin.checkin_store.find_profile("10001")).coins == (
         80 if charged else 100

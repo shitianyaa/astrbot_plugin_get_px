@@ -134,8 +134,9 @@ async def test_real_posix_mkstemp_image_becomes_cross_user_readable(tmp_path):
 @pytest.mark.asyncio
 @pytest.mark.parametrize("group", [True, False])
 @pytest.mark.parametrize("forward", [True, False])
+@pytest.mark.parametrize("forward_transport", ["file", "astrbot"])
 @pytest.mark.parametrize("outcome", ["success", "empty", "timeout", "file_error", "retry_error", "rejected"])
-async def test_automatic_onebot_delivery(tmp_path, group, forward, outcome):
+async def test_automatic_onebot_delivery(tmp_path, group, forward, forward_transport, outcome):
     from PIL import Image as PILImage
     from astrbot.api.message_components import Image, Plain, Node, Nodes
 
@@ -157,31 +158,46 @@ async def test_automatic_onebot_delivery(tmp_path, group, forward, outcome):
         get_sender_id=lambda: "789", get_self_id=lambda: "123",
         bot=SimpleNamespace(call_action=AsyncMock(side_effect=side_effect)), send=AsyncMock(),
     )
+    framework = forward and forward_transport == "astrbot"
+    if framework:
+        from astrbot.core.platform.sources.aiocqhttp.aiocqhttp_message_event import AiocqhttpMessageEvent
+
+        event.chain_result = lambda chain: SimpleNamespace(chain=chain)
+
+        framework_sender = getattr(AiocqhttpMessageEvent, "_send", None) or AiocqhttpMessageEvent.send_message
+
+        async def framework_send(chain):
+            await framework_sender(
+                event.bot, chain, is_group=group, session_id="456" if group else "789"
+            )
+        event.send.side_effect = framework_send
     expected = (DeliveryStatus.TIMED_OUT if outcome == "timeout" else
-                DeliveryStatus.ACCEPTED if outcome == "empty" else
-                DeliveryStatus.UNKNOWN if outcome in ("retry_error", "rejected") else DeliveryStatus.CONFIRMED)
+                DeliveryStatus.ACCEPTED if outcome == "empty" and not framework else
+                DeliveryStatus.UNKNOWN if outcome in ("retry_error", "rejected") or (framework and outcome == "file_error") else DeliveryStatus.CONFIRMED)
     with patch("astrbot_plugin_get_px.pixiv.delivery.logger") as logger:
-        assert await send_once(event, content, context="test") is expected
-    event.send.assert_not_awaited()
-    assert event.bot.call_action.await_count == (2 if outcome in ("file_error", "retry_error") else 1)
+        assert await send_once(event, content, context="test", forward_transport=forward_transport) is expected
+    assert event.send.await_count == (1 if framework else 0)
+    assert event.bot.call_action.await_count == (2 if not framework and outcome in ("file_error", "retry_error") else 1)
     action = ("send_group" if group else "send_private") + ("_forward_msg" if forward else "_msg")
     for index, call in enumerate(event.bot.call_action.await_args_list):
         args, params = call
         assert args == (action,)
-        assert params["self_id"] == "123"
+        if not framework:
+            assert params["self_id"] == "123"
         segments = params["messages"] if forward else params["message"]
         if forward:
             segments = segments[0]["data"]["content"]
         file = segments[1]["data"]["file"]
-        assert file.startswith("base64://") if index else file == path.resolve().as_uri()
-    if outcome == "empty":
+        assert file.startswith("base64://") if framework or index else file == path.resolve().as_uri()
+    if outcome == "empty" and not framework:
         info = " ".join(call.args[0] for call in logger.info.call_args_list)
         assert "delivery_status=accepted" in info
         assert "delivery_status=confirmed" not in info
     logs = " ".join(call.args[0] for call in logger.warning.call_args_list)
     if outcome in ("file_error", "retry_error"):
-        assert "ENOENT copyfile" in logs and "to_transport=base64" in logs
-    if outcome == "retry_error":
+        assert "ENOENT copyfile" in logs
+        assert ("to_transport=base64" in logs) is not framework
+    if outcome == "retry_error" and not framework:
         assert "base64 rejected" in logs and "transport=base64" in logs
     if outcome == "timeout":
         assert "1200" in logs and "sendMsg" in logs and "delivery_status=timed_out retry=no" in logs
