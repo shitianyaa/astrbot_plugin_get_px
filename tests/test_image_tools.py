@@ -182,7 +182,8 @@ async def test_tool_passes_short_names_without_expanding_or_truncating(tmp_path,
 @pytest.mark.parametrize(
     "send_mode,threshold,platform,forward",
     [
-        (None, 1, "aiocqhttp", True),
+        (None, 0, "aiocqhttp", False),
+        ("auto", 1, "aiocqhttp", True),
         ("auto", 2, "aiocqhttp", False),
         ("single", 0, "aiocqhttp", False),
         ("forward", 20, "aiocqhttp", True),

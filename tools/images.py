@@ -65,7 +65,7 @@ class ImageToolService:
         if not set(args).issubset({"tag", "count", "send_mode"} | SELECTION_PARAMETERS):
             raise ValueError("取图参数不受支持")
         tag, count = args.get("tag", ""), args.get("count", 1)
-        send_mode = args.get("send_mode", "auto")
+        send_mode = args.get("send_mode", "single")
         if (
             not isinstance(tag, str)
             or len(tag) > MAX_TOOL_TAG_LENGTH
@@ -171,7 +171,7 @@ class GetPxImageTool(FunctionTool):
     def __init__(self, service):
         super().__init__(
             name="get_px_image",
-            description="仅在用户明确要图片时向当前聊天取图。标签只取用户所需角色名或关键词，可换成确定的单一语言名称，不擅自加作品名、括号说明、画风或其他条件。模糊复数通常3张、可选2，明确数量优先。可自行选择直发或合并，用户指定优先，少量优先直发。可按用户要求筛选方向、比例、最小像素宽高与文件大小，不擅自添加筛选。找不够不放宽条件；只读尺寸，不识别图片。遵循插件安全与费用配置，不自动重试或补发。正常费用不向聊天报告。",
+            description="仅在用户明确要图片时向当前聊天取图。标签只取用户所需角色名或关键词，可换成确定的单一语言名称，不擅自加作品名、括号说明、画风或其他条件。模糊复数通常3张、可选2，明确数量优先。默认逐张直发，仅用户明确要求合并转发时选择forward，不因数量多而自行合并。可按用户要求筛选方向、比例、最小像素宽高与文件大小，不擅自添加筛选。找不够不放宽条件；只读尺寸，不识别图片。遵循插件安全与费用配置，不自动重试或补发。正常费用不向聊天报告。",
             parameters={
                 "type": "object",
                 "properties": {
@@ -189,8 +189,8 @@ class GetPxImageTool(FunctionTool):
                     "send_mode": {
                         "type": "string",
                         "enum": ["auto", "single", "forward"],
-                        "default": "auto",
-                        "description": "single逐张直发；forward合并转发（仅OneBot，其他平台逐张直发）；auto或省略沿用配置阈值。用户指定优先，否则自行选择，少量图片优先single，多图需收纳可forward。只影响本次调用；提交后不得换方式补发。",
+                        "default": "single",
+                        "description": "single或省略逐张直发；仅用户明确要求合并转发时选择forward（仅OneBot，其他平台逐张直发），不因数量多而自行合并。auto沿用配置阈值，仅用户明确要求按配置自动选择时使用。只影响本次调用；提交后不得换方式补发。",
                     },
                     "orientation": {
                         "type": "string",

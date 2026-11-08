@@ -25,7 +25,7 @@
 
 Lolicon 补取是重新随机请求，不支持 offset 或 continuation，不更新分页索引，结果可能重复或少于指定数量。Pixiv 在请求内保留真实下一页参数，空页有 continuation 时可继续，没有下一页或位置重复时不绕回首页；跨请求仍以已有数字 offset 定位，推荐接口的完整多参数位置只保留在请求内。签到配置标签时，Pixiv 搜索使用竖图粗筛并继续本地 0.60–0.90 精筛；无标签推荐不套用搜索参数，日历仍只请求一轮。两源异常响应、缺失列表及无效候选字段明确拒绝，不作为合法空结果；未增加 AI 配置或额外 429 重试。
 
-原生 `get_px_image` 可附加请求级 `orientation`、`aspect_ratio`／`ratio_tolerance`、`min_width`／`min_height` 和 `max_size_mib`，不新增持久配置或改变六组 schema。`max_size_mib` 与 `auto_downgrade_original_mb` 的有效正数上限取较小值，管理员0时仍可收紧到本次上限，50MiB硬上限不变；省略沿用配置。像素要求按实际发送文件核对，不升降画质；方向／比例／像素筛选后有限补取，不放宽。参数定义与示例见 [模型原生取图](../../README.md#模型原生取图)。这些参数不扩展 `/p` 签名，也不影响签到／日历。
+原生 `get_px_image` 可附加请求级 `orientation`、`aspect_ratio`／`ratio_tolerance`、`min_width`／`min_height` 和 `max_size_mib`，不新增持久配置或改变六组 schema。`max_size_mib` 与 `auto_downgrade_original_mb` 的有效正数上限取较小值，管理员0时仍可收紧到本次上限，50MiB硬上限不变；省略沿用配置。像素要求按实际发送文件核对，不升降画质；方向／比例／像素筛选后有限补取，不放宽。参数定义与示例见 [模型原生取图](../../README.md#模型原生取图)。这些参数不扩展 `/p` 签名，也不影响签到／日历。Tool默认／省略`send_mode`为`single`，不应用合并阈值；只有显式`auto`才使用`forward_threshold`。模型仅用户明确要求合并时选择`forward`，明确要求按配置自动选择时才用`auto`，`/p`仍沿用原阈值。
 
 旧阈值不会自动改为 10 MiB；使用原图且频繁因大小限制换图时，建议手动将上限调整为 10 MiB。
 
