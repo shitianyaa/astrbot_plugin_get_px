@@ -191,10 +191,15 @@ class SearchMixin:
                 state.failure_reason = getattr(exc, "reason", "request_failed")
                 if source == "pixiv":
                     state.next_params[source_key] = None
+                diagnostic = ""
+                if isinstance(exc, SourceResponseError) and exc.reason == "invalid_continuation":
+                    diagnostic = (
+                        f" continuation_detail={exc.detail} continuation_field={exc.field}"
+                    )
                 logger.warning(
                     f"{LOG_PREFIX} 图片源请求失败，继续尝试可用来源: "
                     f"source={source} tag_configured={'yes' if tag else 'no'} "
-                    f"reason={state.failure_reason} error_type={type(exc).__name__}"
+                    f"reason={state.failure_reason} error_type={type(exc).__name__}{diagnostic}"
                 )
         return [], 0, source_key
 

@@ -272,6 +272,14 @@ python -m pytest -q tests/test_checkin_cache.py tests/test_checkin_calendar.py t
 
 Pixiv 标签签到搜索另验证通过已有认证请求入口发送竖图粗筛，并保留本地 0.60–0.90 精筛；新增签到入口到客户端的显式 `portrait=True` 接线测试，改变 Lolicon 比例字符串不影响 Pixiv 粗筛，其他调用方默认关闭。推荐和日历不套用该搜索参数。跨请求推荐 continuation 仍只有数字 offset 持久化，不把请求内测试作为完整断点续读的证据。
 
+#### 续页拒绝诊断
+
+运行 `python -m pytest -q tests/test_continuation_diagnostics.py`。覆盖地址类型／语法、协议、主机、路径、fragment、query语法、未知参数、重复标量、数字／布尔／静态值、列表格式／数值／索引和空参数的拒绝分类，验证日志不泄露地址、用户信息、搜索词、未知参数名或参数值，并维持原两源回退行为。
+
+`reason=invalid_continuation` 不变；`continuation_detail` 给出固定类别，`continuation_field` 仅输出已知字段名（列表统一为 `viewed`／`bookmark_illust_ids`），未知字段为 `unknown`，无相关字段为 `none`。这些字段只解释为什么拒绝，不放宽允许范围，也不记录完整 `next_url`。
+
+线上定位时先确认插件已加载对应代码并重载，再提供带这两个新增字段的单条日志。2026-11-08线上报告的通用拒绝码未能在本机复现：随后通过10808代理登录一次、取3批推荐（72／65／68条），含72／100／100项viewed均由提交 `19e541f` 解析成功。此次有限样本不能证明线上问题消失；不根据未复现结果调整白名单。
+
 #### 真实图源验证记录（2026-11-07）
 
 通过本地 HTTP 代理执行 9 项小范围实测：Pixiv refresh token 登录、推荐首批和下一页、标签搜索首批和下一页、竖图标签搜索、Lolicon 普通分级竖图取样，以及两源各一张 `large` 下载。全部通过，图片均经 Pillow 格式和完整性校验；凭据仅在内存中读取，未写入脚本或报告。

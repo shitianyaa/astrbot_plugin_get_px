@@ -10,8 +10,10 @@ from urllib.parse import parse_qs, urlsplit
 class SourceResponseError(RuntimeError):
     """Safe source failure without upstream response text."""
 
-    def __init__(self, reason: str):
+    def __init__(self, reason: str, *, detail: str = "none", field: str = "none"):
         self.reason = reason
+        self.detail = detail
+        self.field = field
         super().__init__(f"图片源响应不可用: reason={reason}")
 
 
@@ -80,17 +82,24 @@ def parse_continuation(
     if value is None or value == "":
         return None
     if not isinstance(value, str):
-        raise SourceResponseError("invalid_continuation")
+        raise SourceResponseError("invalid_continuation", detail="value_type")
     path = "/v1/illust/recommended" if recommended else "/v1/search/illust"
+    detail, field = "url_syntax", "none"
     try:
         url = urlsplit(value)
-        if (
-            url.scheme != "https"
-            or url.netloc != "app-api.pixiv.net"
-            or url.path != path
-            or url.fragment
-        ):
+        detail = "scheme"
+        if url.scheme != "https":
             raise ValueError
+        detail = "host"
+        if url.netloc != "app-api.pixiv.net":
+            raise ValueError
+        detail = "path"
+        if url.path != path:
+            raise ValueError
+        detail = "fragment"
+        if url.fragment:
+            raise ValueError
+        detail = "query_syntax"
         query = parse_qs(url.query, keep_blank_values=True, strict_parsing=True)
         numbers = {"offset"}
         booleans = set()
@@ -110,35 +119,48 @@ def parse_continuation(
             if recommended and (
                 re.fullmatch(r"viewed\[\d*\]", key) or key == "bookmark_illust_ids[]"
             ):
+                field = "bookmark_illust_ids" if key == "bookmark_illust_ids[]" else "viewed"
+                detail = "list_number"
                 ids = [value for raw in values for value in raw.split(",")]
                 if any(not value.isdecimal() or int(value) <= 0 for value in ids):
                     raise ValueError
                 if key == "bookmark_illust_ids[]":
                     params["bookmark_illust_ids"] = [int(value) for value in ids]
                 elif key == "viewed[]":
+                    detail = "list_format"
                     if any("," in raw for raw in values):
                         raise ValueError
                     params["viewed"] = [int(value) for value in ids]
                 else:
+                    detail = "list_format"
                     if len(values) != 1 or "," in values[0]:
                         raise ValueError
+                    detail = "list_index"
                     index = int(key[7:-1])
                     if len(ids) != 1 or index in indexed_viewed:
                         raise ValueError
                     indexed_viewed[index] = int(ids[0])
                 continue
+            detail, field = "unknown_parameter", "unknown"
+            if key not in numbers | booleans | static:
+                raise ValueError
+            # Only fixed allowlisted names reach diagnostics; never echo an unknown key.
+            detail, field = "scalar_count", key
             if len(values) != 1:
                 raise ValueError
             raw = values[0]
             if key in numbers:
+                detail = "number"
                 if not raw.isdecimal() or (key != "offset" and int(raw) <= 0):
                     raise ValueError
                 params[key] = int(raw)
             elif key in booleans:
+                detail = "boolean"
                 if raw not in {"true", "false", "0", "1"}:
                     raise ValueError
                 params[key] = raw in {"true", "1"}
             elif key in static:
+                detail = "static_value"
                 expected = {
                     "word": {tag},
                     "search_target": {"partial_match_for_tags"},
@@ -153,6 +175,7 @@ def parse_continuation(
             else:
                 raise ValueError
         if indexed_viewed:
+            detail, field = "list_indices", "viewed"
             if "viewed" in params or sorted(indexed_viewed) != list(
                 range(len(indexed_viewed))
             ):
@@ -161,10 +184,11 @@ def parse_continuation(
                 indexed_viewed[index] for index in range(len(indexed_viewed))
             ]
         if not params:
+            detail, field = "empty_parameters", "none"
             raise ValueError
         return params
     except (ValueError, UnicodeError) as exc:
-        raise SourceResponseError("invalid_continuation") from exc
+        raise SourceResponseError("invalid_continuation", detail=detail, field=field) from exc
 
 
 def parse_pixiv_page(payload: object, *, recommended: bool, tag: str = "") -> PixivPage:
