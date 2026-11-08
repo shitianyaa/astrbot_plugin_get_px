@@ -44,7 +44,7 @@ from astrbot.api.star import Context, Star
 from astrbot.core.star.filter.command import GreedyStr
 from astrbot.core.star.star_tools import StarTools
 from .checkin import CheckinStore, UnversionedCheckinDatabaseError
-from .group_safety import GroupSafetyService
+from .group_safety import SessionSafetyService
 from .checkin.application import CheckinApplicationMixin
 from .checkin.artwork import CheckinArtworkMixin
 from .checkin.cache import CheckinCardCache
@@ -109,7 +109,7 @@ class GetPxPlugin(
     def __init__(self, context: Context, config: AstrBotConfig):
         super().__init__(context, config)
         self.config = config
-        self.group_safety_service = GroupSafetyService(config, log_prefix=LOG_PREFIX)
+        self.safety_service = SessionSafetyService(config, log_prefix=LOG_PREFIX)
         self.client: PixivClient | None = None
         self.lolicon_client: LoliconClient | None = None
         self.downloader = ImageDownloader(
@@ -169,26 +169,18 @@ class GetPxPlugin(
             f"{LOG_PREFIX} 签到数据库{database_action}: "
             f"version={PLUGIN_VERSION} database=checkin.sqlite3"
         )
-        policy_migration_succeeded = await self.group_safety_service.initialize(
-            self.checkin_store
+        await self.safety_service.initialize(
+            self.checkin_store, self.image_index, self.data_dir
         )
-        if policy_migration_succeeded:
-            try:
-                convergence = await asyncio.to_thread(
-                    self.checkin_store.converge_legacy_group_policy_schema
-                )
-                logger.info(
-                    f"{LOG_PREFIX} 会话策略数据库收敛完成: "
-                    f"from_version={convergence['from_version']} "
-                    f"to_version={convergence['to_version']} "
-                    f"backup_path={convergence['backup_path'] or '-'}"
-                )
-            except Exception as exc:
-                logger.error(
-                    f"{LOG_PREFIX} 会话策略数据库收敛失败，终止插件加载: "
-                    f"error_type={type(exc).__name__}"
-                )
-                raise
+        # 归档及新配置保存成功后，才收敛旧 schema3；不删除历史表。
+        convergence = await asyncio.to_thread(
+            self.checkin_store.converge_legacy_group_policy_schema
+        )
+        logger.info(
+            f"{LOG_PREFIX} 安全策略初始化完成: "
+            f"from_version={convergence['from_version']} "
+            f"to_version={convergence['to_version']}"
+        )
         self.checkin_cache = CheckinCardCache(self.data_dir / "checkin_card_cache")
         self._omnidraw_hint_logged = False
         if self._cfg_bool("checkin_omnidraw_link_enabled", False):

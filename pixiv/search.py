@@ -278,8 +278,8 @@ class SearchMixin:
                 yield event.plain_result(balance_error)
                 return
 
-        policy = await self._content_safety_policy(event)
         try:
+            policy = await self._content_safety_policy(event)
             if tag and await self._blocked_query_term(tag, policy):
                 yield event.plain_result("🚫 搜索词不符合内容安全要求")
                 return

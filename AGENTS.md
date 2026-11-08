@@ -38,6 +38,7 @@
 - **下载规范**: `downloader.download()` 为异步方法，需传 `url`、`timeout`，返回 `(path, size)` 元组，调用方必须显式解包。
 - **配置读取**: 统一通过 `main.py` 封装方法读取，严禁散落调用 `self.context.get_config(...)`；schema 仅保留六个正式分组，配置升级基线为已完成迁移的 v3.8.0，兼容边界见 `docs/project/configuration.md`。
 - **数据库迁移**: SQLite schema 变更必须在 `checkin/schema.py` 提供版本迁移与备份机制。
+- **安全规则**: 全局词、单一匹配模式、全局作品 ID 与完整 UMO 命名分组统一存配置；无内置词，分组 R18 默认关闭。旧键只作备份桥接，核对归档后停用；不恢复旧策略，不回退旧库作有效规则。
 - **主题自包含**: 签到卡主题生成必须内联 CSS/base64 字体，严禁外部网络 URL。
 - **日志规范**: logger 统一通过 `from astrbot.api import logger` 导入，禁止使用 Python 内置 `logging` 或以其作为导入失败的回退；独立测试如需替代日志器，在测试侧注入 mock。日志使用“中文结果描述 + `snake_case=value` 字段”，区分调用返回、已受理、送达未知和已确认，不将待核对状态写成成功；禁止直接拼接凭据、完整响应或任意异常原文，禁止吞掉异常。
 
@@ -57,5 +58,7 @@
 python -m json.tool _conf_schema.json
 python -m compileall -q main.py checkin pixiv plugin_api tests
 node --check pages/pluginCenter/app.js
+node --check pages/pluginCenter/safety.mjs
+node --test tests/js/safety.test.mjs
 python -m pytest -v tests
 ```

@@ -25,24 +25,6 @@ class FrozenImageIndexStore(ImageIndexStore):
 
 
 class ImageIndexStoreTest(unittest.IsolatedAsyncioTestCase):
-    async def test_safety_snapshot_uses_one_read_for_both_global_rule_sets(self):
-        with tempfile.TemporaryDirectory() as tmp:
-            store = FrozenImageIndexStore(tmp)
-            try:
-                await store.add_safety_term("Blocked Word")
-                await store.add_blacklist_illust(illust_id="123")
-                statements = []
-                store._get_conn().set_trace_callback(statements.append)
-                terms, ids = await store.get_safety_snapshot()
-                self.assertEqual(terms, {"blockedword"})
-                self.assertEqual(ids, {"123"})
-                reads = [sql for sql in statements if sql.lstrip().upper().startswith("SELECT")]
-                self.assertEqual(len(reads), 1)
-                store._get_conn().set_trace_callback(None)
-                await store.remove_safety_term("Blocked Word")
-                self.assertEqual(await store.get_safety_snapshot(), (set(), {"123"}))
-            finally:
-                store.close()
 
     async def test_claim_usage_is_atomic_and_release_allows_reclaim(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -148,8 +130,7 @@ class ImageIndexStoreTest(unittest.IsolatedAsyncioTestCase):
                 await store.cleanup_old_days()
 
                 self.assertTrue(added)
-                self.assertTrue(await store.is_blacklisted("300"))
-                self.assertEqual(await store.get_blacklisted_illust_ids(), {"300"})
+                self.assertEqual([record["illust_id"] for record in await store.list_blacklist_illusts()], ["300"])
             finally:
                 store.close()
 
@@ -184,33 +165,10 @@ class ImageIndexStoreTest(unittest.IsolatedAsyncioTestCase):
 
                 self.assertIsNotNone(removed)
                 self.assertEqual(removed["illust_id"], "301")
-                self.assertFalse(await store.is_blacklisted("301"))
-                self.assertEqual(await store.get_blacklisted_illust_ids(), {"302"})
+                self.assertEqual([record["illust_id"] for record in await store.list_blacklist_illusts()], ["302"])
             finally:
                 store.close()
 
-    async def test_custom_safety_terms_and_blacklist_reason_persist(self):
-        with tempfile.TemporaryDirectory() as tmp:
-            store = FrozenImageIndexStore(tmp)
-            try:
-                self.assertTrue(
-                    await store.add_safety_term("危险主题", added_by="admin")
-                )
-                self.assertIn(
-                    "危险主题".casefold(), await store.get_custom_safety_terms()
-                )
-                await store.add_blacklist_illust(
-                    illust_id="350",
-                    reason="构图不适合",
-                    added_by="web",
-                )
-                record = (await store.list_blacklist_illusts())[0]
-                self.assertEqual(record["reason"], "构图不适合")
-                self.assertEqual(record["added_by"], "web")
-                self.assertTrue(await store.remove_safety_term("危险主题"))
-                self.assertEqual(await store.get_custom_safety_terms(), set())
-            finally:
-                store.close()
 
     async def test_blacklist_thumbnail_is_copied_and_removed(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -228,7 +186,7 @@ class ImageIndexStoreTest(unittest.IsolatedAsyncioTestCase):
                     thumb_id=thumb_id,
                 )
 
-                thumb_path = await store.get_blacklist_thumbnail_path("400")
+                thumb_path = (await store.get_blacklist_thumbnail_paths(["400"]))["400"]
 
                 self.assertEqual(thumb_id, "400.jpg")
                 self.assertIsNotNone(thumb_path)
@@ -238,7 +196,7 @@ class ImageIndexStoreTest(unittest.IsolatedAsyncioTestCase):
 
                 self.assertIsNotNone(removed)
                 self.assertEqual(removed["thumb_id"], "400.jpg")
-                self.assertIsNone(await store.get_blacklist_thumbnail_path("400"))
+                self.assertEqual(await store.get_blacklist_thumbnail_paths(["400"]), {})
             finally:
                 store.close()
 

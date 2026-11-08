@@ -432,9 +432,9 @@ class CheckinShopMixin:
         cache = getattr(self, "checkin_cache", None)
         card_path: Path | None = None
         refresh_tier = self._configured_checkin_render_tier()
-        policy = await self._content_safety_policy(event)
         try:
-            policy, safety_identity = await self._checkin_safety_snapshot(policy)
+            policy = await self._content_safety_policy(event)
+            safety_identity = policy.cache_identity()
             background = await self._prepare_checkin_background(
                 event,
                 record,

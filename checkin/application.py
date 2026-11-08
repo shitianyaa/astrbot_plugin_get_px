@@ -19,11 +19,9 @@ from .themes import get_checkin_theme
 try:
     from ..pixiv.delivery import DeliveryNotSubmitted, DeliveryStatus, send_once
     from ..pixiv.downloader import cleanup
-    from ..pixiv.safety import normalized_builtin_terms
 except ImportError:  # Direct imports used by the test suite.
     from pixiv.delivery import DeliveryNotSubmitted, DeliveryStatus, send_once
     from pixiv.downloader import cleanup
-    from pixiv.safety import normalized_builtin_terms
 
 
 LOG_PREFIX = "[GetPx]"
@@ -197,9 +195,9 @@ class CheckinApplicationMixin:
         )
         stage = "background_selection"
         cache_hit = False
-        policy = await self._content_safety_policy(event)
         try:
-            policy, safety_identity = await self._checkin_safety_snapshot(policy)
+            policy = await self._content_safety_policy(event)
+            safety_identity = policy.cache_identity()
             if result.duplicate:
                 background = self._checkin_background_from_record(record)
                 variant_key = self._checkin_card_cache_key(
@@ -837,37 +835,6 @@ class CheckinApplicationMixin:
             template_version=get_checkin_theme(record.theme_id).template_version,
             view_model=view_model,
         )
-
-    async def _checkin_safety_identity(self, policy) -> dict[str, object]:
-        """Fingerprint effective rules rather than the requesting conversation."""
-        if policy.builtin_terms_enabled and self.image_index is not None:
-            try:
-                terms, blacklisted_ids = await self.image_index.get_safety_snapshot()
-            except Exception as exc:
-                logger.error(
-                    f"{LOG_PREFIX} 读取签到安全规则快照失败: error_type={type(exc).__name__}"
-                )
-                raise RuntimeError("内容安全服务暂不可用") from exc
-            terms = set(terms) | set(normalized_builtin_terms())
-        else:
-            terms = await self._safety_terms(policy)
-            blacklisted_ids = await self._blacklisted_illust_ids(policy)
-        return {
-            "general_only_enabled": policy.general_only_enabled,
-            "terms": sorted(terms),
-            "blacklisted_illust_ids": sorted(blacklisted_ids),
-        }
-
-    async def _checkin_safety_snapshot(self, policy):
-        identity = await self._checkin_safety_identity(policy)
-        # 固定本请求的实际列表，避免管理端改规则后选图与缓存指纹不一致。
-        snapshot = replace(
-            policy,
-            builtin_terms_enabled=False,
-            custom_terms=tuple(identity["terms"]),
-            blacklisted_illust_ids=tuple(identity["blacklisted_illust_ids"]),
-        )
-        return snapshot, identity
 
     async def _persist_checkin_render_tier(
         self,

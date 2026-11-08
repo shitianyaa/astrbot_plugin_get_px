@@ -11,9 +11,6 @@ from zoneinfo import ZoneInfo
 
 from astrbot.api import logger
 
-from .safety import normalize_safety_text
-
-
 LOG_PREFIX = "[GetPx]"
 SHANGHAI_TZ = ZoneInfo("Asia/Shanghai")
 PAGE_CURSOR_TTL_DAYS = 3
@@ -199,71 +196,13 @@ class ImageIndexStore:
             conn.rollback()
             raise
 
-    async def get_blacklisted_illust_ids(self) -> set[str]:
-        async with self._lock:
-            return await asyncio.to_thread(self._get_blacklisted_illust_ids_sync)
-
     async def list_safety_terms(self) -> list[dict[str, str]]:
         async with self._lock:
             return await asyncio.to_thread(self._list_safety_terms_sync)
 
-    async def add_safety_term(self, term: str, *, added_by: str = "web") -> bool:
-        term = str(term or "").strip()
-        normalized = normalize_safety_text(term)
-        if not normalized:
-            raise ValueError("屏蔽词不能为空")
-        if len(term) > 64:
-            raise ValueError("屏蔽词不能超过 64 个字符")
-        async with self._lock:
-            return await asyncio.to_thread(
-                self._add_safety_term_sync, term, normalized, added_by, self.now_iso()
-            )
-
-    async def remove_safety_term(self, term: str) -> bool:
-        normalized = normalize_safety_text(term)
-        if not normalized:
-            raise ValueError("屏蔽词不能为空")
-        async with self._lock:
-            return await asyncio.to_thread(self._remove_safety_term_sync, normalized)
-
-    async def get_custom_safety_terms(self) -> set[str]:
-        async with self._lock:
-            return await asyncio.to_thread(self._get_custom_safety_terms_sync)
-
-    async def get_safety_snapshot(self) -> tuple[set[str], set[str]]:
-        """Read global terms and blacklist IDs from one SQLite statement snapshot."""
-        async with self._lock:
-            return await asyncio.to_thread(self._get_safety_snapshot_sync)
-
-    def _get_safety_snapshot_sync(self) -> tuple[set[str], set[str]]:
-        rows = self._get_conn().execute(
-            "SELECT 'term' AS kind, normalized_term AS value FROM content_safety_terms "
-            "UNION ALL SELECT 'illust', illust_id FROM image_blacklist"
-        ).fetchall()
-        return (
-            {str(row["value"]) for row in rows if row["kind"] == "term"},
-            {str(row["value"]) for row in rows if row["kind"] == "illust"},
-        )
-
     async def list_blacklist_illusts(self) -> list[dict[str, Any]]:
         async with self._lock:
             return await asyncio.to_thread(self._list_blacklist_illusts_sync)
-
-    async def is_blacklisted(self, illust_id: str) -> bool:
-        illust_id = str(illust_id or "")
-        if not illust_id:
-            return False
-        async with self._lock:
-            return await asyncio.to_thread(self._is_blacklisted_sync, illust_id)
-
-    async def get_blacklist_thumbnail_path(self, illust_id: str) -> Path | None:
-        illust_id = str(illust_id or "")
-        if not illust_id:
-            return None
-        async with self._lock:
-            return await asyncio.to_thread(
-                self._get_blacklist_thumbnail_path_sync, illust_id
-            )
 
     async def get_blacklist_thumbnail_paths(
         self, illust_ids: Iterable[str]
@@ -437,16 +376,6 @@ class ImageIndexStore:
         )
         conn.execute(
             """
-            CREATE TABLE IF NOT EXISTS content_safety_terms (
-                normalized_term TEXT PRIMARY KEY,
-                term TEXT NOT NULL,
-                added_by TEXT NOT NULL DEFAULT '',
-                added_at TEXT NOT NULL
-            )
-            """
-        )
-        conn.execute(
-            """
             CREATE TABLE IF NOT EXISTS source_page_cursor (
                 scope TEXT NOT NULL,
                 source_key TEXT NOT NULL,
@@ -536,11 +465,6 @@ class ImageIndexStore:
         ).fetchall()
         return {str(row["illust_id"]) for row in rows}
 
-    def _get_blacklisted_illust_ids_sync(self) -> set[str]:
-        conn = self._get_conn()
-        rows = conn.execute("SELECT illust_id FROM image_blacklist").fetchall()
-        return {str(row["illust_id"]) for row in rows}
-
     def _list_blacklist_illusts_sync(self) -> list[dict[str, Any]]:
         conn = self._get_conn()
         rows = conn.execute(
@@ -554,6 +478,9 @@ class ImageIndexStore:
         return [dict(row) for row in rows]
 
     def _list_safety_terms_sync(self) -> list[dict[str, str]]:
+        # 仅升级归档时读取历史表；新安装不再创建数据库词表。
+        if not self._get_conn().execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='content_safety_terms'").fetchone():
+            return []
         rows = (
             self._get_conn()
             .execute(
@@ -563,61 +490,6 @@ class ImageIndexStore:
             .fetchall()
         )
         return [dict(row) for row in rows]
-
-    def _get_custom_safety_terms_sync(self) -> set[str]:
-        rows = (
-            self._get_conn()
-            .execute("SELECT normalized_term FROM content_safety_terms")
-            .fetchall()
-        )
-        return {str(row["normalized_term"]) for row in rows}
-
-    def _add_safety_term_sync(
-        self, term: str, normalized: str, added_by: str, added_at: str
-    ) -> bool:
-        cursor = self._get_conn().execute(
-            """
-            INSERT INTO content_safety_terms (normalized_term, term, added_by, added_at)
-            VALUES (?, ?, ?, ?)
-            ON CONFLICT(normalized_term) DO UPDATE SET term = excluded.term
-            """,
-            (normalized, term, added_by, added_at),
-        )
-        self._get_conn().commit()
-        return cursor.rowcount > 0
-
-    def _remove_safety_term_sync(self, normalized: str) -> bool:
-        cursor = self._get_conn().execute(
-            "DELETE FROM content_safety_terms WHERE normalized_term = ?",
-            (normalized,),
-        )
-        self._get_conn().commit()
-        return cursor.rowcount > 0
-
-    def _is_blacklisted_sync(self, illust_id: str) -> bool:
-        conn = self._get_conn()
-        row = conn.execute(
-            "SELECT 1 FROM image_blacklist WHERE illust_id = ? LIMIT 1",
-            (illust_id,),
-        ).fetchone()
-        return row is not None
-
-    def _get_blacklist_thumbnail_path_sync(self, illust_id: str) -> Path | None:
-        conn = self._get_conn()
-        row = conn.execute(
-            "SELECT thumb_id FROM image_blacklist WHERE illust_id = ? LIMIT 1",
-            (illust_id,),
-        ).fetchone()
-        if row is None:
-            return None
-        thumb_id = str(row["thumb_id"] or "")
-        if not thumb_id:
-            return None
-        path = (self._blacklist_thumb_dir / Path(thumb_id).name).resolve()
-        thumb_dir = self._blacklist_thumb_dir.resolve()
-        if thumb_dir not in path.parents:
-            return None
-        return path if path.exists() else None
 
     def _get_blacklist_thumbnail_paths_sync(
         self, illust_ids: list[str]

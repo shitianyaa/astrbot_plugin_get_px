@@ -1,0 +1,27 @@
+/* 安全页沿用管理中心的樱色与蓝色；分级标签是唯一强调元素。 */
+.safety-mode-panel select { width: 100%; margin-top: 10px; padding: 12px; border: 1px solid var(--border-blue); border-radius: var(--radius-sm); background: var(--surface); color: var(--text); font: inherit; }
+.safety-hint { color: var(--muted); font-size: 13px; line-height: 1.7; }
+.safety-group-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 260px), 1fr)); gap: 16px; margin-top: 20px; }
+.safety-group-card { display: flex; flex-direction: column; align-items: flex-start; gap: 12px; min-width: 0; padding: 22px; text-align: left; border: 1px solid var(--border-blue); border-radius: var(--radius); background: var(--surface); color: var(--text); font: inherit; cursor: pointer; }
+.safety-group-card:hover { background: var(--surface-accent); border-color: var(--secondary); }
+.safety-group-card strong { font-size: 18px; }
+.safety-group-card small { width: 100%; overflow-wrap: anywhere; color: var(--muted); }
+.safety-rating { border-radius: 6px; padding: 4px 9px; color: var(--safe); background: var(--safe-soft); font-size: 12px; }
+.safety-rating.sensitive { color: var(--warn); background: var(--warn-soft); }
+.safety-group-dialog { position: fixed; inset: 0 0 0 auto; margin: 0; width: min(100%, 520px); height: 100dvh; max-height: 100dvh; max-width: 100%; padding: 28px; border: 0; border-left: 1px solid var(--border); border-radius: 0; background: var(--surface); color: var(--text); }
+.safety-group-dialog::backdrop { background: rgb(25 40 55 / 30%); }
+.safety-group-dialog form { display: flex; flex-direction: column; gap: 12px; padding: 0; }
+.safety-group-dialog h3 { margin: 0 0 12px; }
+.safety-group-dialog .dialog-actions button[type="submit"] { background: var(--primary); color: white; border-color: var(--primary); }
+.safety-group-dialog input:not([type="checkbox"]), .safety-group-dialog textarea { width: 100%; min-width: 0; padding: 12px; border: 1px solid var(--border); border-radius: var(--radius-sm); color: var(--text); background: var(--surface); font: inherit; }
+.safety-group-dialog textarea { resize: vertical; }
+.safety-r18-toggle { display: flex; gap: 12px; padding: 16px; border: 1px solid var(--border); border-radius: var(--radius-sm); }
+.safety-r18-toggle input { flex: 0 0 auto; }
+.safety-r18-toggle span, .safety-r18-toggle small { display: block; }
+.safety-r18-toggle small { color: var(--muted); margin-top: 6px; }
+.safety-group-dialog .dialog-actions { display: flex; flex-wrap: wrap; gap: 10px; padding-top: 12px; }
+.safety-group-card:focus-visible, #keywordMatchMode:focus-visible, .safety-group-dialog :is(input, textarea, button):focus-visible { outline: 3px solid var(--secondary); outline-offset: 3px; }
+@media (max-width: 600px) { .safety-group-dialog { padding: 20px; } .safety-group-dialog .dialog-actions button { flex: 1; } }
+
+#policySearch { width: 100%; margin-top: 8px; padding: 12px; border: 1px solid var(--border); border-radius: var(--radius-sm); font: inherit; }
+#policyAddBtn { padding: 10px 16px; border: 0; border-radius: var(--radius-sm); background: var(--primary); color: white; cursor: pointer; font: inherit; }

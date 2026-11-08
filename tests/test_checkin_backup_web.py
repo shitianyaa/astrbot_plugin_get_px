@@ -13,7 +13,6 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 
 from astrbot.api.message_components import File  # noqa: E402
 from astrbot_plugin_get_px.checkin import CheckinStore  # noqa: E402
-from astrbot_plugin_get_px.checkin import dump_checkin_snapshot_json  # noqa: E402
 from astrbot_plugin_get_px.checkin.commands import (  # noqa: E402
     MAX_CHECKIN_BACKUP_BYTES,
     MAX_CHECKIN_BACKUP_FILES,
@@ -148,9 +147,11 @@ class CheckinBackupWebTest(unittest.IsolatedAsyncioTestCase):
         ):
             source = FrozenCheckinStore(src_tmp, date_key="2026-05-26")
             await source.checkin(user_id="20002", username="source", bot_name="neko")
-            snapshot_text = dump_checkin_snapshot_json(await source.export_snapshot())
+            snapshot = await source.export_snapshot()
+            snapshot_text = json.dumps({"kind": "plugin_data_export", "schema_version": 1, "plugin_name": "astrbot_plugin_get_px", "checkin": snapshot, "safety": {"safety_groups": [{"allow_r18": True}]}, "legacy_safety_archives": [{"old": "do not restore"}]})
 
             plugin = object.__new__(GetPxPlugin)
+            plugin.config = {"content_dedupe": {"safety_groups": []}}
             plugin.data_dir = Path(dst_tmp)
             plugin.checkin_store = FrozenCheckinStore(dst_tmp, date_key="2026-05-26")
             await plugin.checkin_store.checkin(
@@ -191,6 +192,8 @@ class CheckinBackupWebTest(unittest.IsolatedAsyncioTestCase):
             replaced = await plugin.checkin_store.get_profile("10001")
             self.assertEqual(imported.total_days, 1)
             self.assertEqual(replaced.total_days, 0)
+            self.assertEqual(plugin.config, {"content_dedupe": {"safety_groups": []}})
+            self.assertFalse((Path(dst_tmp) / "safety_legacy_backups").exists())
 
     async def test_web_checkin_import_rejects_old_snapshot_version(self):
         with (
