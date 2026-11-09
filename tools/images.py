@@ -136,15 +136,13 @@ class ImageToolService:
             policy = await self.plugin._content_safety_policy(event)
             cost = self.plugin._p_unit_cost()
             charging = cost > 0 and self.plugin._cfg_bool("checkin_enabled", True)
-            wallet = self.plugin.checkin_store
-            if charging and wallet is None:
-                raise ValueError("余额服务暂不可用")
-            profile = (
-                await wallet.find_profile(event.get_sender_id())
-                if wallet is not None
-                else None
-            )
-            coins = profile.coins if profile is not None else 0
+            coins = None
+            if charging:
+                wallet = self.plugin.checkin_store
+                if wallet is None:
+                    raise ValueError("余额服务暂不可用")
+                profile = await wallet.find_profile(event.get_sender_id())
+                coins = profile.coins if profile is not None else 0
             return {
                 "balance": coins,
                 "charging": charging,
@@ -161,7 +159,11 @@ class ImageToolService:
                 "forward_threshold": self.plugin._forward_threshold(),
                 "allow_r18": not policy.general_only_enabled,
                 "keyword_match_mode": policy.match_mode,
-                "guidance": "仅为当前快照，不预留金币；发送工具会再次检查。不要主动报告金额或余额，只有用户明确询问时才说明。",
+                "guidance": (
+                    "仅为当前快照，不预留金币；发送工具会再次检查。不要主动报告金额或余额，只有用户明确询问时才说明。"
+                    if charging
+                    else "当前取图免费，不读取余额、不按金币限制数量；无需核对金币即可调用取图工具，仍受数量、频率与内容安全限制。"
+                ),
             }
         finally:
             self._calls.discard(task)

@@ -110,12 +110,54 @@ async def test_context_does_not_create_profiles_and_failures_are_not_free(tmp_pa
     assert snapshot["balance"] == 0 and snapshot["affordable_count"] == 0
     assert await plugin.checkin_store.find_profile("new-user") is None
     plugin.checkin_store.find_profile = AsyncMock(side_effect=OSError("secret"))
+    snapshot = json.loads(await GetPxContextTool(service).call(context))
+    assert snapshot["message"] and "charging" not in snapshot
+    assert "secret" not in json.dumps(snapshot)
     summary = await service.image(context, {"count": 1})
     assert summary["message"] and summary["downloaded_count"] == 0
     assert "secret" not in json.dumps(summary)
     plugin.checkin_store = None
     context.context.event = Event()
+    snapshot = json.loads(await GetPxContextTool(service).call(context))
+    assert snapshot["message"] and "charging" not in snapshot
     assert (await service.image(context, {}))["downloaded_count"] == 0
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("checkin_enabled,cost", [(False, 20), (True, 0), (False, 0)])
+@pytest.mark.parametrize("wallet_present", [True, False])
+async def test_free_context_and_image_do_not_depend_on_wallet(
+    tmp_path, checkin_enabled, cost, wallet_present
+):
+    plugin, context, _ = await setup_flow(tmp_path, coins=0, items=3)
+    plugin.config.update(checkin_enabled=checkin_enabled, p_coin_cost=cost)
+    wallet = plugin.checkin_store
+    find_profile = wallet.find_profile
+    wallet.find_profile = AsyncMock(side_effect=OSError("wallet unavailable"))
+    wallet.get_profile = AsyncMock(side_effect=OSError("wallet unavailable"))
+    wallet.spend_coins = AsyncMock(side_effect=OSError("wallet unavailable"))
+    if not wallet_present:
+        plugin.checkin_store = None
+    service = ImageToolService(plugin)
+
+    snapshot = json.loads(await GetPxContextTool(service).call(context))
+    assert snapshot["charging"] is False and snapshot["unit_cost"] == 0
+    assert snapshot["balance"] is None and snapshot["affordable_count"] is None
+    assert snapshot["max_count"] == 5 and snapshot["allow_r18"] is False
+    assert not service._calls
+    with patch(
+        "astrbot_plugin_get_px.pixiv.search.send_once",
+        AsyncMock(return_value=DeliveryStatus.CONFIRMED),
+    ) as sender:
+        summary = await service.image(context, {"count": 3})
+    assert summary["effective_count"] == 3 and summary["delivery"] == {"confirmed": 3}
+    assert summary["settlement"] == "not_required"
+    assert not summary["message"] and not summary["notice"]
+    assert not context.context.event.sent and sender.await_count == 3
+    wallet.find_profile.assert_not_awaited()
+    wallet.get_profile.assert_not_awaited()
+    wallet.spend_coins.assert_not_awaited()
+    assert (await find_profile("10001")).coins == 0
 
 
 @pytest.mark.asyncio
