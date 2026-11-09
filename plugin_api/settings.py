@@ -150,20 +150,6 @@ def save_settings(plugin: Any, patch: Any) -> None:
                 raise ValueError("包含不能在此页面编辑的设置项")
             validated.setdefault(group_key, {})[key] = _validate_value(key, value, spec)
 
-    coin_patch = validated.get("checkin_basic", {})
-    if {"checkin_coin_min", "checkin_coin_max"} & coin_patch.keys():
-        specs = groups["checkin_basic"]["items"]
-        current: dict[str, Any] = {}
-        for key in ("checkin_coin_min", "checkin_coin_max"):
-            spec = specs[key]
-            current[key] = _validate_value(
-                key,
-                coin_patch.get(key, _effective(plugin, key, spec.get("default"))),
-                spec,
-            )
-        if current["checkin_coin_min"] > current["checkin_coin_max"]:
-            raise ValueError("签到基础金币下限不能大于上限；请同时修正两个范围值")
-
     config = getattr(plugin, "config", None)
     if config is None or not hasattr(config, "save_config"):
         raise RuntimeError("配置保存服务不可用")

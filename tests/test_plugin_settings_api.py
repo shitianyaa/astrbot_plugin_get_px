@@ -46,7 +46,7 @@ def test_settings_snapshot_hides_legacy_fields_and_redacts_secret():
     assert "value" not in fields["pixiv_refresh_token"]
     assert "default" not in fields["pixiv_refresh_token"]
     assert secret not in repr(result)
-    assert "checkin_affection_bonus_step_percent" in fields
+    assert "checkin_avatar_enabled" in fields
     assert "group_content_safety_policies" not in fields
     for safety_key in (
         "global_safety_terms",
@@ -95,8 +95,8 @@ def test_every_visible_grouped_schema_item_is_edited_or_delegated():
         {"content_dedupe": {"keyword_match_mode": "loose"}},
         {"content_dedupe": {"global_blacklisted_illust_ids": []}},
         {"content_dedupe": {"safety_groups": []}},
-        {"checkin_basic": {"checkin_affection_bonus_step_percent": True}},
-        {"checkin_basic": {"checkin_affection_bonus_step_percent": 26}},
+        {"checkin_basic": {"checkin_avatar_enabled": "yes"}},
+        {"content_dedupe": {"dedupe_days": 8}},
         {"checkin_basic": {"checkin_ai_greeting_timeout": float("nan")}},
         {"checkin_basic": {"checkin_greeting_mode": "invalid"}},
         {"checkin_basic": {"checkin_hitokoto_categories": ["invalid"]}},
@@ -176,25 +176,13 @@ async def test_settings_api_registers_get_and_update_without_changing_font_contr
     invalid = await client.post("/settings/update", json={"groups": {"runtime": {"_grouped_config_migrated": True}}})
     assert invalid.status_code == 400
 
-def test_coin_bounds_validate_merged_partial_patch_atomically():
-    target = plugin(Config(checkin_basic={"checkin_coin_min": 50, "checkin_coin_max": 100}))
+def test_slider_bounds_are_inclusive_and_rejected_patches_change_nothing():
+    target = plugin(Config(content_dedupe={"dedupe_days": 3}, unrelated={"keep": 1}))
     before = deepcopy(target.config)
     with pytest.raises(ValueError):
-        save_settings(target, {"checkin_basic": {"checkin_coin_min": 101, "checkin_enabled": False}})
+        save_settings(target, {"content_dedupe": {"dedupe_days": 8}, "checkin_basic": {"checkin_enabled": False}})
     assert target.config == before and target.config.saves == 0
-    save_settings(target, {"checkin_basic": {"checkin_coin_min": 100, "checkin_coin_max": 100}})
-    assert target.config["checkin_basic"]["checkin_coin_min"] == 100
-    save_settings(target, {"checkin_basic": {"checkin_coin_min": 0, "checkin_coin_max": 0}})
-    assert target.config["checkin_basic"]["checkin_coin_max"] == 0
-
-
-def test_coin_bounds_use_flat_fallback_and_bad_existing_pair_only_blocks_bound_edits():
-    flat = plugin(Config(checkin_coin_min=20, checkin_coin_max=40))
-    save_settings(flat, {"checkin_basic": {"checkin_coin_min": 30}})
-    assert flat.config["checkin_basic"]["checkin_coin_min"] == 30
-    bad = plugin(Config(checkin_basic={"checkin_coin_min": 200, "checkin_coin_max": 100}))
-    save_settings(bad, {"checkin_basic": {"checkin_enabled": False}})
-    with pytest.raises(ValueError):
-        save_settings(bad, {"checkin_basic": {"checkin_coin_max": 150}})
-    save_settings(bad, {"checkin_basic": {"checkin_coin_min": 80, "checkin_coin_max": 80}})
-    assert bad.config["checkin_basic"]["checkin_coin_min"] == 80
+    save_settings(target, {"content_dedupe": {"dedupe_days": 0}})
+    assert target.config["content_dedupe"]["dedupe_days"] == 0
+    save_settings(target, {"content_dedupe": {"dedupe_days": 7}})
+    assert target.config["content_dedupe"]["dedupe_days"] == 7

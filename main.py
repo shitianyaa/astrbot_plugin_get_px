@@ -44,7 +44,6 @@ from astrbot.api.star import Context, Star
 from astrbot.core.star.filter.command import GreedyStr
 from astrbot.core.star.star_tools import StarTools
 from .checkin import CheckinStore, UnversionedCheckinDatabaseError
-from .checkin.rules import normalize_reward_settings
 from .group_safety import SessionSafetyService
 from .tools.images import ImageToolService
 from .checkin.application import CheckinApplicationMixin
@@ -69,7 +68,7 @@ from .plugin_api import PluginWebApi
 
 LOG_PREFIX = "[GetPx]"
 PLUGIN_NAME = "astrbot_plugin_get_px"
-PLUGIN_VERSION = "v3.9.0"
+PLUGIN_VERSION = "v3.8.7"
 WEB_INTERNAL_ERROR_MESSAGE = "服务内部错误，请稍后重试"
 
 AUTO_TRIGGER_PATTERN = r"^/?(来\s*(.*?)(份|个|张|点))(.*?)(福利|色|瑟|涩|塞)?图$"
@@ -784,27 +783,6 @@ class GetPxPlugin(
                 for container, value in removed:
                     container[retired_key] = value
                 logger.warning(f"{LOG_PREFIX} 图片传输配置迁移保存失败: error_type={type(exc).__name__}")
-
-    def _checkin_reward_settings(self):
-        defaults = {
-            "coin_min": 50,
-            "coin_max": 100,
-            "streak_step_days": 7,
-            "streak_coin_bonus": 10,
-            "streak_coin_bonus_max": 50,
-            "streak_affection_bonus": 0.10,
-            "streak_affection_bonus_max": 0.50,
-        }
-        raw = {
-            suffix: self._cfg_get(f"checkin_{suffix}", default)
-            for suffix, default in defaults.items()
-        }
-        settings, invalid = normalize_reward_settings(raw)
-        warning = ",".join(invalid)
-        if warning and getattr(self, "_last_reward_config_warning", None) != warning:
-            logger.warning(f"{LOG_PREFIX} 签到奖励配置无效，使用默认值: fields={warning}")
-        self._last_reward_config_warning = warning
-        return settings
 
     def _cfg_str(self, key: str, default: str = "") -> str:
         val = self._cfg_get(key, default)

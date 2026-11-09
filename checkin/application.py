@@ -144,15 +144,6 @@ class CheckinApplicationMixin:
                 group_id=group_id,
                 group_name=group_name,
                 platform=platform,
-                affection_bonus_step_percent=(
-                    self._cfg_int("checkin_affection_bonus_step_percent", 5, 0, 25)
-                    if self._cfg_bool("checkin_affection_bonus_enabled", True)
-                    else 0
-                ),
-                affection_bonus_enabled=self._cfg_bool(
-                    "checkin_affection_bonus_enabled", True
-                ),
-                reward_settings=self._checkin_reward_settings(),
             )
         except Exception as e:
             logger.error(

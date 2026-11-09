@@ -68,15 +68,6 @@ OneBot 发图默认使用本地 `file:///` 路径；仅在明确文件读取失�
 | `checkin_bot_name` | `string` | `neko` | 签到卡片 bot 角色名 |
 | `checkin_card_quality_tier` | `enum` | `省流量` | `省流量`(960×540+medium)/`清晰`(1248×702+large)/`极致`(1728×972+large)；日历同档但尺寸分别为 1600×900／2080×1170／2880×1620；普通重复签到保持当天记录档位 |
 | `checkin_avatar_enabled` | `bool` | `true` | QQ 平台尝试在卡片显示用户头像 |
-| `checkin_affection_bonus_enabled` | `bool` | `true` | 按签到前的好感度等级应用金币加成 |
-| `checkin_affection_bonus_step_percent` | `int` | `5` | 每级金币加成比例，范围 0–25%；各等级为 0/5/10/15/20%（默认）；0 或关闭时沿用原奖励 |
-| `checkin_coin_min` | `int` | `50` | 每日基础金币下限（含），范围 0–10000 |
-| `checkin_coin_max` | `int` | `100` | 每日基础金币上限（含），范围 0–10000，必须不小于下限；两者相等时为固定奖励，支持固定 0 |
-| `checkin_streak_step_days` | `int` | `7` | 连签奖励/里程碑提示间隔，范围 1–365；不改变七日成就阈值 |
-| `checkin_streak_coin_bonus` | `int` | `10` | 每档连签金币加成，范围 0–10000 |
-| `checkin_streak_coin_bonus_max` | `int` | `50` | 连签金币累计上限，范围 0–100000；0 关闭此项 |
-| `checkin_streak_affection_bonus` | `float` | `0.10` | 每档连签好感度加成，范围 0–100 |
-| `checkin_streak_affection_bonus_max` | `float` | `0.50` | 连签好感度累计上限，范围 0–1000；0 关闭此项 |
 | `checkin_greeting_mode` | `enum` | `hitokoto` | `local`(本地事件)/`hitokoto`(一言 API)/`ai`(文本模型) |
 | `checkin_hitokoto_categories` | `list` | `["全部"]` | 一言类型多选 |
 | `checkin_ai_greeting_provider_id` | `string` | 空 | AI 问候模型，留空用当前会话模型 |

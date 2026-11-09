@@ -11,6 +11,11 @@ import sqlite3
 from .models import (
     BOOST_MULTIPLIER,
     BOOST_PRODUCTS,
+    STREAK_AFFECTION_BONUS,
+    STREAK_AFFECTION_BONUS_MAX,
+    STREAK_COIN_BONUS,
+    STREAK_COIN_BONUS_MAX,
+    STREAK_STEP_DAYS,
     BackgroundRefreshResult,
     BoostPurchaseResult,
     CheckinProfile,
@@ -19,12 +24,8 @@ from .models import (
     CoinSpendResult,
 )
 from .rules import (
-    CheckinRewardSettings,
     boost_remaining_days,
     boost_status_text,
-    checkin_affection_bonus,
-    checkin_coin_bonus,
-    deterministic_base_coins,
     daily_base_reward as _daily_base_reward,
     daily_note as _daily_note,
     is_boost_active,
@@ -206,9 +207,6 @@ class RecordStoreMixin:
         group_id: str = "",
         group_name: str = "",
         platform: str = "",
-        affection_bonus_step_percent: int = 0,
-        affection_bonus_enabled: bool = True,
-        reward_settings: CheckinRewardSettings | None = None,
     ) -> CheckinResult:
         user_id = str(user_id or "")
         if not user_id:
@@ -228,9 +226,6 @@ class RecordStoreMixin:
                 str(group_id or ""),
                 str(group_name or ""),
                 str(platform or ""),
-                affection_bonus_step_percent,
-                affection_bonus_enabled,
-                reward_settings,
             )
 
     async def purchase_boost(self, *, user_id: str, days: int) -> BoostPurchaseResult:
@@ -706,9 +701,6 @@ class RecordStoreMixin:
         group_id: str,
         group_name: str,
         platform: str,
-        affection_bonus_step_percent: int,
-        affection_bonus_enabled: bool,
-        reward_settings: CheckinRewardSettings | None = None,
     ) -> CheckinResult:
         with closing(self._connect()) as conn:
             conn.execute("BEGIN IMMEDIATE")
@@ -789,25 +781,14 @@ class RecordStoreMixin:
 
                 total_days = profile.total_days + 1
                 base_coins, base_affection = _daily_base_reward(user_id, date_key)
-                if reward_settings is not None and (
-                    reward_settings.coin_min,
-                    reward_settings.coin_max,
-                ) != (50, 100):
-                    base_coins = deterministic_base_coins(
-                        user_id,
-                        date_key,
-                        reward_settings.coin_min,
-                        reward_settings.coin_max,
-                    )
-                bonus_coins = checkin_coin_bonus(
-                    base_coins=base_coins,
-                    streak_days=streak_days,
-                    affection=profile.affection,
-                    step_percent=affection_bonus_step_percent,
-                    enabled=affection_bonus_enabled,
-                    reward_settings=reward_settings,
+                streak_steps = streak_days // STREAK_STEP_DAYS
+                bonus_coins = min(
+                    streak_steps * STREAK_COIN_BONUS, STREAK_COIN_BONUS_MAX
                 )
-                bonus_affection = checkin_affection_bonus(streak_days, reward_settings=reward_settings)
+                bonus_affection = min(
+                    streak_steps * STREAK_AFFECTION_BONUS,
+                    STREAK_AFFECTION_BONUS_MAX,
+                )
                 boost_active = is_boost_active(profile, date_key)
                 affection_reward = round(base_affection + bonus_affection, 2)
                 if boost_active:
@@ -815,14 +796,7 @@ class RecordStoreMixin:
                 coins_reward = base_coins + bonus_coins
                 new_coins = profile.coins + coins_reward
                 new_affection = round(profile.affection + affection_reward, 2)
-                interval = (reward_settings or CheckinRewardSettings()).streak_step_days
-                note = (
-                    _daily_note(user_id, date_key, streak_days)
-                    if interval == 7
-                    else _daily_note(
-                        user_id, date_key, streak_days, interval=interval
-                    )
-                )
+                note = _daily_note(user_id, date_key, streak_days)
 
                 conn.execute(
                     """

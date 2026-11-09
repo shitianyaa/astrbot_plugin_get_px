@@ -248,23 +248,6 @@
         "default": true,
         "hint": "开启后 QQ 平台会尝试在签到卡片中显示用户头像；获取失败时自动使用默认头像。"
       },
-      "checkin_affection_bonus_enabled": {
-        "description": "好感度签到金币加成",
-        "type": "bool",
-        "default": true,
-        "hint": "启用后，按本次签到前的好感度等级增加签到金币；关闭或将每级比例设为 0 时仅保留原有奖励。"
-      },
-      "checkin_affection_bonus_step_percent": {
-        "description": "好感度每级金币加成（%）",
-        "type": "int",
-        "default": 5,
-        "slider": {
-          "min": 0,
-          "max": 25,
-          "step": 1
-        },
-        "hint": "排斥/陌生无加成；熟悉、亲近、信赖、挚友分别按每级配置比例的 1、2、3、4 倍加成，最多 100%。"
-      },
       "checkin_greeting_mode": {
         "description": "签到问候来源",
         "type": "string",
@@ -354,83 +337,6 @@
         "type": "string",
         "default": "",
         "hint": "管理员配置的本地背景图片路径。推荐 3:4 竖向图片，如 1200x1600 或 750x1000；作品相框使用 object-fit: contain 完整显示，不裁切；支持 jpg/png/webp。"
-      },
-      "checkin_coin_min": {
-        "description": "签到基础金币下限",
-        "type": "int",
-        "default": 50,
-        "slider": {
-          "min": 0,
-          "max": 10000,
-          "step": 1
-        },
-        "hint": "签到基础金币下限，含此值。"
-      },
-      "checkin_coin_max": {
-        "description": "签到基础金币上限",
-        "type": "int",
-        "default": 100,
-        "slider": {
-          "min": 0,
-          "max": 10000,
-          "step": 1
-        },
-        "hint": "签到基础金币上限，含此值；需大于等于下限。"
-      },
-      "checkin_streak_step_days": {
-        "description": "连签奖励间隔天数",
-        "type": "int",
-        "default": 7,
-        "slider": {
-          "min": 1,
-          "max": 365,
-          "step": 1
-        },
-        "hint": "每连续签到 N 天触发一次连签奖励与里程碑提示；成就阈值不变。"
-      },
-      "checkin_streak_coin_bonus": {
-        "description": "每档连签金币加成",
-        "type": "int",
-        "default": 10,
-        "slider": {
-          "min": 0,
-          "max": 10000,
-          "step": 1
-        },
-        "hint": "每个连签周期增加的金币。"
-      },
-      "checkin_streak_coin_bonus_max": {
-        "description": "连签金币加成上限",
-        "type": "int",
-        "default": 50,
-        "slider": {
-          "min": 0,
-          "max": 100000,
-          "step": 1
-        },
-        "hint": "连签金币奖励累计上限，设为 0 可关闭。"
-      },
-      "checkin_streak_affection_bonus": {
-        "description": "每档连签好感度加成",
-        "type": "float",
-        "default": 0.1,
-        "slider": {
-          "min": 0,
-          "max": 100,
-          "step": 0.01
-        },
-        "hint": "每个连签周期增加的好感度。"
-      },
-      "checkin_streak_affection_bonus_max": {
-        "description": "连签好感度加成上限",
-        "type": "float",
-        "default": 0.5,
-        "slider": {
-          "min": 0,
-          "max": 1000,
-          "step": 0.01
-        },
-        "hint": "连签好感度累计上限，设为 0 可关闭。"
       }
     }
   },

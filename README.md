@@ -4,10 +4,10 @@
 
 <img src="https://count.getloli.com/@astrbot-plugin-get-px?name=astrbot-plugin-get-px&theme=booru-jaypee&padding=6&offset=0&align=top&scale=1&pixelated=1&darkmode=auto" alt="count" />
 
-一个面向 AstrBot 的安全发图与签到插件：Lolicon/Pixiv 图片源优先级可选，请求失败或无结果时自动回退；提供完整插件 WebUI 设置与内容安全管理，并在管理中心管理群排行、成员数值和签到数据，签到金币、连签与好感度奖励可配置。
+一个面向 AstrBot 的安全发图与签到插件：Lolicon/Pixiv 图片源优先级可选，请求失败或无结果时自动回退；提供完整插件 WebUI 设置与内容安全管理，并在管理中心管理群排行、成员数值和签到数据。
 
 ![AstrBot](https://img.shields.io/badge/AstrBot-plugin-5865f2?style=flat-square)
-![Version](https://img.shields.io/badge/version-3.9.0-22c55e?style=flat-square)
+![Version](https://img.shields.io/badge/version-3.8.7-22c55e?style=flat-square)
 ![Python](https://img.shields.io/badge/Python-3.10%2B-3776ab?style=flat-square)
 ![Platform](https://img.shields.io/badge/platform-OneBot%20%2F%20aiocqhttp-f97316?style=flat-square)
 ![License](https://img.shields.io/badge/license-MIT-3b82f6?style=flat-square)
@@ -53,12 +53,12 @@
 ### WebUI 管理中心
 
 <div align="center">
-<img src="Webui.png" alt="插件设置—签到基础（演示配置，真实界面截取）" width="100%">
+<img src="Webui.png" alt="插件管理中心界面" width="100%">
 </div>
 
 <br>
 
-插件管理中心包含完整常规设置页及群排行、成员数值、内容安全和签到数据备份；截图展示真实设置界面与演示配置，不含实际用户数据。
+插件管理中心提供群排行与趋势图表、成员数值编辑、内容安全管理和签到数据备份功能，并提供 Schema 驱动的常规设置页；所有操作均通过可视化界面完成。
 
 ## 功能一览
 
@@ -67,7 +67,7 @@
 | 搜图发图 | 按配置优先请求 Lolicon 或 Pixiv，请求失败或无结果时尝试另一个，支持数量限制，超出大小上限时换图并保留所选画质 |
 | 图片来源 | 下拉选择 `Lolicon`（默认）或 `Pixiv` 优先；使用 Pixiv 需填写 `pixiv_refresh_token` |
 | 内容安全 | 全局关键词与作品黑名单叠加命名分组规则；完整会话 UMO 关联，默认关闭 R18；关键词支持宽松／严格匹配 |
-| 每日签到 | H 纸张画册卡片、竖向随机背景、可配置基础金币/连签/好感度奖励、金币、好感度、商店与主题 |
+| 每日签到 | H 纸张画册卡片、竖向随机背景、金币、好感度、连签、商店与主题 |
 | 万象联动 | 可选接入万象画卷，签到领生图额度、商店购买额度，总开关默认关闭 |
 | 管理中心 | 群排行与趋势、成员数值、安全词与黑名单、签到备份 |
 | 稳定性 | 0–7 个自然日去重、发送状态诊断、临时文件自动清理 |
@@ -93,7 +93,7 @@
 
 标准版本不提供用于 Pixiv 登录、API 请求或图片下载的 HTTP/SOCKS 出站代理；这类网络代理请使用 [`proxy` 分支](https://github.com/shitianyaa/astrbot_plugin_get_px/tree/proxy)。如果只是 Lolicon 返回的图片地址不可用，可在 `lolicon_image_proxy_origins` 中按行填写图片反代 origin，插件只改写 Lolicon 图片 URL，不代理 API 或 Pixiv 登录。
 
-**v3.8.7 升级说明：** OneBot 发图默认使用本地路径，仅在明确文件读取失败时回退到 base64 编码重试一次，无需设置 `onebot_image_transport`。普通发图调用正常返回或发送超时均结算，超时不重发，即使最终未出图也扣费；签到与付费刷新卡片超时保留背景、缓存和占用。配置以已完成迁移的 v3.8.0 为升级基线，不再保留旧扁平兼容键；升级前请备份并阅读下方注意事项。详见 [OneBot 图片发送](#onebot-图片发送) 和 [更新日志](CHANGELOG.md#v390-2026-11-06)。
+**v3.8.7 升级说明：** OneBot 发图默认使用本地路径，仅在明确文件读取失败时回退到 base64 编码重试一次，无需设置 `onebot_image_transport`。普通发图调用正常返回或发送超时均结算，超时不重发，即使最终未出图也扣费；签到与付费刷新卡片超时保留背景、缓存和占用。配置以已完成迁移的 v3.8.0 为升级基线，不再保留旧扁平兼容键；升级前请备份并阅读下方注意事项。详见 [OneBot 图片发送](#onebot-图片发送) 和 [v3.8.7 更新日志](CHANGELOG.md#v387-2026-11-07)。
 
 > [!WARNING]
 > **跨版本升级与配置／签到数据**
@@ -190,12 +190,11 @@ get_px_image(tag="洛茜", count=2, orientation="portrait", min_width=1000, max_
 
 ## WebUI 插件管理中心
 
-AstrBot WebUI 插件页的「pluginCenter」提供 6 组共 45 项可见设置，其中 43 项为普通可编辑设置、2 项群聊/私聊安全策略列表沿用原有策略编辑器：
+AstrBot WebUI 插件页的「pluginCenter」提供 6 组共 38 项可见设置，其中 34 项为普通可编辑设置、4 项安全规则与安全分组列表沿用原有安全分组编辑器：
 
 - 插件设置按 Pixiv、去重与安全、万象联动、签到基础、签到商店、运行参数分组，可编辑 schema 中全部可见常规配置
 - Pixiv refresh token 仅展示是否已配置；留空保留、输入新值替换、勾选清除才删除
-- 签到设置可配置基础金币范围（默认 50–100，含端点，支持固定 0）、连签间隔及金币/好感度增量和上限
-- 常规设置保存后建议重载插件，以使已有客户端或代理等缓存配置完整生效；签到奖励设置在下一次新签到使用
+- 常规设置保存后建议重载插件，以使已有客户端或代理等缓存配置完整生效
 
 - 按群查看今日 / 月度 / 连签 / 累计排行与 7/30 天趋势
 - 搜索成员并调整金币、好感度、累计与连续签到当前值
@@ -208,9 +207,6 @@ AstrBot WebUI 插件页的「pluginCenter」提供 6 组共 45 项可见设置�
 
 - 奖励全局一天一次；群榜按实际签到的群分别记录，不重复发金币。
 - 重复签到不重奖，按实际生效的安全规则复用当天卡片：相同规则跨群共享，不同规则分别保留；返回原群仍使用其缓存卡片。
-- 默认基础金币按用户和日期稳定抽取，范围为 50–100（含端点）。连签默认每 7 天 +10 金币（累计上限 50）及 +0.10 好感度（累计上限 0.50）；间隔、每档增量和上限均可配置，金币范围支持固定 0。
-- 默认好感度等级金币加成为排斥/陌生 0%、熟悉 5%、亲近 10%、信赖 15%、挚友 20%，按本次签到前等级对“基础金币 + 连签金币”加成并向下取整。关闭或每级设为 0% 即保留原金币公式；购买的双倍加持只翻倍好感度，不影响金币。
-- 配置只影响新签到，不追溯已保存的历史奖励；签到预览与实际入账采用同一规则。
 - 商店：加持 200/500/1000；背景刷新默认 100（可配）；非默认主题默认每套 1500（可配）。默认「米白」免费。
 
 细则（好感等级、卡片规格、问候 24/32 字、生日事件、称号、节假日等）见 [签到说明](docs/user/checkin.md)。
@@ -300,12 +296,6 @@ WebUI 配置页按以下 6 组折叠展示，分组细节与维护规则见 [doc
 | `checkin_background_tag` | 签到背景标签；留空按所选优先级请求 Lolicon 随机或 Pixiv 推荐作品 | 空 |
 | `checkin_custom_background` | 本地图片路径；默认主题按竖向作品相框完整显示 | 空 |
 | `checkin_avatar_enabled` | 签到卡片显示用户头像 | `true` |
-| `checkin_affection_bonus_enabled` | 按签到前好感度等级启用金币加成 | `true` |
-| `checkin_affection_bonus_step_percent` | 每级金币加成比例（范围 `0–25%`；默认等级收益为 `0/5/10/15/20%`） | `5` |
-| `checkin_coin_min` / `checkin_coin_max` | 每日基础金币含端点范围（`0–10000`，下限≤上限；可设相等或固定 0） | `50` / `100` |
-| `checkin_streak_step_days` | 连签奖励间隔（`1–365` 天；不改七日成就） | `7` |
-| `checkin_streak_coin_bonus` / `checkin_streak_coin_bonus_max` | 每档连签金币与累计上限；范围 `0–10000` / `0–100000` | `10` / `50` |
-| `checkin_streak_affection_bonus` / `checkin_streak_affection_bonus_max` | 每档连签好感度与累计上限；范围 `0–100` / `0–1000` | `0.10` / `0.50` |
 | `checkin_card_quality_tier` | 签到卡画质：`省流量` / `清晰` / `极致`；日历使用同名档位，但输出尺寸不同；预览和刷新背景立即生效，普通重复签到保持当天档位 | `省流量` |
 | `checkin_greeting_mode` | 签到问候来源：`local` / `hitokoto` / `ai` | `hitokoto` |
 | `checkin_hitokoto_categories` | 一言类型中文多选；选择“全部”或留空时从全部分类随机 | `全部` |
