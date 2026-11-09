@@ -13,6 +13,38 @@ function addOption(select, value, label = value) {
   select.append(option);
 }
 
+export function normalizeChoiceOptions(options, current, allowEmpty = false) {
+  const normalized = [...(Array.isArray(options) ? options : [])].map((item) => (
+    typeof item === "string"
+      ? { value: item, label: item }
+      : { value: String(item?.value ?? ""), label: String(item?.label ?? item?.value ?? "") }
+  ));
+  const result = allowEmpty ? [{ value: "", label: "（留空）使用会话默认模型" }, ...normalized] : normalized;
+  if (current && !result.some((item) => item.value === current)) {
+    result.unshift({ value: current, label: `${current}（当前已保存）` });
+  }
+  return result;
+}
+
+export function collectSettingsPatch(groups, read) {
+  const patch = {};
+  const clearSecrets = [];
+  for (const group of groups) {
+    const values = {};
+    for (const field of group.fields) {
+      const result = read(field);
+      if (!result || !result.changed) continue;
+      if (result.clear) {
+        clearSecrets.push(field.key);
+        continue;
+      }
+      values[field.key] = result.value;
+    }
+    if (Object.keys(values).length) patch[group.key] = values;
+  }
+  return { patch, clearSecrets };
+}
+
 function renderField(field) {
   if (field.delegated) {
     const row = element("div", "setting-delegation");
@@ -26,6 +58,13 @@ function renderField(field) {
   }
 
   const row = element("div", "setting-field");
+  if (field.editable === false) {
+    row.append(element("div", "setting-field-copy", field.label));
+    const values = Array.isArray(field.value) ? field.value.join("、") : String(field.value ?? "");
+    row.append(element("p", "setting-readonly", values || "（空）"));
+    row.append(element("p", "setting-hint", "该列表没有可选清单，需在配置文件中维护，本页不写入。"));
+    return row;
+  }
   const label = element("label", "setting-field-copy", field.label);
   const name = `setting-${field.key}`;
   label.htmlFor = name;
@@ -84,9 +123,8 @@ function renderField(field) {
     input.name = field.key;
     input.id = name;
     input.dataset.settingType = "string";
-    const options = [...field.options];
-    if (field.value && !options.includes(field.value)) options.unshift(field.value);
-    options.forEach((value) => addOption(input, value));
+    const options = normalizeChoiceOptions(field.options, field.value, field.special === "select_provider");
+    options.forEach((option) => addOption(input, option.value, option.label));
     input.value = field.value ?? "";
     row.append(input);
   } else if (field.type === "text") {
@@ -116,6 +154,7 @@ function renderField(field) {
     row.append(input);
   }
   if (field.hint) row.append(element("p", "setting-hint", field.hint));
+  if (field.warning) row.append(element("p", "setting-warning", field.warning));
   return row;
 }
 
@@ -123,10 +162,10 @@ function readField(field, root) {
   if (field.secret) {
     const clear = root.querySelector(`[data-clear-secret="${field.key}"]`);
     const value = root.querySelector(`[data-setting-type="secret"][name="${field.key}"]`).value;
-    if (clear?.checked) return { changed: true, value: "" };
+    if (clear?.checked) return { changed: true, clear: true };
     return value ? { changed: true, value } : { changed: false };
   }
-  if (field.delegated) return { changed: false };
+  if (field.delegated || field.editable === false) return { changed: false };
   if (field.type === "list") {
     const values = [...root.querySelectorAll(`[data-setting-key="${field.key}"] input:checked`)].map((item) => item.value);
     const initial = Array.isArray(field.value) ? field.value : [];
@@ -210,16 +249,8 @@ export function createSettingsPage({ bridge, notify, navigate }) {
   async function save(event) {
     event.preventDefault();
     if (busy) return;
-    const patch = {};
-    for (const group of groups) {
-      const values = {};
-      for (const field of group.fields) {
-        const result = readField(field, form);
-        if (result.changed) values[field.key] = result.value;
-      }
-      if (Object.keys(values).length) patch[group.key] = values;
-    }
-    if (!Object.keys(patch).length) {
+    const { patch, clearSecrets } = collectSettingsPatch(groups, (field) => readField(field, form));
+    if (!Object.keys(patch).length && !clearSecrets.length) {
       status.textContent = "没有需要保存的修改";
       return;
     }
@@ -227,11 +258,11 @@ export function createSettingsPage({ bridge, notify, navigate }) {
     setBusy(true);
     status.textContent = "正在保存设置…";
     try {
-      const result = await bridge.apiPost("settings/update", { groups: patch });
+      const result = await bridge.apiPost("settings/update", { groups: patch, clear_secrets: clearSecrets });
       if (result?.success === false) throw new Error(result.error || "设置保存失败");
       await fetchAndRender();
       dirty = false;
-      status.textContent = "设置已保存。建议重载插件后确认新配置完整生效。";
+      status.textContent = "设置已保存。令牌、反代、排除 AI、联动与超时需重载插件后完整生效；字体来源需重新载入本页。";
       notify("插件设置已保存");
     } catch (error) {
       dirty = true;

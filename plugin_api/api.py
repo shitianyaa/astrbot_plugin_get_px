@@ -617,7 +617,10 @@ class PluginWebApi:
             payload = await request.get_json(silent=True)
             if not isinstance(payload, dict) or not isinstance(payload.get("groups"), dict):
                 raise ValueError("设置内容格式不正确")
-            save_settings(self.plugin, payload["groups"])
+            # 令牌清除走独立字段，空文本本身只表示保持不变。
+            save_settings(
+                self.plugin, payload["groups"], payload.get("clear_secrets") or ()
+            )
             return jsonify({"success": True, "reload_required": True})
         except ValueError as exc:
             return jsonify({"success": False, "error": str(exc)}), 400

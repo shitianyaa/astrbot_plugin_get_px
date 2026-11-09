@@ -43,6 +43,7 @@ def main() -> int:
         ("node", "--check", "pages/pluginCenter/safety.mjs"),
         ("node", "--check", "pages/pluginCenter/settings.mjs"),
         ("node", "--test", "tests/js/safety.test.mjs"),
+        ("node", "--test", "tests/js/settings.test.mjs"),
         (python, "-m", "pytest", "-v", "tests"),
     )
     for command in checks:

@@ -193,8 +193,9 @@ get_px_image(tag="洛茜", count=2, orientation="portrait", min_width=1000, max_
 AstrBot WebUI 插件页的「pluginCenter」提供 6 组共 38 项可见设置，其中 34 项为普通可编辑设置、4 项安全规则与安全分组列表沿用原有安全分组编辑器：
 
 - 插件设置按 Pixiv、去重与安全、万象联动、签到基础、签到商店、运行参数分组，可编辑 schema 中全部可见常规配置
-- Pixiv refresh token 仅展示是否已配置；留空保留、输入新值替换、勾选清除才删除
-- 常规设置保存后建议重载插件，以使已有客户端或代理等缓存配置完整生效
+- Pixiv refresh token 仅展示是否已配置；留空保留、输入新值替换、清除用独立 `clear_secrets` 字段表达
+- AI 问候模型按公开接口枚举可用模型 id 与标签，枚举失败保留已存 ID
+- 多数选项下次请求即生效；令牌、反代、排除 AI、联动与下载超时需重载插件，字体来源需重新载入本页
 
 - 按群查看今日 / 月度 / 连签 / 累计排行与 7/30 天趋势
 - 搜索成员并调整金币、好感度、累计与连续签到当前值
@@ -254,7 +255,7 @@ base64 是图片编码，与 AstrBot 4.27.3 的 OneBot 默认发图编码相同�
 | `preferred_image_source` | 默认 `Lolicon`；有 Pixiv Token 时可改选 `Pixiv` 优先 |
 | `pixiv_refresh_token` | 使用 Pixiv 作为首选或回退时填写；留空直接使用 Lolicon |
 | `image_quality` | 省流量用 `large`，优先原图用 `original` |
-| `forward_threshold` | 仅 aiocqhttp：`0` 始终合并转发；`1` 表示超过 1 张图才合并转发 |
+| `forward_threshold` | 仅 aiocqhttp：`0` 始终合并转发；`1` 表示超过 1 张图才合并转发；模型取图默认逐张直发，仅显式 `auto` 才用此阈值 |
 | `checkin_card_quality_tier` | 默认 `省流量`，日常推荐 `清晰`；签到卡三档为 960×540／1248×702／1728×972，日历三档为 1600×900／2080×1170／2880×1620 |
 | `dedupe_days` | 默认 `1`，只去重北京时间当天；`2–7` 扩大自然日窗口，`0` 关闭；不同会话、标签和图源仍隔离 |
 | `lolicon_image_proxy_origins` | 图片地址无法访问时再配置；每行一个 http(s) origin |
@@ -269,48 +270,48 @@ WebUI 配置页按以下 6 组折叠展示，分组细节与维护规则见 [doc
 | --- | --- | --- |
 | `pixiv_refresh_token` | 使用 Pixiv 作为首选或回退时需要填写；留空直接使用 Lolicon | 空 |
 | `preferred_image_source` | 下拉选择 `Lolicon` / `Pixiv`；请求失败或无结果时尝试另一源 | `Lolicon` |
-| `lolicon_exclude_ai` | 请求 Lolicon 时排除 AI 作品；R18/普通混合由当前会话强制普通分级决定 | `true` |
+| `lolicon_exclude_ai` | 请求 Lolicon 时排除 AI 作品；R18 是否混入由安全分组的「允许 R18」决定，未分组默认仅普通分级 | `true` |
 | `lolicon_image_proxy_origins` | 可选 Lolicon 图片反代 origin，多行按顺序轮换；不代理 API 或 Pixiv 登录 | 空 |
 | `filter_manga` | 过滤 Pixiv 结果中的漫画作品 | `true` |
 | `max_count` | 单次最大发送数量，范围 1-20 | `5` |
-| `p_coin_cost` | 普通发图每张金币，范围 `0–200`；`0` 免费；正常返回与发送超时均结算，其他发送异常不扣费 | `20` |
+| `p_coin_cost` | 普通发图每张金币，范围 `0–200`；`0` 免费，关闭签到后不扣费；正常返回与发送超时均结算，其他发送异常不扣费 | `20` |
 | `dedupe_days` | 最近 `0–7` 个北京时间自然日去重；同群共享，不同会话、标签和图源隔离；`0` 关闭并清空使用记录 | `1` |
 | `global_safety_terms` | 所有会话共用的屏蔽关键词 | `[]` |
 | `keyword_match_mode` | 宽松：完整原标签／翻译标签；严格：额外检查标题子串；控制全部分组 | `宽松` |
 | `global_blacklisted_illust_ids` | 全局作品正整数 ID 黑名单；同作品的 Lolicon 分页也拦截 | `[]` |
 | `safety_groups` | 命名分组：名称、完整 UMO 列表、允许 R18、附加关键词；Schema／Pages 共用 | `[]` |
-| `request_timeout` | 单张图片下载超时，单位秒 | `30` |
+| `request_timeout` | 图片下载与图源 API 超时，单位秒；发图总预算为 `request_timeout × max(3, 请求张数)` | `30` |
 | `image_quality` | 图片质量：`original`、`large`、`medium` | `original` |
-| `auto_downgrade_original_mb` | 普通发图超过该大小时换作品，单位 MiB；沿用旧键与已有数值；`0` 关闭软上限 | `10.0` |
-| `forward_threshold` | 仅 aiocqhttp：成功下载图片数严格大于此值时合并转发；`0` 始终合并转发，`1` 表示超过 1 张才合并转发；其他平台自动逐条发送 | `1` |
-| `auto_trigger_enabled` | 自然语言自动触发 | `false` |
-| `checkin_enabled` | 签到开关 | `true` |
+| `auto_downgrade_original_mb` | 普通发图超过该大小时换作品，单位 MiB；沿用旧键与已有数值；`0` 关闭软上限，仍有 `50 MiB` 硬上限 | `10.0` |
+| `forward_threshold` | 仅 aiocqhttp：成功下载图片数严格大于此值时合并转发；`0` 始终合并转发，`1` 表示超过 1 张才合并转发；其他平台自动逐条发送；模型取图默认逐张直发 | `1` |
+| `auto_trigger_enabled` | 整条消息形如「来三张初音ミク图」时自动触发发图，私聊同样生效 | `false` |
+| `checkin_enabled` | 签到总开关；关闭后商店、主题与刷新背景不可用，`/p` 与模型取图也不再扣金币 | `true` |
 | `checkin_bot_name` | 签到卡片中的 bot 角色名 | `neko` |
 | `checkin_background_mode` | 签到背景模式：`pixiv_daily` 或 `custom`；自定义背景不可用时继续尝试在线图片源 | `pixiv_daily` |
-| `checkin_background_refresh_cost` | 用户更新当天在线背景所需金币；范围 `0–300`，`0` 为免费 | `100` |
+| `checkin_background_refresh_cost` | 用户更新当天在线背景所需金币；仅 `pixiv_daily` 模式可用；范围 `0–300`，`0` 为免费 | `100` |
 | `checkin_theme_cost` | 非默认签到主题的统一价格；范围 `0–5000`，`0` 为免费 | `1500` |
 | `checkin_omnidraw_link_enabled` | 万象画卷联动总开关，默认关闭；开启后才会启用签到商店出售生图额度、签到发放额度、`/签到状态` 展示额度等全部联动功能 | `false` |
 | `checkin_omnidraw_quota_cost` | 签到商店购买生图额度的单张价格；范围 `0–300`，`0` 为免费；购买时指定张数，实际花费 = 单价 × 张数 | `75` |
 | `checkin_omnidraw_quota_default` | 商店购买生图额度不指定张数时的默认购买张数；范围 `1–50` | `1` |
 | `checkin_omnidraw_quota_daily_max` | 每人每天商店购买生图额度上限，范围 `0–30`；`0` 不限，签到赠送不受此限 | `10` |
 | `checkin_background_tag` | 签到背景标签；留空按所选优先级请求 Lolicon 随机或 Pixiv 推荐作品 | 空 |
-| `checkin_custom_background` | 本地图片路径；默认主题按竖向作品相框完整显示 | 空 |
+| `checkin_custom_background` | 本地图片路径，支持 jpg/png/webp；相对路径按插件数据目录解析；默认主题按竖向作品相框完整显示 | 空 |
 | `checkin_avatar_enabled` | 签到卡片显示用户头像 | `true` |
 | `checkin_card_quality_tier` | 签到卡画质：`省流量` / `清晰` / `极致`；日历使用同名档位，但输出尺寸不同；预览和刷新背景立即生效，普通重复签到保持当天档位 | `省流量` |
 | `checkin_greeting_mode` | 签到问候来源：`local` / `hitokoto` / `ai` | `hitokoto` |
 | `checkin_hitokoto_categories` | 一言类型中文多选；选择“全部”或留空时从全部分类随机 | `全部` |
-| `checkin_ai_greeting_provider_id` | 签到问候文本模型；留空时尝试当前会话模型，仍不可用则使用本地文案 | 空 |
+| `checkin_ai_greeting_provider_id` | 签到问候文本模型；按可用模型枚举 id 与模型标签，留空时尝试当前会话模型，仍不可用则使用本地文案 | 空 |
 | `checkin_ai_greeting_prompt` | 自定义角色和语气；固定安全约束由插件以 system prompt 追加 | 见配置页 |
 | `checkin_ai_greeting_timeout` | 单次问候模型调用超时秒数；失败后回退本地文案 | `8.0` |
 | `checkin_hitokoto_timeout` | 一言 API 请求超时秒数；失败后回退本地文案 | `5.0` |
-| `rate_limit_seconds` | 同一用户请求频率限制，单位秒；`0` 为禁用 | `3` |
-| `webui_font_source` | WebUI 字体来源：`mirror`、`official`、`none` | `mirror` |
+| `rate_limit_seconds` | 同一用户两次发图请求（`/p` 与模型取图）的最小间隔，单位秒；`0` 为禁用 | `3` |
+| `webui_font_source` | WebUI 字体来源：`mirror`、`official`、`none`；改动后需重新载入管理中心页面 | `mirror` |
 
 </details>
 
-插件管理中心的“插件设置”可编辑 Schema 中全部可见普通配置；全局安全规则、安全分组与群聊／私聊模板列表继续使用“安全分组”编辑器，设置页只提供跳转入口。Pixiv refresh token 仅显示是否已配置，留空保留、输入新值替换，勾选清除才会删除。保存常规设置后建议重载插件，让客户端与代理等设置完整生效。
+插件管理中心的“插件设置”可编辑 Schema 中全部可见普通配置；全局安全规则、安全分组与群聊／私聊模板列表继续使用“安全分组”编辑器，设置页只提供跳转入口，通用设置接口拒绝写入这些键。Pixiv refresh token 仅显示是否已配置：密码框留空保持原值，输入新值替换，清除通过单独的 `clear_secrets` 请求字段表达，空文本不会被当作清除，令牌值不进入快照默认值或日志。AI 问候模型由公开的 `context.get_all_providers()` 枚举 id 与模型标签；枚举失败时保留已保存的 ID 并提示，不静默清空。保存后多数选项下次请求即生效；令牌、反代、排除 AI、联动与下载超时需重载插件后完整生效，字体来源需重新载入本页，去重天数在发图与模型取图入口保持一致。
 
-`preferred_image_source` 保存并重载后生效，普通发图、签到与日历背景共用此顺序。每轮首选请求失败或返回空结果时尝试另一源；单张候选被过滤、去重或下载失败不直接触发换源，耗尽本批可用候选后按相同优先级补取。首批全被漫画、安全规则或去重过滤也会有限补取；安全规则或去重索引异常则停止选图，不放行未经校验的作品。有效的签到／日历缓存与已保存背景仍按原规则复用，不因切换优先级强制重选。
+`preferred_image_source` 下次请求即生效，普通发图、签到与日历背景共用此顺序。每轮首选请求失败或返回空结果时尝试另一源；单张候选被过滤、去重或下载失败不直接触发换源，耗尽本批可用候选后按相同优先级补取。首批全被漫画、安全规则或去重过滤也会有限补取；安全规则或去重索引异常则停止选图，不放行未经校验的作品。有效的签到／日历缓存与已保存背景仍按原规则复用，不因切换优先级强制重选。
 
 Lolicon 每次重新随机请求，没有 offset 或分页游标，补取可能再次返回旧图，由本地去重排除。Pixiv 在请求内按上游下一页参数继续，推荐接口保留收藏游标及已浏览／书签作品列表，兼容返回的 `min=0`／`max=-1` 边界并原样续取（不按作品 ID 的正数规则处理），空页有下一页时仍可续取；来源耗尽或分页位置重复时，本次请求不绕回首页。跨请求继续使用现有数字 offset，推荐多参数位置不完整持久化。签到标签搜索同时使用 Pixiv 竖图粗筛和本地 0.60–0.90 精筛；日历仍只取一批。两源均校验响应及候选必要字段，异常响应不当作合法空结果。Pixiv 续页校验失败日志保留 `reason=invalid_continuation`，并附加脱敏的 `continuation_detail`／`continuation_field`；不输出完整地址、参数值或未知参数名。运行日志采用中文结果描述和结构化字段；发送调用返回／平台受理不等于用户实际收到，状态仍以 `delivery_status` 区分。大小日志显示MiB／KiB，不重复原始字节数；`raw_candidate_count`是图源原始作品数，“下载尝试”是实际尝试次数，两者不受图片大小上限控制。
 
@@ -339,7 +340,7 @@ Lolicon 请求地址固定为 `https://api.lolicon.app/setu/v2`，旧 `lolicon_a
 
 **升级提醒：** 旧配置中的 `3.0` 会继续生效；使用原图且频繁因大小限制换图时，建议手动把“图片大小上限”调到 **10 MiB**。自定义数值不会被升级覆盖。
 
-**希望保留原图：** 设置 `image_quality=original`。可调大大小上限或设为 `0`，保存后重载；`0` 关闭软上限，单张下载仍受 **50 MiB** 硬上限约束。较大的原图会增加下载流量和等待时间。
+**希望保留原图：** 设置 `image_quality=original`。可调大大小上限或设为 `0`，保存后下次请求即生效；`0` 关闭软上限，单张下载仍受 **50 MiB** 硬上限约束。较大的原图会增加下载流量和等待时间。
 
 查看日志中的“图片下载完成”及最终 `quality`；调试日志中的 `reason=size_limit` 表示因超限跳过作品。设置原图后仍模糊时，可检查原作品本身的分辨率，以及客户端是否展示预览图。
 

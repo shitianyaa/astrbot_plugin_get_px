@@ -17,7 +17,7 @@
 | Python 语法检查 | 插件目录 | `python -m compileall -q main.py group_safety.py checkin pixiv tools plugin_api scripts/ci tests` |
 | JSON schema 检查 | 插件目录 | `python -m json.tool _conf_schema.json` |
 | JavaScript 语法检查 | 插件目录 | `node --check pages/pluginCenter/app.js` |
-| 管理页状态测试 | 插件目录 | `node --test tests/js/safety.test.mjs` |
+| 管理页状态测试 | 插件目录 | `node --test tests/js/safety.test.mjs tests/js/settings.test.mjs` |
 | pytest 全部测试 | 插件目录 | `python -m pytest -v tests` |
 | pytest 快速测试 | 插件目录 | `python -m pytest -q tests` |
 | pytest 特定模块 | 插件目录 | `python -m pytest tests/test_checkin_*.py -v` |
@@ -166,7 +166,7 @@ python -m pytest tests/test_command_registration.py -v
 
 ```bash
 node --check pages/pluginCenter/app.js
-node --test tests/js/safety.test.mjs
+node --test tests/js/safety.test.mjs tests/js/settings.test.mjs
 # 手工验证：页面加载、导航、草稿确认、读写、重置与移动端
 ```
 
@@ -179,6 +179,7 @@ node --test tests/js/safety.test.mjs
 python -m compileall -q main.py checkin pixiv plugin_api scripts/ci tests
 python -m json.tool _conf_schema.json > /dev/null
 node --check pages/pluginCenter/app.js
+node --check pages/pluginCenter/settings.mjs
 
 # 2. 只运行本插件的全部测试
 python -m pytest -v tests
@@ -279,6 +280,8 @@ python -m pytest -q tests/test_checkin_cache.py tests/test_checkin_calendar.py t
 
 这些用例不调用 v3.8.0 的旧迁移代码，不证明更早版本可直接升级；它们验证已完成分组迁移的配置与当前 schema 的兼容性。本机验证框架为 AstrBot 4.27.3，不替代生产升级或其他框架版本验证。
 
+设置页后端另由 `tests/test_plugin_settings_api.py` 覆盖：真实 `AstrBotConfig` 保存与重载、安全四键与隐藏键拒绝写入、令牌只输出是否配置且空文本不清除、独立清除字段、类型／范围／选项校验、provider 枚举失败保留已存 ID，以及保存失败时嵌套容器与列表引用回滚。`tests/js/settings.test.mjs` 验证前端纯函数契约：选项规范化（含 provider 空选项与未知旧值）、部分补丁与清除令牌分离，以及多选不会把未声明值扩成可选项。
+
 ## OneBot 自动传输与超时结算
 
 运行 `python -m pytest -q tests/test_delivery.py tests/test_p_coin_cost.py tests/test_downloader.py`。覆盖群聊/私聊、单图/转发、空回执正常结算并保留 file 图片、路径含 timeout 不误判、1200 NTEvent 超时仍扣费且去重、不发异常提示、不重发、文件读取失败换 base64 的两次诊断日志、超时文件保留 600 秒、非超时未知状态及取消处理，以及旧传输配置清理/保存失败回滚。测试使用模拟协议回包，不代表 QQ 实际延迟验证。
@@ -329,5 +332,5 @@ python -m pytest -q tests/test_checkin_cache.py tests/test_checkin_calendar.py t
 - `tests/test_group_safety_config.py`、`test_config_upgrade.py`、`test_checkin_group_safety.py`：完整 UMO 隔离、重复归属拒绝、真实 AstrBot 配置加载、旧库原始词保留、原子归档核对、失败不清与幂等、SQLite 备份／回滚和签到历史保留。
 - `tests/test_main_error_handling.py`、`test_checkin_calendar.py`：实际规则变化使缓存失效、进行中快照不受配置并发变化影响；相同规则可复用。
 - `tests/test_plugin_management_api.py`、`test_checkin_backup_web.py`：配置／Pages 同源、辅助信息不决定黑名单、数据包无凭据、导入只恢复签到、原回滚保护。
-- `node --test tests/js/safety.test.mjs`：草稿深拷贝、R18 默认关闭、UMO 单组验证。旧状态机与专属测试已删除，不保留布局／台词／历史实现身份快照。
+- `node --test tests/js/safety.test.mjs tests/js/settings.test.mjs`：草稿深拷贝、R18 默认关闭、UMO 单组验证，以及设置页选项规范化与部分补丁／清除令牌的纯函数契约。旧状态机与专属测试已删除，不保留布局／台词／历史实现身份快照。
 - 页面接线及视觉用浏览器验证：新建、编辑、保存失败、草稿关闭确认、重复 UMO、删除、模式／全局词、导出；桌面与移动端检查溢出、焦点和抽屉滚动。离线 bridge 验证不等于真实 AstrBot 页面鉴权或 QQ 端到端。
