@@ -1,88 +1,220 @@
-/* 安全页沿用管理中心的樱色与蓝色；分级标签是唯一强调元素。 */
-.safety-mode-panel select { width: 100%; margin-top: 10px; padding: 12px; border: 1px solid var(--border-blue); border-radius: var(--radius-sm); background: var(--surface); color: var(--text); font: inherit; }
-.safety-hint { color: var(--muted); font-size: 13px; line-height: 1.7; }
-.safety-group-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 260px), 1fr)); gap: 16px; margin-top: 20px; }
-.safety-group-card { display: flex; flex-direction: column; align-items: flex-start; gap: 12px; min-width: 0; padding: 22px; text-align: left; border: 1px solid var(--border-blue); border-radius: var(--radius); background: var(--surface); color: var(--text); font: inherit; cursor: pointer; }
-.safety-group-card:hover { background: var(--surface-accent); border-color: var(--secondary); }
-.safety-group-card strong { font-size: 18px; }
-.safety-group-card small { width: 100%; overflow-wrap: anywhere; color: var(--muted); }
-.safety-rating { border-radius: 6px; padding: 4px 9px; color: var(--safe); background: var(--safe-soft); font-size: 12px; }
-.safety-rating.sensitive { color: var(--warn); background: var(--warn-soft); }
+/* 安全分组：卡片、480px 居中编辑弹窗与 R18 开关布局。
+   颜色与开关轨道复用 styles.css 的语义 token，不在此覆盖页面级样式。 */
+
+#policySearch {
+  margin-bottom: 2px;
+}
+
+.safety-group-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(min(100%, 240px), 1fr));
+  gap: 10px;
+  margin-top: 12px;
+}
+
+.safety-group-card {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 6px;
+  min-width: 0;
+  padding: 14px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--surface-elevated);
+  color: var(--text);
+  font: inherit;
+  text-align: left;
+}
+
+.safety-group-card:hover {
+  border-color: var(--border-strong);
+  background: var(--surface-hover);
+}
+
+.safety-group-card strong {
+  font-size: 13.5px;
+  font-weight: 600;
+}
+
+.safety-group-card span:not(.safety-rating) {
+  color: var(--text-subtle);
+  font-size: 11.5px;
+}
+
+.safety-group-card small {
+  width: 100%;
+  color: var(--text-subtle);
+  font: 11px/1.5 var(--font-mono);
+  overflow-wrap: anywhere;
+}
+
+.safety-rating {
+  padding: 2px 7px;
+  border: 1px solid var(--safe-border);
+  border-radius: 4px;
+  background: var(--safe-soft);
+  color: var(--safe);
+  font-size: 11px;
+  font-weight: 600;
+}
+
+.safety-rating.sensitive {
+  border-color: var(--warn-border);
+  background: var(--warn-soft);
+  color: var(--warn);
+}
+
 .safety-group-dialog {
   width: min(480px, calc(100% - 32px));
   max-height: calc(100dvh - 32px);
-  padding: 0;
-  border: 1px solid var(--border);
-  border-radius: var(--radius);
-  background: var(--surface);
-  color: var(--text);
   overflow: auto;
+  overscroll-behavior: contain;
   scrollbar-width: thin;
-  scrollbar-color: var(--border) var(--surface);
-}
-.safety-group-dialog form { display: flex; flex-direction: column; padding: 0; }
-.safety-group-header { padding: 20px 24px 16px; border-bottom: 1px solid var(--border-soft); }
-.safety-group-header h3 { margin: 0 0 4px; font-size: 20px; }
-.safety-group-fields { display: grid; gap: 16px; padding: 20px 24px; }
-.safety-group-field { display: grid; gap: 6px; min-width: 0; }
-.safety-group-field label { font-size: 13px; font-weight: 600; }
-.safety-group-field label span { margin-left: 6px; color: var(--muted); font-size: 12px; font-weight: 400; }
-.safety-group-dialog input:not([type="checkbox"]), .safety-group-dialog textarea {
-  appearance: none;
-  width: 100%;
-  min-width: 0;
-  padding: 9px 12px;
-  border: 1px solid var(--border);
-  border-radius: var(--radius-sm);
-  color: var(--text);
-  background: var(--bg);
-  font: inherit;
-  font-size: 13px;
-  line-height: 1.6;
-}
-.safety-group-dialog :is(input:not([type="checkbox"]), textarea):focus { border-color: var(--border-focus); background: var(--surface); }
-.safety-group-dialog textarea { resize: vertical; min-height: 80px; }
-.safety-group-dialog :is(input, textarea)::placeholder { color: var(--muted); opacity: 1; }
-.safety-group-dialog .safety-hint { font-size: 12px; line-height: 1.6; }
-.safety-r18-toggle { display: flex; align-items: center; gap: 16px; padding: 12px 14px; border-radius: var(--radius-sm); background: var(--surface-accent); cursor: pointer; }
-.safety-r18-toggle span { flex: 1; min-width: 0; }
-.safety-r18-toggle strong { font-size: 13px; }
-.safety-r18-toggle small { display: block; margin-top: 3px; color: var(--muted); font-size: 12px; line-height: 1.6; }
-.safety-r18-toggle input {
-  appearance: none;
-  flex: 0 0 auto;
-  width: 38px;
-  height: 22px;
-  margin: 0;
-  padding: 2px;
-  border: 1px solid var(--border-blue);
-  border-radius: 999px;
-  background: var(--border-blue);
-  cursor: pointer;
-}
-.safety-r18-toggle input::before { content: ""; display: block; width: 16px; height: 16px; border-radius: 50%; background: var(--surface); box-shadow: 0 1px 3px rgb(44 62 80 / 18%); }
-.safety-r18-toggle input:checked { border-color: var(--primary); background: var(--primary); }
-.safety-r18-toggle input:checked::before { transform: translateX(16px); }
-.safety-group-dialog .dialog-actions { position: sticky; bottom: 0; display: flex; flex-wrap: wrap; gap: 8px; margin: 0; padding: 14px 24px; border-top: 1px solid var(--border-soft); background: var(--surface); }
-.safety-group-dialog .dialog-actions button { min-height: 40px; }
-.safety-group-dialog .dialog-actions .danger { margin-right: auto; border-color: transparent; color: var(--danger); }
-.safety-group-dialog .dialog-actions .danger:hover { background: var(--danger-soft); }
-.safety-group-dialog .dialog-actions button[type="submit"] { background: var(--primary); color: white; border-color: var(--primary); }
-.safety-group-dialog .dialog-actions button[type="submit"]:hover { background: var(--primary-hover); border-color: var(--primary-hover); }
-.safety-group-dialog :is(input, textarea, button):disabled { opacity: .6; cursor: not-allowed; }
-.safety-group-dialog .form-error { color: var(--danger); }
-.safety-group-dialog .form-error:empty { display: none; }
-.safety-group-card:focus-visible, #keywordMatchMode:focus-visible, .safety-group-dialog :is(input, textarea, button):focus-visible { outline: 3px solid var(--border-focus); outline-offset: 2px; }
-@media (max-width: 600px) {
-  .safety-group-header { padding: 18px 18px 14px; }
-  .safety-group-fields { gap: 14px; padding: 16px 18px; }
-  .safety-group-dialog .dialog-actions { padding: 12px 18px; }
-  .safety-group-dialog .dialog-actions button { padding-inline: 12px; }
-}
-@media (forced-colors: active) {
-  .safety-r18-toggle input { appearance: auto; }
-  .safety-r18-toggle input::before { display: none; }
 }
 
-#policySearch { width: 100%; margin-top: 8px; padding: 12px; border: 1px solid var(--border); border-radius: var(--radius-sm); font: inherit; }
-#policyAddBtn { padding: 10px 16px; border: 0; border-radius: var(--radius-sm); background: var(--primary); color: white; cursor: pointer; font: inherit; }
+.safety-group-dialog form {
+  display: flex;
+  flex-direction: column;
+  padding: 0;
+}
+
+.safety-group-header {
+  padding: 16px 20px 12px;
+  border-bottom: 1px solid var(--border);
+}
+
+.safety-group-header h3 {
+  font-size: 15px;
+  font-weight: 650;
+}
+
+.safety-group-header p {
+  margin-top: 2px;
+  color: var(--text-subtle);
+  font-size: 11.5px;
+}
+
+.safety-group-fields {
+  display: grid;
+  gap: 12px;
+  padding: 16px 20px;
+}
+
+.safety-group-field {
+  display: grid;
+  gap: 5px;
+  min-width: 0;
+}
+
+.safety-group-field label {
+  color: var(--text-muted);
+  font-size: 12px;
+  font-weight: 600;
+}
+
+.safety-group-field label span {
+  margin-left: 6px;
+  color: var(--text-subtle);
+  font-size: 11px;
+  font-weight: 400;
+}
+
+.safety-group-dialog textarea {
+  min-height: 72px;
+}
+
+.safety-group-dialog .hint {
+  font-size: 11.5px;
+  line-height: 1.6;
+}
+
+.safety-r18-toggle {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  padding: 10px 12px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--surface);
+  cursor: pointer;
+}
+
+.safety-r18-copy {
+  flex: 1;
+  min-width: 0;
+}
+
+.safety-r18-copy strong {
+  display: block;
+  font-size: 12.5px;
+  font-weight: 600;
+}
+
+.safety-r18-copy small {
+  display: block;
+  margin-top: 2px;
+  color: var(--text-subtle);
+  font-size: 11.5px;
+  line-height: 1.5;
+}
+
+.safety-r18-toggle input {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  opacity: 0;
+  pointer-events: none;
+}
+
+.safety-r18-toggle:focus-within {
+  outline: 2px solid var(--focus-ring);
+  outline-offset: 2px;
+}
+
+.safety-group-dialog .dialog-actions {
+  position: sticky;
+  bottom: 0;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin: 0;
+  padding: 12px 20px;
+  border-top: 1px solid var(--border);
+  background: var(--surface-elevated);
+}
+
+.safety-group-dialog .dialog-actions .danger {
+  margin-right: auto;
+  border-color: transparent;
+  background: transparent;
+  color: var(--danger);
+}
+
+.safety-group-dialog .dialog-actions .danger:hover {
+  background: var(--danger-soft);
+}
+
+.safety-group-dialog :is(input, textarea, button):disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
+}
+
+.safety-group-dialog .form-error:empty {
+  display: none;
+}
+
+@media (max-width: 600px) {
+  .safety-group-header {
+    padding: 14px 16px 10px;
+  }
+
+  .safety-group-fields {
+    gap: 10px;
+    padding: 14px 16px;
+  }
+
+  .safety-group-dialog .dialog-actions {
+    padding: 10px 16px;
+  }
+}

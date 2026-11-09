@@ -1,3 +1,5 @@
+import { createSelect } from "./ui.mjs";
+
 const modeHints = {
   宽松: "仅匹配完整原标签或翻译标签；忽略标题和简介。",
   严格: "匹配完整标签，并检查标题包含关键词；忽略简介。",
@@ -27,10 +29,29 @@ export function mountSafety({ apiGet, apiPost, escapeHtml, showToast, confirmAct
   let draft = null, baseline = null, busy = false, trigger = null;
   const dialog = $("safetyGroupDialog");
   const form = $("safetyGroupForm");
+  const modeSelect = createSelect({
+    labelledBy: "keywordMatchModeLabel",
+    value: "宽松",
+    options: [{ value: "宽松", label: "宽松" }, { value: "严格", label: "严格" }],
+    onChange: async (next) => {
+      modeSelect.setDisabled(true);
+      try {
+        await apiPost("content-safety/global", { keyword_match_mode: next });
+        await reload();
+        showToast("全局匹配方式已保存");
+      } catch (error) {
+        mode();
+        showToast(error.message, "error");
+      } finally {
+        modeSelect.setDisabled(false);
+      }
+    },
+  });
+  $("keywordMatchMode").replaceChildren(modeSelect);
   const dirty = () => draft && JSON.stringify(readDraft()) !== JSON.stringify(baseline);
   const readDraft = () => ({ ...draft, name: $("safetyGroupName").value.trim(), sessions: splitLines($("safetyGroupSessions").value), allow_r18: $("safetyGroupR18").checked, custom_terms: splitLines($("safetyGroupTerms").value) });
   function mode() {
-    $("keywordMatchMode").value = settings.keyword_match_mode;
+    modeSelect.value = settings.keyword_match_mode;
     $("keywordModeHint").textContent = modeHints[settings.keyword_match_mode];
   }
   function render() {
@@ -82,13 +103,6 @@ export function mountSafety({ apiGet, apiPost, escapeHtml, showToast, confirmAct
     button.disabled = true;
     try { await apiPost("content-safety/terms/remove", { term: button.dataset.removeTerm }); await reload(); }
     catch (error) { showToast(error.message, "error"); button.disabled = false; }
-  });
-  $("keywordMatchMode").addEventListener("change", async event => {
-    const select = event.target;
-    select.disabled = true;
-    try { await apiPost("content-safety/global", { keyword_match_mode: select.value }); await reload(); showToast("全局匹配方式已保存"); }
-    catch (error) { mode(); showToast(error.message, "error"); }
-    finally { select.disabled = false; }
   });
   $("termForm").addEventListener("submit", async event => {
     event.preventDefault();

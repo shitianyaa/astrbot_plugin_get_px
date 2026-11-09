@@ -6,7 +6,7 @@ from copy import deepcopy
 import json
 import math
 from pathlib import Path
-from typing import Any
+from typing import Any, Sequence
 
 from astrbot.api import logger
 
@@ -25,6 +25,14 @@ SAFETY_KEYS = frozenset(
         "safety_groups",
     }
 )
+# 全局规则在「内容安全」页维护，会话分组与模板列表在「安全分组」页维护；
+# 设置页的跳转入口必须落到真正能编辑该项的页面。
+DELEGATED_VIEWS = {
+    "global_safety_terms": "safety",
+    "keyword_match_mode": "safety",
+    "global_blacklisted_illust_ids": "safety",
+    "safety_groups": "policies",
+}
 
 
 def load_schema() -> dict[str, Any]:
@@ -127,7 +135,7 @@ def settings_snapshot(plugin: Any) -> dict[str, Any]:
                 )
             elif key in SAFETY_KEYS or spec.get("type") == "template_list":
                 descriptor["delegated"] = True
-                descriptor["view"] = "policies"
+                descriptor["view"] = DELEGATED_VIEWS.get(key, "policies")
             elif spec.get("_special") == PROVIDER_SPECIAL:
                 choices, warning = _provider_choices(plugin)
                 current = str(_effective(plugin, key, "") or "").strip()
@@ -149,16 +157,17 @@ def settings_snapshot(plugin: Any) -> dict[str, Any]:
                 descriptor["default"] = deepcopy(spec.get("default"))
                 value = deepcopy(_effective(plugin, key, descriptor["default"]))
                 if descriptor["type"] == "list":
-                    stored = value if isinstance(value, list) else []
                     if descriptor["options"]:
-                        # 只保留声明过的合法旧值，不把未知项扩成新的可选项。
-                        descriptor["value"] = [
-                            item for item in stored if item in descriptor["options"]
-                        ]
+                        # 已保存的旧值原样返回供页面勾选保留；新写入仍只接受
+                        # 声明选项或该键当前已存值，不把未知项扩成新选项。
+                        descriptor["value"] = (
+                            [item for item in value if isinstance(item, str)]
+                            if isinstance(value, list) else []
+                        )
                     else:
                         # 没有可选清单的列表无法安全编辑，避免保存时被空值覆盖。
                         descriptor["editable"] = False
-                        descriptor["value"] = stored
+                        descriptor["value"] = value
                 else:
                     descriptor["value"] = value
             fields.append(descriptor)
@@ -173,7 +182,12 @@ def settings_snapshot(plugin: Any) -> dict[str, Any]:
     return {"success": True, "groups": groups}
 
 
-def _validate_value(key: str, value: Any, spec: dict[str, Any]) -> Any:
+def _validate_value(
+    key: str,
+    value: Any,
+    spec: dict[str, Any],
+    allowed_extra: Sequence[str] = (),
+) -> Any:
     label = spec.get("description", key)
     kind = spec.get("type")
     if key in SECRET_KEYS:
@@ -204,7 +218,8 @@ def _validate_value(key: str, value: Any, spec: dict[str, Any]) -> Any:
     if not valid:
         raise ValueError(f"{label}类型不正确")
     if kind == "list":
-        invalid = [item for item in value if item not in spec["options"]]
+        allowed = set(spec["options"]) | set(allowed_extra)
+        invalid = [item for item in value if item not in allowed]
         if invalid:
             raise ValueError(f"{label}包含无效选项")
     if "options" in spec and kind != "list" and value not in spec["options"]:
@@ -255,7 +270,18 @@ def save_settings(plugin: Any, patch: Any, clear_secrets: Any = ()) -> None:
                 or key in SAFETY_KEYS
             ):
                 raise ValueError("包含不能在此页面编辑的设置项")
-            validated.setdefault(group_key, {})[key] = _validate_value(key, value, spec)
+            # 多选旧值不在声明选项里时，只放行该键当前已保存的字符串值；
+            # 用户不能借旧值通道注入任意新值。
+            allowed_extra: tuple[str, ...] = ()
+            if spec.get("type") == "list" and spec.get("options"):
+                stored = _effective(plugin, key, spec.get("default"))
+                if isinstance(stored, list):
+                    allowed_extra = tuple(
+                        item for item in stored if isinstance(item, str)
+                    )
+            validated.setdefault(group_key, {})[key] = _validate_value(
+                key, value, spec, allowed_extra
+            )
     for key in cleared:
         if key not in secret_groups:
             raise ValueError("只能清除本页支持的令牌项")

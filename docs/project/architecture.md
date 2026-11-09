@@ -39,7 +39,7 @@ pixiv/
 │  ├─ index.py           多自然日去重索引、黑名单辅助元信息与旧词归档读取
 plugin_api/
 ├─ api.py                Plugin Pages 后端 API 与设置路由
-└─ settings.py           Schema 驱动的安全配置快照、校验和部分保存
+└─ settings.py           Schema 驱动的设置快照、委派视图、校验和部分保存
 tools/
 └─ images.py             原生 Tool、同事件幂等与在途取消生命周期
 skills/get-px-image/
@@ -48,7 +48,7 @@ skills/get-px-image/
 
 根目录保留会话策略服务 `group_safety.py`；签到、取图和 Web API 业务分别位于对应包中。根 `__init__.py` 只有模块说明，不注册旧包路径别名；新代码和测试直接导入真实模块。
 
-管理中心普通配置由 `plugin_api/settings.py` 从 `_conf_schema.json` 生成界面目录，读取当前有效分组/旧扁平值并在提交时严格验证；敏感令牌在读取时脱敏。群/私聊模板列表始终走既有会话策略服务，不开放通用配置覆盖接口。
+管理中心普通配置由 `plugin_api/settings.py` 从 `_conf_schema.json` 生成界面目录，读取当前有效分组/旧扁平值并在提交时严格验证；敏感令牌在读取时脱敏。全局关键词、匹配方式与作品黑名单委派到“内容安全”，安全分组与群/私聊模板列表委派到“安全分组”，均不开放通用配置覆盖接口。带选项的多选会返回已保存的旧值供页面勾选保留，写入只接受声明选项或该键当前已存值，不会把旧值扩成新选项。
 
 模块按职责划分，不按行数强制拆分。`__init__.py` 和组合入口可以很小；普通业务模块只有在具备独立职责和测试边界时才单独存在。
 
@@ -84,7 +84,7 @@ Tool 附加不可变 `ImageSelection`：方向、绝对容差比例、最小宽�
 
 ## 前端页面
 
-`pages/pluginCenter/` 使用原生 HTML、CSS 和 ES module，集中提供群排行、成员当前数值编辑、全局规则、安全分组和数据管理。会话策略由配置文件持久化；签到业务数据仍由 SQLite 和签到备份管理。成员编辑只更新 `checkin_users`，不回写 `checkin_records` 或 `checkin_group_presence`。
+`pages/pluginCenter/` 使用原生 HTML、CSS 和 ES module，提供群排行、成员当前数值编辑、内容安全、安全分组、数据管理和插件配置六个视图；顶部为紧凑品牌/安全摘要/刷新与单行下划线页签，主内容 1200px。明暗主题由宿主 `data-theme` 跟随，独立预览回退系统偏好，不读写浏览器存储；`ui.mjs` 提供自绘下拉与 checkbox＋独立轨道开关，配置页复用它们渲染枚举、模型和多选。会话策略由配置文件持久化；签到业务数据仍由 SQLite 和签到备份管理。成员编辑只更新 `checkin_users`，不回写 `checkin_records` 或 `checkin_group_presence`。
 
 ## 依赖方向
 
@@ -103,6 +103,9 @@ main.py
 python -m json.tool _conf_schema.json
 python -m compileall -q main.py checkin pixiv plugin_api scripts/ci tests
 node --check pages/pluginCenter/app.js
+node --check pages/pluginCenter/settings.mjs
+node --check pages/pluginCenter/ui.mjs
+node --test tests/js/safety.test.mjs tests/js/settings.test.mjs tests/js/ui.test.mjs
 python -m pytest -q tests
 ```
 ## 会话内容安全策略

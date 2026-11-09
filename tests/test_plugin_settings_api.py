@@ -54,11 +54,13 @@ def test_settings_snapshot_hides_legacy_fields_and_redacts_secret():
         "global_safety_terms",
         "keyword_match_mode",
         "global_blacklisted_illust_ids",
-        "safety_groups",
     ):
         assert fields[safety_key]["delegated"] is True
-        assert fields[safety_key]["view"] == "policies"
+        assert fields[safety_key]["view"] == "safety"
         assert "value" not in fields[safety_key]
+    assert fields["safety_groups"]["delegated"] is True
+    assert fields["safety_groups"]["view"] == "policies"
+    assert "value" not in fields["safety_groups"]
     assert "dedupe_ttl_hours" not in fields
     assert "_grouped_config_migrated" not in fields
 
@@ -316,15 +318,34 @@ def test_provider_enumeration_failure_keeps_stored_id_with_warning():
     assert field["warning"]
 
 
-def test_multiselect_keeps_only_declared_old_values():
+def test_multiselect_keeps_stored_legacy_values_without_widening_options():
     target = plugin(
         Config(checkin_basic={"checkin_hitokoto_categories": ["全部", "动画", "旧分类"]})
     )
     field = _field(settings_snapshot(target), "checkin_hitokoto_categories")
-    assert field["value"] == ["全部", "动画"]
+    # 旧值随已保存配置返回，页面可勾选保留；声明选项不被旧值扩写。
+    assert field["value"] == ["全部", "动画", "旧分类"]
     assert "旧分类" not in field["options"]
+    # 保留旧值同时取消声明项：旧值仍是当前已存值，允许通过。
+    save_settings(
+        target,
+        {"checkin_basic": {"checkin_hitokoto_categories": ["全部", "旧分类"]}},
+    )
+    assert target.config["checkin_basic"]["checkin_hitokoto_categories"] == ["全部", "旧分类"]
+    # 旧值通道不放行任意新值。
     with pytest.raises(ValueError):
-        save_settings(target, {"checkin_basic": {"checkin_hitokoto_categories": ["旧分类"]}})
+        save_settings(
+            target,
+            {"checkin_basic": {"checkin_hitokoto_categories": ["全部", "旧分类", "新分类"]}},
+        )
+    # 旧值被移除后不再属于当前值，也不能再通过旧值通道加回。
+    save_settings(target, {"checkin_basic": {"checkin_hitokoto_categories": ["全部"]}})
+    with pytest.raises(ValueError):
+        save_settings(
+            target,
+            {"checkin_basic": {"checkin_hitokoto_categories": ["全部", "旧分类"]}},
+        )
+    assert target.config["checkin_basic"]["checkin_hitokoto_categories"] == ["全部"]
 
 
 def test_list_without_options_is_read_only_and_rejected(monkeypatch):

@@ -16,8 +16,8 @@
 | --- | --- | --- |
 | Python 语法检查 | 插件目录 | `python -m compileall -q main.py group_safety.py checkin pixiv tools plugin_api scripts/ci tests` |
 | JSON schema 检查 | 插件目录 | `python -m json.tool _conf_schema.json` |
-| JavaScript 语法检查 | 插件目录 | `node --check pages/pluginCenter/app.js` |
-| 管理页状态测试 | 插件目录 | `node --test tests/js/safety.test.mjs tests/js/settings.test.mjs` |
+| JavaScript 语法检查 | 插件目录 | `node --check pages/pluginCenter/app.js`（含 `settings.mjs`、`safety.mjs`、`ui.mjs`） |
+| 管理页状态测试 | 插件目录 | `node --test tests/js/safety.test.mjs tests/js/settings.test.mjs tests/js/ui.test.mjs` |
 | pytest 全部测试 | 插件目录 | `python -m pytest -v tests` |
 | pytest 快速测试 | 插件目录 | `python -m pytest -q tests` |
 | pytest 特定模块 | 插件目录 | `python -m pytest tests/test_checkin_*.py -v` |
@@ -166,8 +166,10 @@ python -m pytest tests/test_command_registration.py -v
 
 ```bash
 node --check pages/pluginCenter/app.js
-node --test tests/js/safety.test.mjs tests/js/settings.test.mjs
+node --check pages/pluginCenter/ui.mjs
+node --test tests/js/safety.test.mjs tests/js/settings.test.mjs tests/js/ui.test.mjs
 # 手工验证：页面加载、导航、草稿确认、读写、重置与移动端
+# 浏览器检查明暗主题、配置搜索/切组草稿、数字清空阻止保存与键盘操作下拉
 ```
 
 ## 快速全面检查
@@ -180,6 +182,7 @@ python -m compileall -q main.py checkin pixiv plugin_api scripts/ci tests
 python -m json.tool _conf_schema.json > /dev/null
 node --check pages/pluginCenter/app.js
 node --check pages/pluginCenter/settings.mjs
+node --check pages/pluginCenter/ui.mjs
 
 # 2. 只运行本插件的全部测试
 python -m pytest -v tests
@@ -332,5 +335,5 @@ python -m pytest -q tests/test_checkin_cache.py tests/test_checkin_calendar.py t
 - `tests/test_group_safety_config.py`、`test_config_upgrade.py`、`test_checkin_group_safety.py`：完整 UMO 隔离、重复归属拒绝、真实 AstrBot 配置加载、旧库原始词保留、原子归档核对、失败不清与幂等、SQLite 备份／回滚和签到历史保留。
 - `tests/test_main_error_handling.py`、`test_checkin_calendar.py`：实际规则变化使缓存失效、进行中快照不受配置并发变化影响；相同规则可复用。
 - `tests/test_plugin_management_api.py`、`test_checkin_backup_web.py`：配置／Pages 同源、辅助信息不决定黑名单、数据包无凭据、导入只恢复签到、原回滚保护。
-- `node --test tests/js/safety.test.mjs tests/js/settings.test.mjs`：草稿深拷贝、R18 默认关闭、UMO 单组验证，以及设置页选项规范化与部分补丁／清除令牌的纯函数契约。旧状态机与专属测试已删除，不保留布局／台词／历史实现身份快照。
-- 页面接线及视觉用浏览器验证：新建、编辑、保存失败、草稿关闭确认、重复 UMO、删除、模式／全局词、导出；桌面与移动端检查溢出、焦点和抽屉滚动。离线 bridge 验证不等于真实 AstrBot 页面鉴权或 QQ 端到端。
+- `node --test tests/js/safety.test.mjs tests/js/settings.test.mjs tests/js/ui.test.mjs`：草稿深拷贝、R18 默认关闭、UMO 单组验证，设置页选项规范化、跨组搜索、数字清空/越界判定、多选旧值保留与部分补丁／清除令牌的纯函数契约，以及自绘下拉的选项规范化与键盘下标边界。旧状态机与专属测试已删除，不保留布局／台词／历史实现身份快照。
+- 页面接线及视觉用浏览器验证：新建、编辑、保存失败、草稿关闭确认、重复 UMO、删除、模式／全局词、导出；桌面与移动端检查明暗主题、溢出、焦点和弹窗滚动；配置页检查跨组搜索草稿、改回无改动、放弃／重新载入确认、保存失败保留、数字清空阻止保存、自绘下拉的 ↑↓/Home/End/Enter/Space/Escape/Tab 与开关键盘焦点。离线 bridge 验证不等于真实 AstrBot 页面鉴权或 QQ 端到端。

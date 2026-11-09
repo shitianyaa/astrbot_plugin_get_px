@@ -1,5 +1,6 @@
 import * as settingsModule from "./settings.mjs";
 import { mountSafety } from "./safety.mjs";
+import { createSelect } from "./ui.mjs";
 const bridge = window.AstrBotPluginPage;
 
 const state = {
@@ -32,6 +33,8 @@ const state = {
 };
 
 let settingsPage = null;
+let memberBoostSelect = null;
+let hostThemeKnown = false;
 
 const MAX_BACKUP_BYTES = 5 * 1024 * 1024;
 const dateFormatter = new Intl.DateTimeFormat("zh-CN", {
@@ -44,7 +47,7 @@ const numberFormatter = new Intl.NumberFormat("zh-CN");
 
 const $ = (id) => document.getElementById(id);
 const els = {
-  overview: $("overview"),
+  safetyStatusSummary: $("safetyStatusSummary"),
   groupList: $("groupList"),
   selectedGroupName: $("selectedGroupName"),
   selectedGroupMeta: $("selectedGroupMeta"),
@@ -65,6 +68,7 @@ const els = {
   memberStreakDays: $("memberStreakDays"),
   memberBoostStatus: $("memberBoostStatus"),
   memberBoostAction: $("memberBoostAction"),
+  memberBoostLabel: $("memberBoostLabel"),
   memberFormError: $("memberFormError"),
 
   customTerms: $("customTerms"),
@@ -277,21 +281,16 @@ async function reloadAll() {
 
 function renderOverview() {
   const data = state.overview;
-  const metrics = [
-    ["今日群签到", formatCount(data.today_checkins)],
-    ["今日活跃群", formatCount(data.active_groups)],
-    ["本月签到用户", formatCount(data.month_users)],
-    ["作品黑名单", formatCount(data.blacklist_count)],
-    ["自定义安全词", formatCount(data.custom_term_count)],
-    ["最近备份", data.latest_backup_at ? formatDate(data.latest_backup_at) : "无"],
-  ];
-  els.overview.innerHTML = metrics.map(([label, value]) => `
-    <div class="metric"><span>${escapeHtml(label)}</span><strong>${escapeHtml(value)}</strong></div>
-  `).join("");
+  const terms = formatCount(
+    data.custom_term_count ?? state.safety.global_safety_terms?.length ?? 0,
+  );
+  const blacklist = formatCount(data.blacklist_count ?? state.blacklist.length ?? 0);
+  els.safetyStatusSummary.textContent =
+    `全局词 ${terms} · 作品黑名单 ${blacklist} · 未分组默认关闭 R18`;
 }
 
 function renderOverviewError() {
-  els.overview.innerHTML = '<div class="metric-error">运行概览暂时无法读取，请使用上方“重新加载”。</div>';
+  els.safetyStatusSummary.textContent = "安全摘要读取失败，请重新加载";
 }
 
 function renderGroups() {
@@ -492,7 +491,7 @@ function openMemberEditor(member, trigger) {
   els.memberStreakDays.value = String(member.streak_days ?? 0);
   els.memberBoostStatus.textContent = member.boost_status || "无加持";
   els.memberBoostStatus.className = `boost-badge${member.boost_active ? " active" : ""}`;
-  els.memberBoostAction.value = "keep";
+  if (memberBoostSelect) memberBoostSelect.value = "keep";
   els.memberFormError.textContent = "";
   els.memberDialog.showModal();
   els.memberCoins.focus();
@@ -506,7 +505,7 @@ function readMemberForm() {
     affection: Number(els.memberAffection.value),
     total_days: Number(els.memberTotalDays.value),
     streak_days: Number(els.memberStreakDays.value),
-    boost_action: els.memberBoostAction.value || "keep",
+    boost_action: memberBoostSelect?.value || "keep",
   };
   const integers = [
     ["金币", values.coins],
@@ -670,15 +669,15 @@ function backupFileError(file) {
 }
 
 function switchView(name) {
-  const validNames = new Set(["ranking", "members", "safety", "policies", "settings", "data"]);
+  const validNames = new Set(["ranking", "members", "safety", "policies", "data", "settings"]);
   if (!validNames.has(name)) name = "ranking";
-  document.querySelectorAll(".workspace-nav [data-view]").forEach((button) =>
-    button.classList.toggle("active", button.dataset.view === name));
-  document.querySelectorAll(".workspace").forEach((view) =>
-    view.classList.toggle("active", view.id === `${name}View`));
-  document.querySelectorAll(".workspace-nav [data-view]").forEach((button) => {
-    button.setAttribute("aria-current", button.dataset.view === name ? "page" : "false");
+  document.querySelectorAll(".nav-tabs [data-view]").forEach((button) => {
+    const active = button.dataset.view === name;
+    button.classList.toggle("active", active);
+    button.setAttribute("aria-selected", active ? "true" : "false");
   });
+  document.querySelectorAll(".view").forEach((view) =>
+    view.classList.toggle("active", view.id === `${name}View`));
   history.replaceState(null, "", `#${name}`);
   if (name === "members" && !state.loaded.members) {
     loadMembers({ reset: true }).catch((error) => {
@@ -697,10 +696,11 @@ function switchView(name) {
   }
 }
 
-function confirmAction(title, message) {
+function confirmAction(title, message, confirmLabel = "确认执行") {
   const triggerEl = document.activeElement;
   els.dialogTitle.textContent = title;
   els.dialogMessage.textContent = message;
+  $("dialogConfirm").textContent = confirmLabel;
   els.dialog.showModal();
   return new Promise((resolve) => {
     const onClose = () => {
@@ -714,8 +714,49 @@ function confirmAction(title, message) {
   });
 }
 
+function applyTheme(isDark) {
+  const dark = typeof isDark === "boolean"
+    ? isDark
+    : Boolean(window.matchMedia?.("(prefers-color-scheme: dark)").matches);
+  document.documentElement.setAttribute("data-theme", dark ? "dark" : "light");
+}
+
+function followHostTheme() {
+  if (!bridge) return;
+  const current = bridge.getContext?.();
+  if (typeof current?.isDark === "boolean") {
+    hostThemeKnown = true;
+    applyTheme(current.isDark);
+  }
+  bridge.onContext?.((next) => {
+    if (typeof next?.isDark !== "boolean") return;
+    hostThemeKnown = true;
+    applyTheme(next.isDark);
+  });
+  window.matchMedia?.("(prefers-color-scheme: dark)").addEventListener?.("change", (event) => {
+    if (!hostThemeKnown) applyTheme(event.matches);
+  });
+}
+
+function mountMemberBoostSelect() {
+  memberBoostSelect = createSelect({
+    name: "boost_action",
+    labelledBy: els.memberBoostLabel?.id || "",
+    value: "keep",
+    options: [
+      { value: "keep", label: "保持当前加持不变" },
+      { value: "clear", label: "清除加持（重置为无加持）" },
+      { value: "add_1", label: "延长 1 天双倍好感加持" },
+      { value: "add_3", label: "延长 3 天双倍好感加持" },
+      { value: "add_7", label: "延长 7 天双倍好感加持" },
+    ],
+  });
+  els.memberBoostAction.replaceChildren(memberBoostSelect);
+}
+
 function bindEvents() {
-  document.querySelectorAll(".workspace-nav [data-view]").forEach((button) =>
+  mountMemberBoostSelect();
+  document.querySelectorAll(".nav-tabs [data-view]").forEach((button) =>
     button.addEventListener("click", () => switchView(button.dataset.view)));
 
   document.querySelectorAll("[data-rank]").forEach((button) => button.addEventListener("click", async () => {
@@ -879,11 +920,14 @@ async function start() {
     return;
   }
   await bridge.ready();
+  followHostTheme();
   bindEvents();
   settingsPage = settingsModule.createSettingsPage({
     bridge,
     notify: showToast,
     navigate: switchView,
+    confirm: ({ title, message, confirmLabel }) =>
+      confirmAction(title, message, confirmLabel),
   });
   const initialView = location.hash.slice(1);
   switchView(initialView || "ranking");
