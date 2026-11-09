@@ -9,7 +9,7 @@ import pytest
 from quart import Quart
 
 from plugin_api.api import PluginWebApi
-from plugin_api.settings import save_settings, settings_snapshot
+from plugin_api.settings import SAFETY_KEYS, save_settings, settings_snapshot
 
 
 class Config(dict):
@@ -47,8 +47,16 @@ def test_settings_snapshot_hides_legacy_fields_and_redacts_secret():
     assert "default" not in fields["pixiv_refresh_token"]
     assert secret not in repr(result)
     assert "checkin_affection_bonus_step_percent" in fields
-    assert fields["group_content_safety_policies"]["delegated"] is True
-    assert fields["group_content_safety_policies"]["view"] == "policies"
+    assert "group_content_safety_policies" not in fields
+    for safety_key in (
+        "global_safety_terms",
+        "keyword_match_mode",
+        "global_blacklisted_illust_ids",
+        "safety_groups",
+    ):
+        assert fields[safety_key]["delegated"] is True
+        assert fields[safety_key]["view"] == "policies"
+        assert "value" not in fields[safety_key]
     assert "dedupe_ttl_hours" not in fields
     assert "_grouped_config_migrated" not in fields
 
@@ -72,7 +80,8 @@ def test_every_visible_grouped_schema_item_is_edited_or_delegated():
                 assert (group_key, key) not in fields
             else:
                 field = fields[(group_key, key)]
-                assert bool(field.get("delegated")) == (spec.get("type") == "template_list")
+                delegated = spec.get("type") == "template_list" or key in SAFETY_KEYS
+                assert bool(field.get("delegated")) == delegated
 
 
 @pytest.mark.parametrize(
@@ -82,6 +91,10 @@ def test_every_visible_grouped_schema_item_is_edited_or_delegated():
         {"checkin_basic": {"unknown": False}},
         {"runtime": {"_grouped_config_migrated": True}},
         {"content_dedupe": {"group_content_safety_policies": []}},
+        {"content_dedupe": {"global_safety_terms": []}},
+        {"content_dedupe": {"keyword_match_mode": "loose"}},
+        {"content_dedupe": {"global_blacklisted_illust_ids": []}},
+        {"content_dedupe": {"safety_groups": []}},
         {"checkin_basic": {"checkin_affection_bonus_step_percent": True}},
         {"checkin_basic": {"checkin_affection_bonus_step_percent": 26}},
         {"checkin_basic": {"checkin_ai_greeting_timeout": float("nan")}},

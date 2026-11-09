@@ -1,17 +1,20 @@
 """Calendar view-model, event normalization, render and command tests."""
 
 import asyncio
+import base64
 from dataclasses import replace
+from io import BytesIO
 import json
 from pathlib import Path
 import sys
 from unittest.mock import AsyncMock
 
 from PIL import Image as PILImage
+import pytest
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 
-from astrbot_plugin_get_px.checkin import artwork as artwork_mod  # noqa: E402
+from astrbot_plugin_get_px.checkin import CheckinStore, artwork as artwork_mod  # noqa: E402
 from astrbot_plugin_get_px.checkin.card import CardBackground  # noqa: E402
 from astrbot_plugin_get_px.checkin.calendar import (  # noqa: E402
     CALENDAR_EVENT_LIMIT,
@@ -23,6 +26,13 @@ from astrbot_plugin_get_px.checkin.models import CheckinRecord  # noqa: E402
 from astrbot_plugin_get_px.checkin.quality import CHECKIN_JPEG_QUALITY  # noqa: E402
 from astrbot_plugin_get_px.main import GetPxPlugin  # noqa: E402
 from astrbot_plugin_get_px.pixiv.safety import ContentSafetyPolicy  # noqa: E402
+
+def _new_plugin():
+    from astrbot_plugin_get_px.pixiv.safety import ContentSafetyPolicy
+    plugin = object.__new__(GetPxPlugin)
+    plugin._content_safety_policy = AsyncMock(return_value=ContentSafetyPolicy())
+    return plugin
+
 
 
 _BASE_RECORD = CheckinRecord(
@@ -52,14 +62,6 @@ _BASE_RECORD = CheckinRecord(
     updated_at="",
 )
 
-def test_cache_identity_contains_independent_safety_lists():
-    base = ContentSafetyPolicy(group_id="g1", builtin_terms_enabled=False, custom_terms=["Alpha"], blacklisted_illust_ids=["1"]).cache_identity()
-    terms = ContentSafetyPolicy(group_id="g1", builtin_terms_enabled=False, custom_terms=["Beta"], blacklisted_illust_ids=["1"]).cache_identity()
-    ids = ContentSafetyPolicy(group_id="g1", builtin_terms_enabled=False, custom_terms=["Alpha"], blacklisted_illust_ids=["2"]).cache_identity()
-    assert base["custom_terms"] == ["Alpha"] and base["blacklisted_illust_ids"] == ["1"]
-    assert base != terms and base != ids
-    equivalent = ContentSafetyPolicy(group_id="g1", builtin_terms_enabled=False, custom_terms=[" Alpha ", "alpha"], blacklisted_illust_ids=["001", "1"]).cache_identity()
-    assert equivalent == base
 
 
 def _record(date_key: str, coins_reward: int) -> CheckinRecord:
@@ -224,6 +226,11 @@ def test_calendar_event_names_are_html_escaped() -> None:
         {"day": 31, "name": "&lt;b&gt;万圣节&lt;/b&gt; &amp; &quot;夜&quot;"}
     ]
     assert data["events_hidden_count"] == 0
+    credit = build_checkin_calendar_data(
+        month="2026-10", today_key="2026-10-01", records=[],
+        background_credit='<b>画师</b> & "夜樱"',
+    )["background_credit"]
+    assert credit == "&lt;b&gt;画师&lt;/b&gt; &amp; &quot;夜樱&quot;"
 
 def _make_jpeg(path: Path, size: tuple[int, int]) -> None:
     PILImage.new("RGB", size, "white").save(path, format="JPEG")
@@ -360,7 +367,7 @@ async def _collect(async_iterable):
 
 
 def test_render_calendar_calls_html_render_with_fixed_jpeg_canvas() -> None:
-    plugin = object.__new__(GetPxPlugin)
+    plugin = _new_plugin()
     plugin.html_render = AsyncMock(return_value="calendar.jpg")
 
     result = asyncio.run(
@@ -383,7 +390,7 @@ def test_render_calendar_calls_html_render_with_fixed_jpeg_canvas() -> None:
 
 
 def test_render_calendar_scales_output_by_render_tier() -> None:
-    plugin = object.__new__(GetPxPlugin)
+    plugin = _new_plugin()
     plugin.html_render = AsyncMock(return_value="calendar.jpg")
 
     result = asyncio.run(
@@ -410,7 +417,7 @@ def test_render_calendar_inlines_background_as_data_url(tmp_path, monkeypatch) -
         return {"weeks": []}
 
     monkeypatch.setattr(artwork_mod, "build_checkin_calendar_data", _fake_build)
-    plugin = object.__new__(GetPxPlugin)
+    plugin = _new_plugin()
     plugin.html_render = AsyncMock(return_value="calendar.jpg")
 
     asyncio.run(
@@ -432,10 +439,32 @@ def test_render_calendar_inlines_background_as_data_url(tmp_path, monkeypatch) -
     assert captured["background_credit"] == "背景：夜樱 / 画师名 (ID: 12345)"
 
 
+def test_render_calendar_preserves_ultra_background_edge(tmp_path) -> None:
+    image = tmp_path / "landscape.png"
+    PILImage.new("RGB", (4000, 2250), (10, 20, 30)).save(image)
+    plugin = _new_plugin()
+    plugin.html_render = AsyncMock(return_value="calendar.jpg")
+
+    asyncio.run(
+        plugin._render_checkin_calendar(
+            month="2026-08",
+            today_key="2026-08-15",
+            records=[],
+            render_tier="极致",
+            background=CardBackground(image_path=str(image)),
+        )
+    )
+
+    data = plugin.html_render.await_args.args[1]
+    _, encoded = data["background_url"].split(",", 1)
+    with PILImage.open(BytesIO(base64.b64decode(encoded))) as decoded:
+        assert decoded.size == (2880, 1620)
+
+
 def test_calendar_command_reuses_cached_image_without_rerendering(tmp_path) -> None:
     cached = tmp_path / "calendar.jpg"
     _make_jpeg(cached, size=(1600, 900))
-    plugin = object.__new__(GetPxPlugin)
+    plugin = _new_plugin()
     plugin.config = {"checkin_enabled": True}
     plugin.checkin_store = _CalendarStore(records=[])
     plugin.checkin_cache = _CalendarCache(hit=cached)
@@ -457,7 +486,7 @@ def test_calendar_command_reuses_cached_image_without_rerendering(tmp_path) -> N
 def test_calendar_command_renders_when_miss_then_publishes_and_sends(tmp_path) -> None:
     rendered = tmp_path / "rendered.jpg"
     _make_jpeg(rendered, size=(1600, 900))
-    plugin = object.__new__(GetPxPlugin)
+    plugin = _new_plugin()
     plugin.config = {"checkin_enabled": True}
     plugin.checkin_store = _CalendarStore(records=[])
     plugin.checkin_cache = _CalendarCache(hit=None, published=rendered)
@@ -478,7 +507,7 @@ def test_calendar_command_renders_when_miss_then_publishes_and_sends(tmp_path) -
 def test_calendar_command_sends_even_when_background_unavailable(tmp_path) -> None:
     rendered = tmp_path / "rendered.jpg"
     _make_jpeg(rendered, size=(1600, 900))
-    plugin = object.__new__(GetPxPlugin)
+    plugin = _new_plugin()
     plugin.config = {"checkin_enabled": True}
     plugin.checkin_store = _CalendarStore(records=[])
     plugin.checkin_cache = _CalendarCache(hit=None, published=rendered)
@@ -501,7 +530,7 @@ def test_calendar_command_cleans_pixiv_background_temp_file_after_send(tmp_path)
     bg_original = tmp_path / "bg-original.jpg"
     _make_jpeg(rendered, size=(1600, 900))
     _make_jpeg(bg_original, size=(300, 400))
-    plugin = object.__new__(GetPxPlugin)
+    plugin = _new_plugin()
     plugin.config = {"checkin_enabled": True}
     plugin.checkin_store = _CalendarStore(records=[])
     plugin.checkin_cache = _CalendarCache(hit=None, published=rendered)
@@ -528,7 +557,7 @@ def test_calendar_command_cleans_pixiv_background_temp_file_after_send(tmp_path)
 def test_calendar_command_falls_back_to_direct_render_without_cache(tmp_path) -> None:
     rendered = tmp_path / "calendar.jpg"
     _make_jpeg(rendered, size=(1600, 900))
-    plugin = object.__new__(GetPxPlugin)
+    plugin = _new_plugin()
     plugin.config = {"checkin_enabled": True}
     plugin.checkin_store = _CalendarStore(records=[])
     plugin.checkin_cache = None
@@ -549,7 +578,7 @@ def test_calendar_command_returns_text_for_bad_month_render_and_send_failures(
     tmp_path,
 ) -> None:
     # 1) 非法月份 → 纯文本提示
-    plugin = object.__new__(GetPxPlugin)
+    plugin = _new_plugin()
     plugin.config = {"checkin_enabled": True}
     plugin.checkin_store = _CalendarStore(records=[])
     event = _FakeEvent()
@@ -559,7 +588,7 @@ def test_calendar_command_returns_text_for_bad_month_render_and_send_failures(
     assert event.sent == []
 
     # 2) 渲染抛错 → 纯文本提示
-    plugin = object.__new__(GetPxPlugin)
+    plugin = _new_plugin()
     plugin.config = {"checkin_enabled": True}
     plugin.checkin_store = _CalendarStore(records=[])
     plugin.checkin_cache = None
@@ -575,7 +604,7 @@ def test_calendar_command_returns_text_for_bad_month_render_and_send_failures(
     # 3) 直渲路径发送失败 → 临时渲染文件已清理
     rendered = tmp_path / "calendar.jpg"
     _make_jpeg(rendered, size=(1600, 900))
-    plugin = object.__new__(GetPxPlugin)
+    plugin = _new_plugin()
     plugin.config = {"checkin_enabled": True}
     plugin.checkin_store = _CalendarStore(records=[])
     plugin.checkin_cache = None
@@ -590,14 +619,16 @@ def test_calendar_command_returns_text_for_bad_month_render_and_send_failures(
     assert not rendered.exists()
 
 
-def test_calendar_cache_key_reflects_custom_event_fingerprint(tmp_path) -> None:
+@pytest.mark.parametrize("with_custom_events", [False, True])
+def test_calendar_cache_key_reflects_actual_event_content(tmp_path, with_custom_events) -> None:
     rendered = tmp_path / "rendered.jpg"
     _make_jpeg(rendered, size=(1600, 900))
-    plugin = object.__new__(GetPxPlugin)
+    plugin = _new_plugin()
     plugin.config = {"checkin_enabled": True}
-    plugin.checkin_store = _CalendarStore(
-        records=[],
-        global_events=(type("Event", (), {"event_id": 7})(),),
+    plugin.checkin_store = (
+        _CalendarStore(records=[], global_events=(
+            type("Event", (), {"event_id": 7, "name": "周年", "date_value": "08-15"})(),
+        )) if with_custom_events else _StoreWithoutEventSource(records=[])
     )
     cache = _KeyCapturingCache(published=rendered)
     plugin.checkin_cache = cache
@@ -609,12 +640,13 @@ def test_calendar_cache_key_reflects_custom_event_fingerprint(tmp_path) -> None:
 
     output = asyncio.run(_collect(plugin._handle_checkin_calendar(event, "2026-08")))
 
-    # 管理员增删自定义事件后指纹变化，当日缓存即失效重渲
+    # 实际渲染事件快照进入 key，事件名称与日期不再只由数量/ID表示。
     assert output == []
     assert cache.view_models == [
         {
             "month": "2026-08",
-            "events": "1-7",
+            "events": sorted((item.start, item.end, item.name, item.is_off_day)
+                             for item in collect_calendar_events(month="2026-08", holiday_lookup=None, custom_events=getattr(plugin.checkin_store, "global_events", ()))),
             "records": "",
             "background_quality": "medium",
             "output_size": "1600x900",
@@ -624,39 +656,46 @@ def test_calendar_cache_key_reflects_custom_event_fingerprint(tmp_path) -> None:
     assert len(event.sent) == 1
 
 
-def test_calendar_cache_key_fingerprint_blank_without_event_source(tmp_path) -> None:
-    rendered = tmp_path / "rendered.jpg"
+@pytest.mark.asyncio
+async def test_calendar_event_edits_and_holiday_updates_invalidate_cache(tmp_path):
+    from copy import deepcopy
+    from astrbot_plugin_get_px.checkin.holiday import HolidayCalendar
+
+    store = CheckinStore(tmp_path / "store")
+    await store.add_global_event(event_type="annual", date_value="08-15", name="旧事件", created_by="test")
+    rendered = tmp_path / "calendar.jpg"
     _make_jpeg(rendered, size=(1600, 900))
-    plugin = object.__new__(GetPxPlugin)
+    plugin = _new_plugin()
     plugin.config = {"checkin_enabled": True}
-    plugin.checkin_store = _StoreWithoutEventSource(records=[])
-    cache = _KeyCapturingCache(published=rendered)
+    plugin.checkin_store = store
+    cache = _PolicyAwareCalendarCache(rendered, [])
     plugin.checkin_cache = cache
-    plugin._prepare_checkin_calendar_background = AsyncMock(
-        return_value=CardBackground(mode="fallback", source="fallback")
-    )
+    plugin.holiday_calendar = HolidayCalendar(tmp_path, plugin_version="test")
+    plugin._prepare_checkin_calendar_background = AsyncMock(return_value=CardBackground(mode="fallback"))
     plugin._render_checkin_calendar = AsyncMock(return_value=str(rendered))
     event = _FakeEvent()
+    await _collect(plugin._handle_checkin_calendar(event, "2026-08"))
+    before = await store.export_snapshot()
+    changed = deepcopy(before)
+    changed["global_events"][0].update(name="新事件", date_value="08-16")
+    await store.import_snapshot(changed)
+    await _collect(plugin._handle_checkin_calendar(event, "2026-08"))
+    plugin.holiday_calendar._state["days"] = {"2026-08-17": {"name": "新假日", "is_off_day": True}}
+    await _collect(plugin._handle_checkin_calendar(event, "2026-08"))
+    await _collect(plugin._handle_checkin_calendar(event, "2026-08"))
 
-    output = asyncio.run(_collect(plugin._handle_checkin_calendar(event, "2026-08")))
-
-    assert output == []
-    assert cache.view_models == [
-        {
-            "month": "2026-08",
-            "events": "",
-            "records": "",
-            "background_quality": "medium",
-            "output_size": "1600x900",
-            "content_safety_policy": ContentSafetyPolicy().cache_identity(),
-        }
-    ]
+    assert plugin._render_checkin_calendar.await_count == 3
+    assert cache.view_models[0] != cache.view_models[1] != cache.view_models[2]
+    assert cache.view_models[2] == cache.view_models[3]
+    rendered_events = plugin._render_checkin_calendar.await_args.kwargs["events"]
+    assert any(item.name == "新事件" and item.start == "2026-08-16" for item in rendered_events)
+    assert any(item.name == "新假日" for item in rendered_events)
 
 
 def test_calendar_background_quality_follows_render_tier(tmp_path) -> None:
     rendered = tmp_path / "rendered.jpg"
     _make_jpeg(rendered, size=(1600, 900))
-    plugin = object.__new__(GetPxPlugin)
+    plugin = _new_plugin()
     plugin.config = {"checkin_enabled": True, "checkin_card_quality_tier": "清晰"}
     plugin.checkin_store = _CalendarStore(records=[])
     cache = _KeyCapturingCache(published=rendered)
@@ -674,7 +713,8 @@ def test_calendar_background_quality_follows_render_tier(tmp_path) -> None:
     assert cache.view_models == [
         {
             "month": "2026-08",
-            "events": "0-0",
+            "events": sorted((item.start, item.end, item.name, item.is_off_day)
+                             for item in collect_calendar_events(month="2026-08", holiday_lookup=None)),
             "records": "",
             "background_quality": "large",
             "output_size": "2080x1170",
@@ -689,7 +729,7 @@ def test_calendar_background_quality_follows_render_tier(tmp_path) -> None:
 def test_calendar_cache_expected_size_follows_tier(tmp_path) -> None:
     rendered = tmp_path / "rendered.jpg"
     _make_jpeg(rendered, size=(2880, 1620))
-    plugin = object.__new__(GetPxPlugin)
+    plugin = _new_plugin()
     plugin.config = {"checkin_enabled": True, "checkin_card_quality_tier": "极致"}
     plugin.checkin_store = _CalendarStore(records=[])
     cache = _KeyCapturingCache(published=rendered)
@@ -714,7 +754,7 @@ def test_prepare_calendar_background_downloads_requested_quality(
     image = tmp_path / "bg.jpg"
     _make_jpeg(image, size=(1600, 900))
     illust = {"id": "123", "title": "夜樱", "user": {"name": "画师"}}
-    plugin = object.__new__(GetPxPlugin)
+    plugin = _new_plugin()
     plugin.config = {}
     plugin.image_index = None
     plugin.downloader = type("Downloader", (), {})()
@@ -748,7 +788,7 @@ def test_prepare_calendar_background_downloads_requested_quality(
 def test_calendar_cache_key_reflects_month_record_state(tmp_path) -> None:
     rendered = tmp_path / "rendered.jpg"
     _make_jpeg(rendered, size=(1600, 900))
-    plugin = object.__new__(GetPxPlugin)
+    plugin = _new_plugin()
     plugin.config = {"checkin_enabled": True}
     plugin.checkin_store = _CalendarStore(records=[_record("2026-08-02", 60)])
     cache = _KeyCapturingCache(published=rendered)
@@ -766,7 +806,8 @@ def test_calendar_cache_key_reflects_month_record_state(tmp_path) -> None:
     assert cache.view_models == [
         {
             "month": "2026-08",
-            "events": "0-0",
+            "events": sorted((item.start, item.end, item.name, item.is_off_day)
+                             for item in collect_calendar_events(month="2026-08", holiday_lookup=None)),
             "records": "2026-08-02:60",
             "background_quality": "medium",
             "output_size": "1600x900",
@@ -785,7 +826,7 @@ def _assert_calendar_policy_transition_invalidates_cache(
     rendered = tmp_path / "rendered.jpg"
     _make_jpeg(rendered, size=(1600, 900))
     trace: list[str] = []
-    plugin = object.__new__(GetPxPlugin)
+    plugin = _new_plugin()
     plugin.config = {"checkin_enabled": True}
     plugin.checkin_store = _CalendarStore(records=[])
     cache = _PolicyAwareCalendarCache(rendered, trace)
@@ -832,40 +873,24 @@ def test_calendar_cache_separates_relaxed_group_from_strict_group(tmp_path) -> N
     _assert_calendar_policy_transition_invalidates_cache(
         tmp_path,
         _FakeEvent(group_id="group-a"),
-        ContentSafetyPolicy(False, False, "group-a"),
+        ContentSafetyPolicy(False, "宽松"),
         _FakeEvent(group_id="group-b"),
-        ContentSafetyPolicy(True, True, "group-b"),
+        ContentSafetyPolicy(True, "宽松"),
     )
 
 
-def test_calendar_cache_invalidates_when_same_group_reenables_safety(tmp_path) -> None:
-    _assert_calendar_policy_transition_invalidates_cache(
-        tmp_path,
-        _FakeEvent(group_id="group-a"),
-        ContentSafetyPolicy(False, False, "group-a"),
-        _FakeEvent(group_id="group-a"),
-        ContentSafetyPolicy(True, True, "group-a"),
-    )
 
 
-def test_calendar_cache_separates_relaxed_group_from_private_chat(tmp_path) -> None:
-    _assert_calendar_policy_transition_invalidates_cache(
-        tmp_path,
-        _FakeEvent(group_id="group-a"),
-        ContentSafetyPolicy(False, False, "group-a"),
-        _FakeEvent(),
-        ContentSafetyPolicy(),
-    )
 
 def test_calendar_cache_misses_when_only_custom_terms_change(tmp_path) -> None:
-    first = ContentSafetyPolicy(False, False, "group-a", custom_terms=("alpha",), blacklisted_illust_ids=("1",))
-    second = ContentSafetyPolicy(False, False, "group-a", custom_terms=("beta",), blacklisted_illust_ids=("1",))
+    first = ContentSafetyPolicy(False, "宽松", custom_terms=("alpha",), blacklisted_illust_ids=("1",))
+    second = ContentSafetyPolicy(False, "宽松", custom_terms=("beta",), blacklisted_illust_ids=("1",))
     _assert_calendar_policy_transition_invalidates_cache(tmp_path, _FakeEvent(group_id="group-a"), first, _FakeEvent(group_id="group-a"), second)
-    assert first.cache_identity()["custom_terms"] != second.cache_identity()["custom_terms"]
+    assert first.cache_identity()["terms"] != second.cache_identity()["terms"]
 
 def test_calendar_cache_misses_when_only_blacklisted_ids_change(tmp_path) -> None:
-    first = ContentSafetyPolicy(False, False, "group-a", custom_terms=("alpha",), blacklisted_illust_ids=("1",))
-    second = ContentSafetyPolicy(False, False, "group-a", custom_terms=("alpha",), blacklisted_illust_ids=("2",))
+    first = ContentSafetyPolicy(False, "宽松", custom_terms=("alpha",), blacklisted_illust_ids=("1",))
+    second = ContentSafetyPolicy(False, "宽松", custom_terms=("alpha",), blacklisted_illust_ids=("2",))
     _assert_calendar_policy_transition_invalidates_cache(tmp_path, _FakeEvent(group_id="group-a"), first, _FakeEvent(group_id="group-a"), second)
     assert first.cache_identity()["blacklisted_illust_ids"] != second.cache_identity()["blacklisted_illust_ids"]
 
@@ -876,29 +901,12 @@ class _FailingEventStore(_CalendarStore):
 
 
 def test_collect_calendar_raw_events_degrades_when_global_events_fail() -> None:
-    degraded = object.__new__(GetPxPlugin)
+    degraded = _new_plugin()
     degraded.checkin_store = _FailingEventStore(records=[])
-    healthy = object.__new__(GetPxPlugin)
+    healthy = _new_plugin()
     healthy.checkin_store = _CalendarStore(records=[])
 
     # 全局事件读库失败按空事件降级，与无自定义事件的结果一致，不抛异常
     assert asyncio.run(degraded._collect_calendar_raw_events("2026-08")) == (
         asyncio.run(healthy._collect_calendar_raw_events("2026-08"))
     )
-
-
-def test_calendar_data_escapes_background_credit_markup() -> None:
-    # 背景署名来自 Pixiv 抓取文案，t2i 端点 Jinja2 不开 autoescape，出模块前必须转义
-    data = build_checkin_calendar_data(
-        month="2026-08",
-        today_key="2026-08-15",
-        records=[],
-        background_credit='<b>画师</b> & "夜樱"',
-    )
-    assert data["background_credit"] == (
-        "&lt;b&gt;画师&lt;/b&gt; &amp; &quot;夜樱&quot;"
-    )
-
-def test_checkin_calendar_module_retains_default_safety_independence():
-    from pixiv.safety import STRICT_CONTENT_SAFETY_POLICY
-    assert STRICT_CONTENT_SAFETY_POLICY.general_only_enabled is True

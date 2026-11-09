@@ -61,6 +61,7 @@ def test_all_registered_checkin_themes_are_self_contained() -> None:
     for theme in CHECKIN_THEMES.values():
         rendered = get_checkin_card_template(theme.theme_id)
         assert "/*__CHECKIN_CARD_CSS__*/" not in rendered
+        assert 'href="./style.css"' not in rendered
         assert "__CHECKIN_CARD_FONT_DATA__" not in rendered
         assert "data:font/woff2;base64," in rendered
         assert "https://" not in rendered
@@ -69,6 +70,9 @@ def test_all_registered_checkin_themes_are_self_contained() -> None:
         preview = theme.preview_path(plugin_root)
         assert preview.is_file()
         assert preview.suffix.lower() == ".png"
+        from PIL import Image
+        with Image.open(preview) as image:
+            image.verify()
 
 
 @pytest.mark.asyncio

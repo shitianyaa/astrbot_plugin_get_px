@@ -7,7 +7,8 @@ from pathlib import Path
 import re
 import time
 
-from astrbot.api.all import File, Image, Plain, logger
+from astrbot.api import logger
+from astrbot.api.all import File, Image, Plain
 from astrbot.api.event import AstrMessageEvent
 from astrbot.core.star.star_tools import StarTools
 
@@ -249,8 +250,8 @@ class CheckinCommandMixin:
         background: CardBackground | None = None
         card_path = ""
         preview_tier = self._configured_checkin_render_tier()
-        policy = await self._content_safety_policy(event)
         try:
+            policy = await self._content_safety_policy(event)
             background = await self._prepare_checkin_background(
                 event,
                 record,
@@ -714,8 +715,10 @@ class CheckinCommandMixin:
         render_spec = get_checkin_render_tier(self._configured_checkin_render_tier())
         background_quality = render_spec.background_quality
         output_width, output_height = calendar_output_size(render_spec.name)
-        policy = await self._content_safety_policy(event)
         try:
+            policy = await self._content_safety_policy(event)
+            # key 与渲染共用事件快照，包含自定义事件及在线节假日的实际内容。
+            raw_events = await self._collect_calendar_raw_events(target_month)
             if cache is not None:
                 key = cache.cache_key(
                     date_key=today_key,
@@ -723,7 +726,7 @@ class CheckinCommandMixin:
                     template_version=CALENDAR_TEMPLATE_VERSION,
                     view_model={
                         "month": target_month,
-                        "events": await self._calendar_custom_events_fingerprint(),
+                        "events": sorted((item.start, item.end, item.name, item.is_off_day) for item in raw_events),
                         "records": self._calendar_records_fingerprint(records),
                         "background_quality": background_quality,
                         "output_size": f"{output_width}x{output_height}",
@@ -753,8 +756,6 @@ class CheckinCommandMixin:
                         f"error_type={type(exc).__name__}"
                     )
                     background = None
-                raw_events = await self._collect_calendar_raw_events(target_month)
-
                 def renderer():
                     return self._render_checkin_calendar(
                         month=target_month,
@@ -783,7 +784,7 @@ class CheckinCommandMixin:
                 event.chain_result([Image.fromFileSystem(str(calendar_path))])
             )
             logger.info(
-                f"{LOG_PREFIX} 签到日历发送完成: month={target_month} "
+                f"{LOG_PREFIX} 签到日历发送调用已返回: month={target_month} "
                 f"record_count={len(records)} "
                 f"cached={'no' if directly_rendered else 'yes'} "
                 f"background_mode={getattr(background, 'mode', 'none') or 'none'}"
@@ -842,25 +843,6 @@ class CheckinCommandMixin:
             for record in records
         )
         return ",".join(f"{date_key}:{coins}" for date_key, coins in items)
-
-    async def _calendar_custom_events_fingerprint(self) -> str:
-        """自定义事件指纹（数量-最大ID）纳入缓存 key，管理员当日增删事件即失效重渲。"""
-        list_events = getattr(self.checkin_store, "list_global_events", None)
-        if not callable(list_events):
-            return ""
-        try:
-            events = await list_events()
-        except Exception as exc:
-            logger.warning(
-                f"{LOG_PREFIX} 日历事件指纹读取失败，按空指纹处理: "
-                f"error_type={type(exc).__name__}"
-            )
-            return ""
-        max_id = max(
-            (int(getattr(item, "event_id", 0) or 0) for item in events),
-            default=0,
-        )
-        return f"{len(events)}-{max_id}"
 
     @staticmethod
     def _format_checkin_plain_text(result) -> str:

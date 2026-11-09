@@ -5,6 +5,7 @@ import os
 import re
 import tempfile
 import time
+from pathlib import Path
 from collections.abc import Iterable
 from urllib.parse import urlsplit, urlunsplit
 
@@ -17,6 +18,8 @@ LOG_PREFIX = "[GetPx]"
 MAX_DOWNLOAD_BYTES = 50 * 1024 * 1024
 MAX_PROXY_ORIGINS = 5
 MAX_DOWNLOAD_ATTEMPTS = 8
+# 与 Pages 最近 10 分钟的临时文件保护保持一致。
+DELIVERY_FILE_GRACE_SECONDS = 600
 _LOG_URL_PATTERN = re.compile(r"https?://\S+", re.IGNORECASE)
 
 ALLOWED_PIXIV_IMAGE_HOSTS = frozenset(
@@ -49,6 +52,17 @@ PIXIV_HEADERS = {
 }
 
 
+class ImageSizeLimitError(RuntimeError):
+    """超限一律交给调用方换作品，不参与画质或反代回退。"""
+
+
+def format_log_size(size_bytes: int) -> str:
+    """日志按二进制单位展示大小，不改变实际字节限制。"""
+    if size_bytes >= 1024 * 1024:
+        return f"{size_bytes / (1024 * 1024):.2f}MiB"
+    return f"{size_bytes / 1024:.2f}KiB"
+
+
 def _too_large_error(size_bytes: float) -> RuntimeError:
     return RuntimeError(
         f"图片过大: {size_bytes / 1024 / 1024:.1f} MiB，"
@@ -64,6 +78,8 @@ def _download_error_reason(exc: BaseException) -> str:
         return f"http_{exc.status}" if exc.status else "http_error"
     if isinstance(exc, aiohttp.ClientError):
         return "network_error"
+    if isinstance(exc, ImageSizeLimitError):
+        return "size_limit"
     if isinstance(exc, RuntimeError):
         message = str(exc)
         if message.startswith("HTTP "):
@@ -73,8 +89,6 @@ def _download_error_reason(exc: BaseException) -> str:
             return "too_large"
         if message == "响应内容不是有效图片":
             return "invalid_image"
-        if message == "原图超过自动降级阈值":
-            return "downgrade_threshold"
         return "runtime_error"
     if isinstance(exc, OSError):
         return "filesystem_error"
@@ -91,7 +105,7 @@ def _download_route_log_label(route: str, source: object) -> str:
         return "反代地址"
     if str(source or "").casefold() == "lolicon":
         return "图片源返回地址"
-    return "直连地址"
+    return "源图片地址"
 
 
 def parse_proxy_origins(raw_origins: object) -> tuple[str, ...]:
@@ -184,8 +198,10 @@ def iter_download_urls(
 
 
 class ImageDownloader:
-    def __init__(self, lolicon_image_proxy_origins: object = ""):
+    def __init__(self, lolicon_image_proxy_origins: object = "", *, temp_dir: Path | None = None):
+        self.temp_dir = Path(temp_dir) if temp_dir is not None else None
         self._session: aiohttp.ClientSession | None = None
+        self._cleanup_tasks: set[asyncio.Task] = set()
         self.lolicon_image_proxy_origins = parse_proxy_origins(
             lolicon_image_proxy_origins
         )
@@ -201,11 +217,61 @@ class ImageDownloader:
         return self._session
 
     async def close(self):
+        tasks = tuple(self._cleanup_tasks)
+        for task in tasks:
+            task.cancel()
+        if tasks:
+            await asyncio.gather(*tasks, return_exceptions=True)
+        self._cleanup_tasks.clear()
         if self._session is not None and not self._session.closed:
             await self._session.close()
             self._session = None
 
-    async def download(self, url: str, timeout: float) -> tuple[str, int]:
+    def defer_cleanup(self, path: str) -> None:
+        """Leave an uncertain file send readable for the protocol's grace window."""
+        try:
+            os.utime(path, None)
+        except FileNotFoundError:
+            return
+        except OSError as exc:
+            logger.warning(
+                f"{LOG_PREFIX} 延迟清理时间更新失败: error_type={type(exc).__name__}"
+            )
+        self._schedule_cleanup(path, DELIVERY_FILE_GRACE_SECONDS)
+
+    def _schedule_cleanup(self, path: str, delay: float) -> None:
+        async def remove_later():
+            await asyncio.sleep(delay)
+            cleanup(path)
+
+        task = asyncio.create_task(remove_later())
+        self._cleanup_tasks.add(task)
+        task.add_done_callback(self._cleanup_tasks.discard)
+
+    async def resume_cleanup(self) -> None:
+        """Resume bounded cleanup of plugin download leftovers after restart."""
+        def remaining_files():
+            pending = []
+            if self.temp_dir is None:
+                return pending
+            try:
+                for path in self.temp_dir.glob("get_px_*"):
+                    if path.is_file():
+                        remaining = path.stat().st_mtime + DELIVERY_FILE_GRACE_SECONDS - time.time()
+                        pending.append((str(path), min(DELIVERY_FILE_GRACE_SECONDS, max(0, remaining))))
+            except OSError as exc:
+                logger.warning(
+                    f"{LOG_PREFIX} 恢复临时图片清理失败: error_type={type(exc).__name__}"
+                )
+            return pending
+
+        for path, delay in await asyncio.to_thread(remaining_files):
+            self._schedule_cleanup(path, delay)
+
+    async def download(self, url: str, timeout: float, size_limit_bytes: int = 0) -> tuple[str, int]:
+        if self.temp_dir is None:
+            raise RuntimeError("插件临时下载目录尚未初始化")
+        self.temp_dir.mkdir(parents=True, exist_ok=True)
         session = self._ensure_session()
         client_timeout = aiohttp.ClientTimeout(total=timeout)
         suffix = ".jpg"
@@ -229,8 +295,10 @@ class ImageDownloader:
                 content_length = resp.content_length
                 if content_length and content_length > MAX_DOWNLOAD_BYTES:
                     raise _too_large_error(content_length)
+                if content_length and 0 < size_limit_bytes < content_length:
+                    raise ImageSizeLimitError("图片超过大小上限")
 
-                fd, path = tempfile.mkstemp(prefix="get_px_", suffix=suffix)
+                fd, path = tempfile.mkstemp(prefix="get_px_", suffix=suffix, dir=self.temp_dir)
                 size = 0
                 file_obj = os.fdopen(fd, "wb")
                 fd = -1
@@ -241,6 +309,8 @@ class ImageDownloader:
                         size += len(chunk)
                         if size > MAX_DOWNLOAD_BYTES:
                             raise _too_large_error(size)
+                        if 0 < size_limit_bytes < size:
+                            raise ImageSizeLimitError("图片超过大小上限")
                         f.write(chunk)
             try:
                 with Image.open(path) as image:
@@ -265,8 +335,9 @@ class ImageDownloader:
         illust: dict,
         quality: str,
         timeout: float,
-        downgrade_limit_bytes: int,
+        size_limit_bytes: int,
         log_context: str,
+        allow_quality_fallback: bool = True,
     ) -> tuple[str, str, int]:
         started_at = time.monotonic()
         log_context = _safe_log_context(log_context)
@@ -275,8 +346,9 @@ class ImageDownloader:
         last_error: Exception | None = None
         last_reason = "no_candidate"
         failure_reasons: list[str] = []
-        enforce_downgrade_limit = False
         candidates = list(iter_image_quality_urls(illust, quality))
+        if not allow_quality_fallback:
+            candidates = [(q, url) for q, url in candidates if q == quality]
         if not candidates:
             raise RuntimeError("无可下载 URL")
 
@@ -322,7 +394,9 @@ class ImageDownloader:
                     )
                 path = ""
                 try:
-                    path, file_size = await self.download(url, timeout=timeout)
+                    path, file_size = await self.download(
+                        url, timeout=timeout, size_limit_bytes=size_limit_bytes
+                    )
                 except Exception as exc:
                     cleanup(path)
                     quality_error = exc
@@ -335,49 +409,26 @@ class ImageDownloader:
                         f"attempt={attempts}/{MAX_DOWNLOAD_ATTEMPTS} "
                         f"reason={last_reason} error_type={type(exc).__name__}"
                     )
+                    if isinstance(exc, ImageSizeLimitError) or (
+                        not allow_quality_fallback and last_reason == "too_large"
+                    ):
+                        raise
                     continue
 
-                within_downgrade_limit = (
-                    downgrade_limit_bytes <= 0
-                    or file_size <= downgrade_limit_bytes
+                quality_label = QUALITY_LOG_LABELS.get(
+                    actual_quality, actual_quality
                 )
-                if (
-                    actual_quality != "original"
-                    and not enforce_downgrade_limit
-                ) or within_downgrade_limit:
-                    quality_label = QUALITY_LOG_LABELS.get(
-                        actual_quality, actual_quality
-                    )
-                    route_label = _download_route_log_label(
-                        route, illust.get("_source")
-                    )
-                    logger.info(
-                        f"{LOG_PREFIX} {log_context} 图片下载完成: "
-                        f"quality={quality_label} route={route_label} "
-                        f"attempts={attempts} "
-                        f"size={file_size / 1024:.2f}KB "
-                        f"duration={int((time.monotonic() - started_at) * 1000)}ms"
-                    )
-                    return path, actual_quality, file_size
-
-                if actual_quality == "original":
-                    enforce_downgrade_limit = True
-                    logger.info(
-                        f"{LOG_PREFIX} {log_context} 原图超过阈值，自动降低画质: "
-                        f"threshold_mib={downgrade_limit_bytes / 1024 / 1024:.2f} "
-                        f"actual_mib={file_size / 1024 / 1024:.2f}"
-                    )
-                else:
-                    logger.debug(
-                        f"{LOG_PREFIX} {log_context} 降档图片仍超过阈值: "
-                        f"quality={actual_quality} size_bytes={file_size}"
-                    )
-                cleanup(path)
-                quality_error = RuntimeError("原图超过自动降级阈值")
-                last_error = quality_error
-                last_reason = _download_error_reason(quality_error)
-                failure_reasons.append(last_reason)
-                break
+                route_label = _download_route_log_label(
+                    route, illust.get("_source")
+                )
+                logger.info(
+                    f"{LOG_PREFIX} {log_context} 图片下载完成: "
+                    f"quality={quality_label} route={route_label} "
+                    f"attempts={attempts} "
+                    f"size={format_log_size(file_size)} "
+                    f"duration_ms={int((time.monotonic() - started_at) * 1000)}"
+                )
+                return path, actual_quality, file_size
 
             if attempts >= MAX_DOWNLOAD_ATTEMPTS:
                 logger.warning(
@@ -388,8 +439,8 @@ class ImageDownloader:
                 break
             if quality_error is not None:
                 logger.debug(
-                    f"{LOG_PREFIX} {log_context} quality={actual_quality} 不可用，"
-                    "尝试下一画质"
+                    f"{LOG_PREFIX} {log_context} 当前画质下载未成功: "
+                    f"quality={actual_quality} fallback_enabled={'yes' if allow_quality_fallback else 'no'}"
                 )
 
         if last_error is not None:

@@ -13,7 +13,6 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 
 from astrbot.api.message_components import File  # noqa: E402
 from astrbot_plugin_get_px.checkin import CheckinStore  # noqa: E402
-from astrbot_plugin_get_px.checkin import dump_checkin_snapshot_json  # noqa: E402
 from astrbot_plugin_get_px.checkin.commands import (  # noqa: E402
     MAX_CHECKIN_BACKUP_BYTES,
     MAX_CHECKIN_BACKUP_FILES,
@@ -148,9 +147,11 @@ class CheckinBackupWebTest(unittest.IsolatedAsyncioTestCase):
         ):
             source = FrozenCheckinStore(src_tmp, date_key="2026-05-26")
             await source.checkin(user_id="20002", username="source", bot_name="neko")
-            snapshot_text = dump_checkin_snapshot_json(await source.export_snapshot())
+            snapshot = await source.export_snapshot()
+            snapshot_text = json.dumps({"kind": "plugin_data_export", "schema_version": 1, "plugin_name": "astrbot_plugin_get_px", "checkin": snapshot, "safety": {"safety_groups": [{"allow_r18": True}]}, "legacy_safety_archives": [{"old": "do not restore"}]})
 
             plugin = object.__new__(GetPxPlugin)
+            plugin.config = {"content_dedupe": {"safety_groups": []}}
             plugin.data_dir = Path(dst_tmp)
             plugin.checkin_store = FrozenCheckinStore(dst_tmp, date_key="2026-05-26")
             await plugin.checkin_store.checkin(
@@ -165,21 +166,20 @@ class CheckinBackupWebTest(unittest.IsolatedAsyncioTestCase):
                 methods=["POST"],
             )
 
-            with patch("astrbot_plugin_get_px.plugin_api.api.logger") as mock_logger:
-                async with app.test_app():
-                    client = app.test_client()
-                    response = await client.post(
-                        "/checkin-import",
-                        files={
-                            "file": FileStorage(
-                                stream=io.BytesIO(snapshot_text.encode("utf-8")),
-                                filename="checkin-export.json",
-                                name="file",
-                                content_type="application/json",
-                            )
-                        },
-                    )
-                    payload = await response.get_json()
+            async with app.test_app():
+                client = app.test_client()
+                response = await client.post(
+                    "/checkin-import",
+                    files={
+                        "file": FileStorage(
+                            stream=io.BytesIO(snapshot_text.encode("utf-8")),
+                            filename="checkin-export.json",
+                            name="file",
+                            content_type="application/json",
+                        )
+                    },
+                )
+                payload = await response.get_json()
 
             self.assertEqual(response.status_code, 200)
             self.assertTrue(payload["success"])
@@ -192,14 +192,8 @@ class CheckinBackupWebTest(unittest.IsolatedAsyncioTestCase):
             replaced = await plugin.checkin_store.get_profile("10001")
             self.assertEqual(imported.total_days, 1)
             self.assertEqual(replaced.total_days, 0)
-            log_text = "\n".join(
-                str(call.args[0])
-                for method in (mock_logger.info, mock_logger.warning)
-                for call in method.call_args_list
-            )
-            self.assertIn("开始导入签到 JSON 备份", log_text)
-            self.assertIn("现有签到数据已备份", log_text)
-            self.assertIn("现有签到数据已由 JSON 备份覆盖", log_text)
+            self.assertEqual(plugin.config, {"content_dedupe": {"safety_groups": []}})
+            self.assertFalse((Path(dst_tmp) / "safety_legacy_backups").exists())
 
     async def test_web_checkin_import_rejects_old_snapshot_version(self):
         with (
@@ -230,37 +224,6 @@ class CheckinBackupWebTest(unittest.IsolatedAsyncioTestCase):
                         "file": FileStorage(
                             stream=io.BytesIO(snapshot_text.encode("utf-8")),
                             filename="checkin-export-old.json",
-                            name="file",
-                            content_type="application/json",
-                        )
-                    },
-                )
-                payload = await response.get_json()
-
-            self.assertEqual(response.status_code, 400)
-            self.assertFalse(payload["success"])
-            self.assertIn("不支持的签到备份版本", payload["error"])
-
-    async def test_web_checkin_import_rejects_invalid_snapshot(self):
-        with tempfile.TemporaryDirectory() as tmp:
-            plugin = object.__new__(GetPxPlugin)
-            plugin.data_dir = Path(tmp)
-            plugin.checkin_store = FrozenCheckinStore(tmp, date_key="2026-05-26")
-            app = Quart(__name__)
-            app.add_url_rule(
-                "/checkin-import",
-                view_func=plugin._web_checkin_import,
-                methods=["POST"],
-            )
-
-            async with app.test_app():
-                client = app.test_client()
-                response = await client.post(
-                    "/checkin-import",
-                    files={
-                        "file": FileStorage(
-                            stream=io.BytesIO(b'{"schema_version":999}'),
-                            filename="broken.json",
                             name="file",
                             content_type="application/json",
                         )

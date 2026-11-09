@@ -32,6 +32,13 @@
 5. 通过语法检查和最小回归测试后再提交 PR
 6. 记录开发进度到 `Progress/` 目录
 
+## 发布前检查
+
+- `metadata.yaml.version`、`main.py` 的 `PLUGIN_VERSION`、README 徽章和 CHANGELOG 首个版本段必须一致。CHANGELOG 使用 `## vX.Y.Z (YYYY-MM-DD)`，README 更新日志链接指向该版本段；不保留分支临时措辞。
+- 运行 `python -m pytest -q tests` 及语法、配置 JSON 检查，确认 PR 质量检查通过后再合并。
+- `Release plugin archive` 在 `master` 的 CHANGELOG 最新版本改变时自动创建 tag 和 Release。发布 job 不依赖质量检查，不要将合并视为只更新代码；使用新版本号，并确认同名 tag 不指向其他提交。
+- 现有工作流重新发布已有版本会覆盖 Release 附件和说明。不要为修复已发布版本直接重跑发布，优先发布新版本。
+
 ## 文档同步要求
 
 文档同步细则统一维护在 [`maintenance.md`](./maintenance.md#文档同步)。贡献文档只强调一点：不要只改代码而让 README、docs、CHANGELOG 失真。

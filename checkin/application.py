@@ -4,25 +4,27 @@ import asyncio
 from dataclasses import dataclass, replace
 from pathlib import Path
 
-from astrbot.api.all import Image, Plain, logger
+from astrbot.api import logger
+from astrbot.api.all import Image, Plain
 from astrbot.api.event import AstrMessageEvent
 
 from .models import ACHIEVEMENTS, CheckinProfile, CheckinRecord
 from .quality import CHECKIN_JPEG_QUALITY, get_checkin_render_tier
 from .birthday import birthday_matches, parse_qq_birthday
-from .card import CardBackground, build_checkin_card_data
+from .card import BackgroundEncodingError, CardBackground, build_checkin_card_data
 from .content import CheckinContent, resolve_checkin_content
 from .greeting import DEFAULT_CHECKIN_GREETING_PROMPT
 from .themes import get_checkin_theme
 
 try:
+    from ..pixiv.delivery import DeliveryNotSubmitted, DeliveryStatus, send_once
     from ..pixiv.downloader import cleanup
 except ImportError:  # Direct imports used by the test suite.
+    from pixiv.delivery import DeliveryNotSubmitted, DeliveryStatus, send_once
     from pixiv.downloader import cleanup
 
 
 LOG_PREFIX = "[GetPx]"
-DEFAULT_AUTO_DOWNGRADE_ORIGINAL_LIMIT_MB = 3.0
 
 
 @dataclass(frozen=True)
@@ -190,9 +192,9 @@ class CheckinApplicationMixin:
 
         background: CardBackground | None = None
         card_path: Path | None = None
+        cached_path: Path | None = None
         claim_held = False
         background_persisted = False
-        background_reselected = False
         profile_snapshot = self._checkin_profile_from_record(record)
         user_title = await self._get_checkin_user_title(record.user_id)
         preferred_tier = (
@@ -202,10 +204,20 @@ class CheckinApplicationMixin:
         )
         stage = "background_selection"
         cache_hit = False
-        policy = await self._content_safety_policy(event)
         try:
+            policy = await self._content_safety_policy(event)
+            safety_identity = policy.cache_identity()
             if result.duplicate:
                 background = self._checkin_background_from_record(record)
+                variant_key = self._checkin_card_cache_key(
+                    event, profile=profile_snapshot, record=record,
+                    background=background, bot_name=bot_name, user_title=user_title,
+                    render_tier=preferred_tier, safety_identity=safety_identity,
+                )
+                background = (
+                    await asyncio.to_thread(cache.get_background, record.date_key, variant_key)
+                    or background
+                )
             else:
                 background = await self._prepare_checkin_background(
                     event,
@@ -231,6 +243,7 @@ class CheckinApplicationMixin:
                 user_title=user_title,
                 preferred_tier=preferred_tier,
                 policy=policy,
+                safety_identity=safety_identity,
             )
             cache_hit = cached_path is not None
             if cached_path is None and result.duplicate:
@@ -238,42 +251,6 @@ class CheckinApplicationMixin:
                 background = await self._restore_checkin_background(
                     event, record, policy=policy
                 )
-                restored_quality = str(getattr(background, "quality", "") or "")
-                saved_quality = str(
-                    getattr(record, "background_quality", "") or ""
-                )
-                if (
-                    background.mode == "pixiv_daily"
-                    and restored_quality
-                    and restored_quality != saved_quality
-                ):
-                    try:
-                        await self.checkin_store.update_record_background(
-                            user_id=user_id,
-                            date_key=record.date_key,
-                            mode=background.mode,
-                            source=background.source,
-                            illust_id=background.illust_id,
-                            title=background.title,
-                            author=background.author,
-                            quality=restored_quality,
-                        )
-                    except asyncio.CancelledError:
-                        raise
-                    except Exception as exc:
-                        logger.warning(
-                            f"{LOG_PREFIX} 签到背景实际质量同步失败: "
-                            f"error_type={type(exc).__name__}"
-                        )
-                    else:
-                        record = replace(
-                            record,
-                            background_quality=restored_quality,
-                        )
-                        logger.debug(
-                            f"{LOG_PREFIX} 签到背景实际质量已同步: "
-                            f"quality={restored_quality}"
-                        )
                 if background.mode != "pixiv_daily" and (
                     record.background_mode == "pixiv_daily"
                 ):
@@ -293,7 +270,6 @@ class CheckinApplicationMixin:
                     )
                     if reselected is not None and reselected.mode == "pixiv_daily":
                         background = reselected
-                        background_reselected = True
                         # mode 已由重选分支保证为 pixiv_daily，仅查占用与 illust_id。
                         claim_held = bool(
                             background.illust_id
@@ -312,21 +288,36 @@ class CheckinApplicationMixin:
                         )
             if cached_path is None:
                 stage = "card_render"
-                cached_path, actual_tier = await self._render_checkin_card_with_fallback(
-                    event,
-                    profile=profile_snapshot,
-                    record=record,
-                    background=background,
-                    bot_name=bot_name,
-                    user_title=user_title,
-                    preferred_tier=preferred_tier,
-                    cache=cache,
-                    policy=policy,
-                )
+                for background_attempt in range(2):
+                    try:
+                        cached_path, actual_tier = await self._render_checkin_card_with_fallback(
+                            event,
+                            profile=profile_snapshot,
+                            record=record,
+                            background=background,
+                            bot_name=bot_name,
+                            user_title=user_title,
+                            preferred_tier=preferred_tier,
+                            cache=cache,
+                            policy=policy,
+                            safety_identity=safety_identity,
+                        )
+                        break
+                    except BackgroundEncodingError:
+                        if background_attempt:
+                            raise
+                        logger.warning(
+                            f"{LOG_PREFIX} 签到背景无法编码，撤销作品并使用占位图: "
+                            f"reason=background_encoding_failed"
+                        )
+                        if claim_held:
+                            await self._release_checkin_background_claim(event, background)
+                            claim_held = False
+                        if background and background.mode == "pixiv_daily":
+                            cleanup(background.image_path)
+                        background = CardBackground(mode="fallback", source="fallback")
 
-            if (
-                not result.duplicate or background_reselected
-            ) and background is not None:
+            if not result.duplicate and background is not None:
                 stage = "background_persist"
                 await self.checkin_store.update_record_background(
                     user_id=user_id,
@@ -364,9 +355,41 @@ class CheckinApplicationMixin:
                     if quota_line:
                         content.append(Plain(quota_line))
                 stage = "card_send"
-                await event.send(event.chain_result(content))
-                # 图片发送成功后不再释放 pending；即使升级正式记录失败，也要继续去重。
+                submission_cancelled = None
+                try:
+                    delivery_status = await send_once(event, content, context="feature=checkin")
+                except DeliveryNotSubmitted:
+                    raise
+                except asyncio.CancelledError as exc:
+                    # 保留派生背景摘要后再传播取消，重选卡片也可按原背景复用。
+                    submission_cancelled = exc
+                    delivery_status = DeliveryStatus.UNKNOWN
+                if delivery_status is DeliveryStatus.FAILED:
+                    raise RuntimeError("签到卡尚未提交")
+                # 正常返回、超时或送达未知均不能撤销已提交背景。
                 claim_held = False
+                if not cache_hit:
+                    try:
+                        # 用当天基础记录定位变体；跨群重选不覆盖基础背景。
+                        variant_key = self._checkin_card_cache_key(
+                            event, profile=profile_snapshot, record=record,
+                            background=self._checkin_background_from_record(record),
+                            bot_name=bot_name, user_title=user_title,
+                            render_tier=self._record_checkin_render_tier(record),
+                            safety_identity=safety_identity,
+                        )
+                        await asyncio.to_thread(
+                            cache.store_background, record.date_key, variant_key, background
+                        )
+                    except Exception as exc:
+                        logger.warning(
+                            f"{LOG_PREFIX} 签到背景缓存写入失败: error_type={type(exc).__name__}"
+                        )
+                if delivery_status is DeliveryStatus.UNKNOWN:
+                    logger.warning(f"{LOG_PREFIX} 签到卡送达未知，保留背景与缓存: delivery_status=unknown retry=no")
+                    if submission_cancelled is not None:
+                        raise submission_cancelled
+                    return
                 try:
                     stage = "usage_record"
                     await self._record_checkin_background(event, background)
@@ -381,8 +404,9 @@ class CheckinApplicationMixin:
                         f"error_type={type(exc).__name__}"
                     )
                 logger.info(
-                    f"{LOG_PREFIX} 签到卡发送完成: tier={actual_tier} "
+                    f"{LOG_PREFIX} 签到卡发送调用已结束: tier={actual_tier} "
                     f"cache_hit={'yes' if cache_hit else 'no'} "
+                    f"delivery_status={delivery_status.value} "
                     f"background_mode={getattr(background, 'mode', 'none')}"
                 )
                 return
@@ -409,14 +433,6 @@ class CheckinApplicationMixin:
                                 author="",
                                 quality="",
                             )
-                            if cached_path is not None:
-                                try:
-                                    Path(cached_path).unlink(missing_ok=True)
-                                except OSError as exc:
-                                    logger.warning(
-                                        f"{LOG_PREFIX} 未发送签到卡缓存清理失败: "
-                                        f"error_type={type(exc).__name__}"
-                                    )
                             logger.debug(
                                 f"{LOG_PREFIX} 未发送签到背景持久化已撤销"
                             )
@@ -434,6 +450,14 @@ class CheckinApplicationMixin:
                                 f"error_type={type(exc).__name__}"
                             )
                     if can_release_claim:
+                        if cached_path is not None:
+                            try:
+                                Path(cached_path).unlink(missing_ok=True)
+                            except OSError as exc:
+                                logger.warning(
+                                    f"{LOG_PREFIX} 未发送签到卡缓存清理失败: "
+                                    f"error_type={type(exc).__name__}"
+                                )
                         await self._release_checkin_background_claim(
                             event, background
                         )
@@ -700,7 +724,7 @@ class CheckinApplicationMixin:
             bot = getattr(event, "bot", None)
             if bot is None or not hasattr(bot, "call_action"):
                 logger.warning(
-                    f"{LOG_PREFIX} QQ 生日读取失败: 当前事件不支持 call_action"
+                    f"{LOG_PREFIX} QQ 生日未读取: reason=call_action_unavailable"
                 )
                 return QQBirthdayLookup(None, False)
             payload = await asyncio.wait_for(
@@ -713,7 +737,7 @@ class CheckinApplicationMixin:
             )
             parsed = parse_qq_birthday(payload)
             if parsed is None:
-                logger.info(f"{LOG_PREFIX} QQ 生日未读取: 用户未公开生日")
+                logger.info(f"{LOG_PREFIX} QQ 生日未读取: reason=birthday_not_available")
             else:
                 logger.info(f"{LOG_PREFIX} QQ 生日读取成功")
             return QQBirthdayLookup(parsed, True)
@@ -772,6 +796,7 @@ class CheckinApplicationMixin:
         user_title: str = "",
         render_tier: str | None = None,
         policy=None,
+        safety_identity=None,
     ) -> str:
         background = background or self._checkin_background_from_record(record)
         identity_background = CardBackground(
@@ -804,11 +829,14 @@ class CheckinApplicationMixin:
             render_tier or self._record_checkin_render_tier(record)
         )
         view_model["render_tier"] = render_spec.name
+        view_model["resource_version"] = 3
         view_model["render_quality"] = CHECKIN_JPEG_QUALITY
         view_model["background_quality"] = str(
             background.quality or render_spec.background_quality
         )
-        if policy is not None:
+        if safety_identity is not None:
+            view_model["content_safety_policy"] = safety_identity
+        elif policy is not None:
             view_model["content_safety_policy"] = policy.cache_identity()
         return self.checkin_cache.cache_key(
             date_key=record.date_key,

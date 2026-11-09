@@ -4,7 +4,10 @@ import asyncio
 import time
 from dataclasses import dataclass, field
 
+import aiohttp
 from astrbot.api import logger
+
+from .pagination import PixivPage, parse_pixiv_page
 
 LOG_PREFIX = "[GetPx]"
 
@@ -101,10 +104,10 @@ class PixivClient:
         """幂等请求失败时做一次轻量重试，缓解瞬时网络抖动。"""
         try:
             return await self._wait_for(factory(), operation=operation)
-        except Exception as exc:
+        except (TimeoutError, aiohttp.ClientError) as exc:
             if self._closed:
                 raise
-            logger.warning(
+            logger.info(
                 f"{LOG_PREFIX} Pixiv {operation}失败，1 秒后重试: "
                 f"error_type={type(exc).__name__}"
             )
@@ -113,32 +116,38 @@ class PixivClient:
                 raise RuntimeError("Pixiv 客户端已关闭") from exc
             return await self._wait_for(factory(), operation=operation)
 
-    async def search(self, tag: str, offset: int = 0) -> list[dict]:
+    async def search(self, tag: str, offset: int = 0, *, continuation: dict | None = None,
+                     portrait: bool = False) -> PixivPage:
         api = await self._acquire_api()
         try:
-            resp = await self._wait_for_with_retry(
-                lambda: api.search_illust(
-                    tag,
-                    search_target="partial_match_for_tags",
-                    sort="date_desc",
-                    offset=offset,
-                ),
-                operation="搜索请求",
-            )
+            page_offset = continuation.get("offset", 0) if continuation is not None else offset
+            def factory():
+                if portrait:
+                    params = {"word": tag, "search_target": "partial_match_for_tags",
+                              "sort": "date_desc", "filter": "for_ios",
+                              "offset": page_offset, "ratio_pattern": "portrait"}
+                    return api.requests_(
+                        method="GET", url="https://app-api.pixiv.net/v1/search/illust",
+                        params=params, auth=True,
+                    )
+                return api.search_illust(
+                    tag, search_target="partial_match_for_tags", sort="date_desc", offset=page_offset,
+                )
+            resp = await self._wait_for_with_retry(factory, operation="搜索请求")
         finally:
             await self._release_api()
-        return list(resp.get("illusts") or [])
+        return parse_pixiv_page(resp, recommended=False, tag=tag)
 
-    async def recommended(self, offset: int = 0) -> list[dict]:
+    async def recommended(self, offset: int = 0, *, continuation: dict | None = None) -> PixivPage:
         api = await self._acquire_api()
         try:
             resp = await self._wait_for_with_retry(
-                lambda: api.illust_recommended(offset=offset),
+                lambda: api.illust_recommended(**(continuation if continuation is not None else {"offset": offset})),
                 operation="推荐作品请求",
             )
         finally:
             await self._release_api()
-        return list(resp.get("illusts") or [])
+        return parse_pixiv_page(resp, recommended=True)
 
     async def illust_detail(self, illust_id: int) -> dict | None:
         api = await self._acquire_api()

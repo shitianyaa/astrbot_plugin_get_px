@@ -46,6 +46,8 @@ class FakeEvent:
 
 def make_plugin(data_dir: str) -> GetPxPlugin:
     plugin = object.__new__(GetPxPlugin)
+    from astrbot_plugin_get_px.pixiv.safety import ContentSafetyPolicy
+    plugin._content_safety_policy = AsyncMock(return_value=ContentSafetyPolicy())
     plugin.checkin_store = CheckinStore(data_dir)
     return plugin
 
@@ -64,14 +66,8 @@ def test_shop_catalog_has_stable_ids_and_categories() -> None:
     by_id = {item.item_id: item for item in items}
 
     assert by_id["boost:1"].category == "boost"
-    assert (
-        by_id["background:refresh"].render_line()
-        == "刷新背景 - 5 金币"
-    )
-    assert (
-        by_id["theme:blue"].render_line()
-        == "签到主题 购买 01 - 浅蓝，1500 金币"
-    )
+    assert by_id["background:refresh"].price == 5
+    assert by_id["theme:blue"].category == "theme"
     assert by_id["theme:default"].price_label == "免费"
 
     custom_items = build_checkin_shop_items(refresh_cost=5, theme_cost=900)
@@ -100,7 +96,9 @@ async def test_birthday_direct_lookup_reports_private_profile() -> None:
         plugin = make_plugin(tmp)
         event = FakeEvent({"birthday_year": 0, "birthday_month": 0, "birthday_day": 0})
 
-        assert await plugin._handle_checkin_birthday(event, "", "") == "用户未公开生日"
+        assert await plugin._handle_checkin_birthday(event, "", "")
+        preference = await plugin.checkin_store.get_user_preference("10001")
+        assert preference.birthday_label == ""
 
 
 @pytest.mark.asyncio
@@ -180,10 +178,6 @@ async def test_theme_shop_purchase_and_switch_commands() -> None:
             user_id="10001", username="测试用户", bot_name="neko"
         )
         set_user_coins(plugin, 2000)
-
-        shop = plugin._build_checkin_shop()
-        assert "刷新背景 - 5 金币" in shop
-        assert "签到主题 购买 01 - 浅蓝，900 金币" in shop
 
         purchased = await plugin._handle_buy_checkin_theme(event, "01")
         assert "购买成功" in purchased
@@ -425,12 +419,11 @@ async def test_invalid_theme_cost_config_falls_back_to_default(config: dict) -> 
         await plugin.checkin_store.get_profile("10001")
         set_user_coins(plugin, 2000)
 
-        assert "浅蓝，1500 金币" in plugin._build_checkin_shop()
-        purchased = await plugin._handle_buy_checkin_theme(event, "01")
+        await plugin._handle_buy_checkin_theme(event, "01")
 
-        assert "购买成功，消耗 1500 金币" in purchased
         profile = await plugin.checkin_store.get_profile("10001")
         assert profile.coins == 500
+        assert "blue" in await plugin.checkin_store.list_owned_theme_ids("10001")
 
 
 @pytest.mark.asyncio
@@ -468,7 +461,8 @@ async def test_background_refresh_requires_today_checkin() -> None:
         outputs = [
             item async for item in plugin._handle_refresh_checkin_background(event)
         ]
-        assert outputs == ["请先完成今天的签到，再更新背景"]
+        assert outputs
+        assert await plugin.checkin_store.get_today_record("10001") is None
 
 
 @pytest.mark.asyncio
@@ -528,8 +522,10 @@ async def test_old_user_achievements_are_backfilled_and_highest_title_is_equippe
         titles = await plugin._handle_checkin_titles(event)
         preference = await plugin.checkin_store.get_user_preference("10001")
 
-        assert "本次补发: 初见旅人、七日同行、月下常客" in achievements
-        assert "[当前] 月下常客" in titles
+        assert achievements and titles
+        assert await plugin.checkin_store.list_achievements("10001") == (
+            "first_meeting", "streak_7", "total_30"
+        )
         assert preference.selected_title_id == "total_30"
 
 

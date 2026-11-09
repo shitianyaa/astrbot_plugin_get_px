@@ -7,6 +7,7 @@
 - [`overview.md`](./overview.md): 项目定位、能力边界和当前入口
 - [`architecture.md`](./architecture.md): 模块关系、主要流程和安全边界
 - [`configuration.md`](./configuration.md): `_conf_schema.json` 字段语义、默认值和文档同步要求
+- [`cache-and-dedupe.md`](./cache-and-dedupe.md): 缓存身份、去重范围、业务幂等和清理边界
 
 ## 适合谁看
 
@@ -19,3 +20,4 @@
 1. [`overview.md`](./overview.md)
 2. [`architecture.md`](./architecture.md)
 3. [`configuration.md`](./configuration.md)
+4. [`cache-and-dedupe.md`](./cache-and-dedupe.md)

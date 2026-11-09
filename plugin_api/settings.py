@@ -11,6 +11,16 @@ from typing import Any
 
 SCHEMA_PATH = Path(__file__).resolve().parents[1] / "_conf_schema.json"
 SECRET_KEYS = frozenset({"pixiv_refresh_token"})
+# 全局安全规则与会话安全分组由 SessionSafetyService 独占读写；
+# 通用设置页只展示跳转入口，禁止通过通用接口写入，避免覆盖安全列表引用。
+SAFETY_KEYS = frozenset(
+    {
+        "global_safety_terms",
+        "keyword_match_mode",
+        "global_blacklisted_illust_ids",
+        "safety_groups",
+    }
+)
 
 
 def load_schema() -> dict[str, Any]:
@@ -62,7 +72,7 @@ def settings_snapshot(plugin: Any) -> dict[str, Any]:
             if key in SECRET_KEYS:
                 descriptor["secret"] = True
                 descriptor["configured"] = bool(_effective(plugin, key, ""))
-            elif spec.get("type") == "template_list":
+            elif key in SAFETY_KEYS or spec.get("type") == "template_list":
                 descriptor["delegated"] = True
                 descriptor["view"] = "policies"
             else:
@@ -131,7 +141,12 @@ def save_settings(plugin: Any, patch: Any) -> None:
         specs = groups[group_key]["items"]
         for key, value in values.items():
             spec = specs.get(key)
-            if not spec or spec.get("invisible") or spec.get("type") == "template_list":
+            if (
+                not spec
+                or spec.get("invisible")
+                or spec.get("type") == "template_list"
+                or key in SAFETY_KEYS
+            ):
                 raise ValueError("包含不能在此页面编辑的设置项")
             validated.setdefault(group_key, {})[key] = _validate_value(key, value, spec)
 

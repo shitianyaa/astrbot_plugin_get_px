@@ -25,6 +25,7 @@ class FrozenImageIndexStore(ImageIndexStore):
 
 
 class ImageIndexStoreTest(unittest.IsolatedAsyncioTestCase):
+
     async def test_claim_usage_is_atomic_and_release_allows_reclaim(self):
         with tempfile.TemporaryDirectory() as tmp:
             store = FrozenImageIndexStore(tmp)
@@ -129,8 +130,7 @@ class ImageIndexStoreTest(unittest.IsolatedAsyncioTestCase):
                 await store.cleanup_old_days()
 
                 self.assertTrue(added)
-                self.assertTrue(await store.is_blacklisted("300"))
-                self.assertEqual(await store.get_blacklisted_illust_ids(), {"300"})
+                self.assertEqual([record["illust_id"] for record in await store.list_blacklist_illusts()], ["300"])
             finally:
                 store.close()
 
@@ -165,33 +165,10 @@ class ImageIndexStoreTest(unittest.IsolatedAsyncioTestCase):
 
                 self.assertIsNotNone(removed)
                 self.assertEqual(removed["illust_id"], "301")
-                self.assertFalse(await store.is_blacklisted("301"))
-                self.assertEqual(await store.get_blacklisted_illust_ids(), {"302"})
+                self.assertEqual([record["illust_id"] for record in await store.list_blacklist_illusts()], ["302"])
             finally:
                 store.close()
 
-    async def test_custom_safety_terms_and_blacklist_reason_persist(self):
-        with tempfile.TemporaryDirectory() as tmp:
-            store = FrozenImageIndexStore(tmp)
-            try:
-                self.assertTrue(
-                    await store.add_safety_term("危险主题", added_by="admin")
-                )
-                self.assertIn(
-                    "危险主题".casefold(), await store.get_custom_safety_terms()
-                )
-                await store.add_blacklist_illust(
-                    illust_id="350",
-                    reason="构图不适合",
-                    added_by="web",
-                )
-                record = (await store.list_blacklist_illusts())[0]
-                self.assertEqual(record["reason"], "构图不适合")
-                self.assertEqual(record["added_by"], "web")
-                self.assertTrue(await store.remove_safety_term("危险主题"))
-                self.assertEqual(await store.get_custom_safety_terms(), set())
-            finally:
-                store.close()
 
     async def test_blacklist_thumbnail_is_copied_and_removed(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -209,7 +186,7 @@ class ImageIndexStoreTest(unittest.IsolatedAsyncioTestCase):
                     thumb_id=thumb_id,
                 )
 
-                thumb_path = await store.get_blacklist_thumbnail_path("400")
+                thumb_path = (await store.get_blacklist_thumbnail_paths(["400"]))["400"]
 
                 self.assertEqual(thumb_id, "400.jpg")
                 self.assertIsNotNone(thumb_path)
@@ -219,73 +196,42 @@ class ImageIndexStoreTest(unittest.IsolatedAsyncioTestCase):
 
                 self.assertIsNotNone(removed)
                 self.assertEqual(removed["thumb_id"], "400.jpg")
-                self.assertIsNone(await store.get_blacklist_thumbnail_path("400"))
+                self.assertEqual(await store.get_blacklist_thumbnail_paths(["400"]), {})
             finally:
                 store.close()
 
     # ── page-cursor tests ──────────────────────────────────────────
 
-    async def test_page_offset_starts_at_zero(self):
+    async def test_page_offset_write_replace_and_clear(self):
         with tempfile.TemporaryDirectory() as tmp:
             store = FrozenImageIndexStore(tmp)
             try:
-                offset = await store.get_page_offset("group:1", "search:blue_archive")
-                self.assertEqual(offset, 0)
+                self.assertEqual(await store.get_page_offset("group:1", "search:tag"), 0)
+                for offset in (7, 45, 0):
+                    await store.set_page_offset("group:1", "search:tag", offset)
+                    self.assertEqual(await store.get_page_offset("group:1", "search:tag"), offset)
             finally:
                 store.close()
 
-    async def test_advance_page_offset_normal(self):
+    async def test_page_offset_is_isolated_by_scope_and_source(self):
         with tempfile.TemporaryDirectory() as tmp:
             store = FrozenImageIndexStore(tmp)
             try:
-                new_offset = await store.advance_page_offset(
-                    "group:1", "search:blue_archive", results_count=30
-                )
-                self.assertEqual(new_offset, 30)
-                # 再次查询应返回新游标
-                offset = await store.get_page_offset("group:1", "search:blue_archive")
-                self.assertEqual(offset, 30)
+                await store.set_page_offset("group:1", "search:rare_tag", 15)
+                self.assertEqual(await store.get_page_offset("group:2", "search:rare_tag"), 0)
+                self.assertEqual(await store.get_page_offset("group:1", "search:other_tag"), 0)
+                self.assertEqual(await store.get_page_offset("group:1", "search:rare_tag"), 15)
             finally:
                 store.close()
 
-    async def test_advance_page_offset_second_page(self):
+    async def test_page_offset_survives_store_reopen(self):
         with tempfile.TemporaryDirectory() as tmp:
             store = FrozenImageIndexStore(tmp)
             try:
-                # 第一页
-                await store.advance_page_offset("group:1", "search:blue_archive", 30)
-                # 第二页
-                new_offset = await store.advance_page_offset(
-                    "group:1", "search:blue_archive", results_count=30
-                )
-                self.assertEqual(new_offset, 60)
-            finally:
+                await store.set_page_offset("group:1", "search:tag", 60)
                 store.close()
-
-    async def test_advance_page_offset_resets_when_below_threshold(self):
-        with tempfile.TemporaryDirectory() as tmp:
-            store = FrozenImageIndexStore(tmp)
-            try:
-                await store.advance_page_offset("group:1", "search:rare_tag", 30)
-                # 返回结果 < 20 时应重置为 0
-                new_offset = await store.advance_page_offset(
-                    "group:1", "search:rare_tag", results_count=15
-                )
-                self.assertEqual(new_offset, 0)
-            finally:
-                store.close()
-
-    async def test_advance_page_offset_with_raw_count_matters(self):
-        """过滤后少但原始 ≥ 20 不应重置（修 blocking bug）。"""
-        with tempfile.TemporaryDirectory() as tmp:
-            store = FrozenImageIndexStore(tmp)
-            try:
-                await store.advance_page_offset("group:1", "search:tag", 30)
-                # 原始 30 条（≥ 阈值 20），不应重置
-                new_offset = await store.advance_page_offset(
-                    "group:1", "search:tag", results_count=30
-                )
-                self.assertEqual(new_offset, 60)
+                store = FrozenImageIndexStore(tmp)
+                self.assertEqual(await store.get_page_offset("group:1", "search:tag"), 60)
             finally:
                 store.close()
 
@@ -295,10 +241,7 @@ class ImageIndexStoreTest(unittest.IsolatedAsyncioTestCase):
             store = FrozenImageIndexStore(tmp)
             try:
                 # 先写入一个正常游标
-                new_offset = await store.advance_page_offset(
-                    "group:1", "search:blue_archive", results_count=30
-                )
-                self.assertEqual(new_offset, 30)
+                await store.set_page_offset("group:1", "search:blue_archive", 30)
 
                 # 直接修改数据库，把 updated_at 改成 PAGE_CURSOR_TTL_DAYS+1 天前
                 from pixiv.index import PAGE_CURSOR_TTL_DAYS
@@ -325,37 +268,6 @@ class ImageIndexStoreTest(unittest.IsolatedAsyncioTestCase):
 
                 # 现在查询应该返回 0（TTL 过期）
                 offset = await store.get_page_offset("group:1", "search:blue_archive")
-                self.assertEqual(offset, 0)
-            finally:
-                store.close()
-
-    async def test_page_offset_ttl_valid(self):
-        """未过期游标应正常返回。"""
-        with tempfile.TemporaryDirectory() as tmp:
-            store = FrozenImageIndexStore(tmp)
-            try:
-                await store.advance_page_offset(
-                    "group:1", "search:blue_archive", results_count=30
-                )
-                # 设置 updated_at 为 TTL 内（已包含在 advance 中，直接验证）
-                offset = await store.get_page_offset("group:1", "search:blue_archive")
-                self.assertEqual(offset, 30)
-            finally:
-                store.close()
-
-    async def test_page_offset_clears_after_reset(self):
-        """重置后再次查询应为 0。"""
-        with tempfile.TemporaryDirectory() as tmp:
-            store = FrozenImageIndexStore(tmp)
-            try:
-                await store.advance_page_offset("group:1", "search:tag", 30)
-                # 到底重置
-                new_offset = await store.advance_page_offset(
-                    "group:1", "search:tag", results_count=10
-                )
-                self.assertEqual(new_offset, 0)
-                # 再次查询确认
-                offset = await store.get_page_offset("group:1", "search:tag")
                 self.assertEqual(offset, 0)
             finally:
                 store.close()

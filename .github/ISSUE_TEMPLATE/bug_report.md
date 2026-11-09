@@ -24,6 +24,6 @@ assignees: ""
 粘贴相关日志（移除敏感信息，如 token、用户 ID）。运行于 AstrBot 日志目录。
 
 **补充**
-- 是否使用 Pixiv 回退（`pixiv_refresh_token`）？
+- 首选图片源（`preferred_image_source`）及是否配置 Pixiv Token（`pixiv_refresh_token`）？
 - 是否自定义了反代、T2I 服务或 WebUI 字体？
 - 其他说明：

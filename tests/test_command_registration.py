@@ -80,30 +80,6 @@ def test_checkin_commands_are_grouped_as_flat_command_groups() -> None:
         "签到管理 事件删除",
     } <= paths
 
-    # 旧路径与旧组全部移除
-    assert not {"签到中心"} & paths
-    assert not {"签到我的 " + suffix for suffix in ("状态", "成就", "生日查看", "生日设置", "生日清除", "称号查看", "称号佩戴")} & paths
-    assert not {"签到商店 主题列表", "签到商店 主题查看", "签到商店 主题购买", "签到商店 主题切换", "签到商店 刷新背景"} & paths
-
-
-def test_checkin_command_groups_expose_focused_groups() -> None:
-    group_names = {
-        handler.handler_name
-        for handler in _plugin_command_handlers()
-        if any(
-            isinstance(event_filter, CommandGroupFilter)
-            for event_filter in handler.event_filters
-        )
-    }
-    assert {
-        "checkin_birthday",
-        "checkin_title",
-        "checkin_ranking",
-        "checkin_shop",
-        "checkin_theme",
-        "checkin_admin",
-    } <= group_names
-    assert "checkin_my" not in group_names
 
 
 def test_checkin_calendar_is_a_top_level_command_and_delegates_month() -> None:

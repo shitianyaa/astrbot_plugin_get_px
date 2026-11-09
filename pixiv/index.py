@@ -11,13 +11,9 @@ from zoneinfo import ZoneInfo
 
 from astrbot.api import logger
 
-from .safety import normalize_safety_text
-
-
 LOG_PREFIX = "[GetPx]"
 SHANGHAI_TZ = ZoneInfo("Asia/Shanghai")
 PAGE_CURSOR_TTL_DAYS = 3
-MIN_RESULTS_FOR_NEXT_PAGE = 20
 _CLEANUP_THROTTLE_SECONDS = 3600  # 每小时最多清理一次旧记录
 
 
@@ -64,15 +60,15 @@ class ImageIndexStore:
                 self._retention_days = previous_days
                 logger.warning(
                     f"{LOG_PREFIX} 图片去重配置应用失败: "
-                    f"原天数={previous_days}，新天数={days}，"
-                    f"错误类型={type(exc).__name__}"
+                    f"previous_days={previous_days} requested_days={days} "
+                    f"error_type={type(exc).__name__}"
                 )
                 raise
         status = "disabled" if days == 0 else "enabled"
         logger.info(
             f"{LOG_PREFIX} 图片去重配置已应用: "
-            f"原天数={previous_days}，当前天数={days}，"
-            f"清理数量={removed}，状态={'关闭' if status == 'disabled' else '启用'}"
+            f"previous_days={previous_days} retention_days={days} "
+            f"removed_count={removed} status={status}"
         )
         return days
 
@@ -104,8 +100,8 @@ class ImageIndexStore:
                 self._conn.close()
             except Exception as exc:
                 logger.warning(
-                    f"{LOG_PREFIX} 关闭图片索引连接失败: "
-                    f"错误类型={type(exc).__name__}"
+                    f"{LOG_PREFIX} 图片索引连接关闭失败: "
+                    f"error_type={type(exc).__name__}"
                 )
             self._conn = None
 
@@ -120,15 +116,15 @@ class ImageIndexStore:
         except Exception as exc:
             logger.warning(
                 f"{LOG_PREFIX} 图片去重索引清理失败: "
-                f"触发方式={trigger}，保留天数={self._retention_days}，"
-                f"错误类型={type(exc).__name__}"
+                f"trigger={trigger} retention_days={self._retention_days} "
+                f"error_type={type(exc).__name__}"
             )
             raise
         status = "disabled" if self._retention_days == 0 else "enabled"
         logger.info(
             f"{LOG_PREFIX} 图片去重索引清理完成: "
-            f"触发方式={trigger}，保留天数={self._retention_days}，"
-            f"清理数量={removed}，状态={'关闭' if status == 'disabled' else '启用'}"
+            f"trigger={trigger} retention_days={self._retention_days} "
+            f"removed_count={removed} status={status}"
         )
         return removed
 
@@ -168,9 +164,9 @@ class ImageIndexStore:
         except Exception as exc:
             logger.warning(
                 f"{LOG_PREFIX} 图片去重索引操作失败: "
-                f"操作=记录占用，功能={feature}，"
-                f"保留天数={self._retention_days}，"
-                f"错误类型={type(exc).__name__}"
+                f"operation=record_usage feature={feature} "
+                f"retention_days={self._retention_days} "
+                f"error_type={type(exc).__name__}"
             )
             raise
 
@@ -181,65 +177,32 @@ class ImageIndexStore:
                 self._get_page_offset_sync, scope, source_key
             )
 
-    async def advance_page_offset(
-        self, scope: str, source_key: str, results_count: int
-    ) -> int:
-        """当前页全被用过后推进游标；若结果数明显少于正常页则重置为 0（已到底，循环）。返回新的 offset。"""
+    async def set_page_offset(self, scope: str, source_key: str, offset: int) -> None:
+        """保存上游提供的数字位置，不推算推荐接口的完整 continuation。"""
         async with self._lock:
-            return await asyncio.to_thread(
-                self._advance_page_offset_sync, scope, source_key, results_count
-            )
+            await asyncio.to_thread(self._set_page_offset_sync, scope, source_key, offset)
 
-    async def get_blacklisted_illust_ids(self) -> set[str]:
-        async with self._lock:
-            return await asyncio.to_thread(self._get_blacklisted_illust_ids_sync)
+    def _set_page_offset_sync(self, scope: str, source_key: str, offset: int) -> None:
+        conn = self._get_conn()
+        try:
+            conn.execute(
+                "INSERT INTO source_page_cursor (scope, source_key, page_offset, updated_at) "
+                "VALUES (?, ?, ?, ?) ON CONFLICT(scope, source_key) DO UPDATE SET "
+                "page_offset=excluded.page_offset, updated_at=excluded.updated_at",
+                (scope, source_key, offset, self.now_iso()),
+            )
+            conn.commit()
+        except Exception:
+            conn.rollback()
+            raise
 
     async def list_safety_terms(self) -> list[dict[str, str]]:
         async with self._lock:
             return await asyncio.to_thread(self._list_safety_terms_sync)
 
-    async def add_safety_term(self, term: str, *, added_by: str = "web") -> bool:
-        term = str(term or "").strip()
-        normalized = normalize_safety_text(term)
-        if not normalized:
-            raise ValueError("屏蔽词不能为空")
-        if len(term) > 64:
-            raise ValueError("屏蔽词不能超过 64 个字符")
-        async with self._lock:
-            return await asyncio.to_thread(
-                self._add_safety_term_sync, term, normalized, added_by, self.now_iso()
-            )
-
-    async def remove_safety_term(self, term: str) -> bool:
-        normalized = normalize_safety_text(term)
-        if not normalized:
-            raise ValueError("屏蔽词不能为空")
-        async with self._lock:
-            return await asyncio.to_thread(self._remove_safety_term_sync, normalized)
-
-    async def get_custom_safety_terms(self) -> set[str]:
-        async with self._lock:
-            return await asyncio.to_thread(self._get_custom_safety_terms_sync)
-
     async def list_blacklist_illusts(self) -> list[dict[str, Any]]:
         async with self._lock:
             return await asyncio.to_thread(self._list_blacklist_illusts_sync)
-
-    async def is_blacklisted(self, illust_id: str) -> bool:
-        illust_id = str(illust_id or "")
-        if not illust_id:
-            return False
-        async with self._lock:
-            return await asyncio.to_thread(self._is_blacklisted_sync, illust_id)
-
-    async def get_blacklist_thumbnail_path(self, illust_id: str) -> Path | None:
-        illust_id = str(illust_id or "")
-        if not illust_id:
-            return None
-        async with self._lock:
-            return await asyncio.to_thread(
-                self._get_blacklist_thumbnail_path_sync, illust_id
-            )
 
     async def get_blacklist_thumbnail_paths(
         self, illust_ids: Iterable[str]
@@ -331,8 +294,8 @@ class ImageIndexStore:
         except Exception as exc:
             logger.warning(
                 f"{LOG_PREFIX} 图片去重索引操作失败: "
-                f"操作=占用，功能={feature}，保留天数={self._retention_days}，"
-                f"错误类型={type(exc).__name__}"
+                f"operation=claim_usage feature={feature} retention_days={self._retention_days} "
+                f"error_type={type(exc).__name__}"
             )
             raise
 
@@ -361,8 +324,8 @@ class ImageIndexStore:
         except Exception as exc:
             logger.warning(
                 f"{LOG_PREFIX} 图片去重索引操作失败: "
-                f"操作=释放，功能={feature}，保留天数={self._retention_days}，"
-                f"错误类型={type(exc).__name__}"
+                f"operation=release_usage feature={feature} retention_days={self._retention_days} "
+                f"error_type={type(exc).__name__}"
             )
             raise
 
@@ -413,16 +376,6 @@ class ImageIndexStore:
         )
         conn.execute(
             """
-            CREATE TABLE IF NOT EXISTS content_safety_terms (
-                normalized_term TEXT PRIMARY KEY,
-                term TEXT NOT NULL,
-                added_by TEXT NOT NULL DEFAULT '',
-                added_at TEXT NOT NULL
-            )
-            """
-        )
-        conn.execute(
-            """
             CREATE TABLE IF NOT EXISTS source_page_cursor (
                 scope TEXT NOT NULL,
                 source_key TEXT NOT NULL,
@@ -464,7 +417,7 @@ class ImageIndexStore:
         if removed > 0:
             logger.info(
                 f"{LOG_PREFIX} 已清理过期图片去重索引: "
-                f"触发方式=定时，保留天数={self._retention_days}，清理数量={removed}"
+                f"trigger=access retention_days={self._retention_days} removed_count={removed}"
             )
 
     def _get_page_offset_sync(self, scope: str, source_key: str) -> int:
@@ -496,36 +449,6 @@ class ImageIndexStore:
             return 0
         return page_offset
 
-    def _advance_page_offset_sync(
-        self, scope: str, source_key: str, results_count: int
-    ) -> int:
-        now = self.now_iso()
-        conn = self._get_conn()
-        row = conn.execute(
-            "SELECT page_offset FROM source_page_cursor WHERE scope = ? AND source_key = ?",
-            (scope, source_key),
-        ).fetchone()
-        current = row["page_offset"] if row is not None else 0
-
-        # 如果结果数明显少于正常页大小，说明已到底，重置为 0
-        if results_count < MIN_RESULTS_FOR_NEXT_PAGE:
-            new_offset = 0
-        else:
-            new_offset = current + results_count
-
-        conn.execute(
-            """
-            INSERT INTO source_page_cursor (scope, source_key, page_offset, updated_at)
-            VALUES (?, ?, ?, ?)
-            ON CONFLICT(scope, source_key) DO UPDATE SET
-                page_offset = excluded.page_offset,
-                updated_at = excluded.updated_at
-            """,
-            (scope, source_key, new_offset, now),
-        )
-        conn.commit()
-        return new_offset
-
     def _get_used_illust_ids_sync(
         self, date_key: str, scope: str, source_key: str
     ) -> set[str]:
@@ -542,11 +465,6 @@ class ImageIndexStore:
         ).fetchall()
         return {str(row["illust_id"]) for row in rows}
 
-    def _get_blacklisted_illust_ids_sync(self) -> set[str]:
-        conn = self._get_conn()
-        rows = conn.execute("SELECT illust_id FROM image_blacklist").fetchall()
-        return {str(row["illust_id"]) for row in rows}
-
     def _list_blacklist_illusts_sync(self) -> list[dict[str, Any]]:
         conn = self._get_conn()
         rows = conn.execute(
@@ -560,6 +478,9 @@ class ImageIndexStore:
         return [dict(row) for row in rows]
 
     def _list_safety_terms_sync(self) -> list[dict[str, str]]:
+        # 仅升级归档时读取历史表；新安装不再创建数据库词表。
+        if not self._get_conn().execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='content_safety_terms'").fetchone():
+            return []
         rows = (
             self._get_conn()
             .execute(
@@ -569,61 +490,6 @@ class ImageIndexStore:
             .fetchall()
         )
         return [dict(row) for row in rows]
-
-    def _get_custom_safety_terms_sync(self) -> set[str]:
-        rows = (
-            self._get_conn()
-            .execute("SELECT normalized_term FROM content_safety_terms")
-            .fetchall()
-        )
-        return {str(row["normalized_term"]) for row in rows}
-
-    def _add_safety_term_sync(
-        self, term: str, normalized: str, added_by: str, added_at: str
-    ) -> bool:
-        cursor = self._get_conn().execute(
-            """
-            INSERT INTO content_safety_terms (normalized_term, term, added_by, added_at)
-            VALUES (?, ?, ?, ?)
-            ON CONFLICT(normalized_term) DO UPDATE SET term = excluded.term
-            """,
-            (normalized, term, added_by, added_at),
-        )
-        self._get_conn().commit()
-        return cursor.rowcount > 0
-
-    def _remove_safety_term_sync(self, normalized: str) -> bool:
-        cursor = self._get_conn().execute(
-            "DELETE FROM content_safety_terms WHERE normalized_term = ?",
-            (normalized,),
-        )
-        self._get_conn().commit()
-        return cursor.rowcount > 0
-
-    def _is_blacklisted_sync(self, illust_id: str) -> bool:
-        conn = self._get_conn()
-        row = conn.execute(
-            "SELECT 1 FROM image_blacklist WHERE illust_id = ? LIMIT 1",
-            (illust_id,),
-        ).fetchone()
-        return row is not None
-
-    def _get_blacklist_thumbnail_path_sync(self, illust_id: str) -> Path | None:
-        conn = self._get_conn()
-        row = conn.execute(
-            "SELECT thumb_id FROM image_blacklist WHERE illust_id = ? LIMIT 1",
-            (illust_id,),
-        ).fetchone()
-        if row is None:
-            return None
-        thumb_id = str(row["thumb_id"] or "")
-        if not thumb_id:
-            return None
-        path = (self._blacklist_thumb_dir / Path(thumb_id).name).resolve()
-        thumb_dir = self._blacklist_thumb_dir.resolve()
-        if thumb_dir not in path.parents:
-            return None
-        return path if path.exists() else None
 
     def _get_blacklist_thumbnail_paths_sync(
         self, illust_ids: list[str]

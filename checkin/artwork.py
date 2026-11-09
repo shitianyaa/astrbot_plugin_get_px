@@ -7,7 +7,7 @@ from pathlib import Path
 import random
 import time
 
-from astrbot.api.all import logger
+from astrbot.api import logger
 from astrbot.api.event import AstrMessageEvent
 from astrbot.core.star.star_tools import StarTools
 
@@ -22,6 +22,7 @@ from .card import (
     CHECKIN_CARD_HEIGHT,
     CHECKIN_CARD_WIDTH,
     CardBackground,
+    BackgroundEncodingError,
     _file_to_data_url,
     build_checkin_card_data,
     get_checkin_card_template,
@@ -49,6 +50,13 @@ _CHECKIN_BACKGROUND_MODE_LABELS = {
     "fallback": "占位图",
 }
 
+# 日历极致档输出 2880×1620，背景按同一上限压缩，避免先缩到卡片尺寸再放大。
+_CALENDAR_ARTWORK_MAX_EDGE = 2880
+
+
+def _calendar_background_data_url(path: str) -> str:
+    return _file_to_data_url(path, max_edge=_CALENDAR_ARTWORK_MAX_EDGE)
+
 
 def _checkin_background_mode_label(background: CardBackground | None) -> str:
     mode = getattr(background, "mode", "") or "none"
@@ -63,10 +71,12 @@ _CALENDAR_BG_ASPECT_PARAM = "gt1.7lt1.8"
 
 try:
     from ..pixiv.index import ordered_by_unused
-    from ..pixiv.downloader import cleanup
+    from ..pixiv.pagination import SourceRequest, SelectionIndexError
+    from ..pixiv.downloader import cleanup, format_log_size
 except ImportError:  # Direct imports used by the test suite.
     from pixiv.index import ordered_by_unused
-    from pixiv.downloader import cleanup
+    from pixiv.pagination import SourceRequest, SelectionIndexError
+    from pixiv.downloader import cleanup, format_log_size
 
 
 LOG_PREFIX = "[GetPx]"
@@ -195,7 +205,8 @@ class CheckinArtworkMixin:
                 CHECKIN_ARTWORK_TOLERANCE,
             ):
                 logger.warning(
-                    f"{LOG_PREFIX} 签到背景恢复拒绝非 3:4 作品 {record.background_illust_id}"
+                    f"{LOG_PREFIX} 签到背景恢复已拒绝: reason=aspect_ratio "
+                    f"illust_id={record.background_illust_id}"
                 )
                 return replace(saved, mode="fallback")
             if source.startswith("lolicon:"):
@@ -211,7 +222,7 @@ class CheckinArtworkMixin:
                 illust,
                 background_quality,
                 timeout=timeout_sec,
-                downgrade_limit_bytes=0,
+                size_limit_bytes=0,
                 log_context=f"[签到背景恢复] 作品 {record.background_illust_id}",
             )
             logger.debug(
@@ -259,6 +270,52 @@ class CheckinArtworkMixin:
         selected["meta_pages"] = [page_data]
         return selected
 
+    async def _prepare_checkin_card_data(
+        self,
+        event: AstrMessageEvent,
+        *,
+        profile,
+        record,
+        background,
+        bot_name,
+        user_title: str = "",
+    ) -> dict[str, object]:
+        """下载并内联单次渲染资源，供画质降级复用。"""
+        avatar_url = ""
+        source = (
+            self._checkin_avatar_url(event)
+            if self._cfg_bool("checkin_avatar_enabled", True)
+            else ""
+        )
+        if source:
+            path = ""
+            try:
+                path, _size = await self.downloader.download(
+                    source, timeout=self._cfg_float("request_timeout", 30.0, 5.0, 120.0)
+                )
+                avatar_url = await asyncio.to_thread(_file_to_data_url, path)
+                if not avatar_url:
+                    raise ValueError("invalid avatar image")
+            except Exception as exc:
+                logger.warning(
+                    f"{LOG_PREFIX} 签到头像获取失败，使用昵称占位: "
+                    f"error_type={type(exc).__name__}"
+                )
+            finally:
+                cleanup(path)
+        return await asyncio.to_thread(
+            build_checkin_card_data,
+            profile=profile,
+            record=record,
+            bot_name=bot_name,
+            avatar_url=avatar_url,
+            background=background,
+            user_title=user_title,
+            background_refresh_cost=self._cfg_int(
+                "checkin_background_refresh_cost", 100, 0, 500
+            ),
+        )
+
     async def _render_checkin_card(
         self,
         event: AstrMessageEvent,
@@ -269,31 +326,24 @@ class CheckinArtworkMixin:
         bot_name: str,
         user_title: str = "",
         render_tier: str | None = None,
+        prepared_data: dict[str, object] | None = None,
     ) -> str:
-        avatar_url = (
-            self._checkin_avatar_url(event)
-            if self._cfg_bool("checkin_avatar_enabled", True)
-            else ""
-        )
         width = CHECKIN_CARD_WIDTH
         height = CHECKIN_CARD_HEIGHT
         render_spec = get_checkin_render_tier(
             render_tier or self._configured_checkin_render_tier()
         )
-        # 视图模型构建含背景图 Data URL 编码（读文件 + base64），放入线程池
-        data = await asyncio.to_thread(
-            build_checkin_card_data,
-            profile=profile,
-            record=record,
-            bot_name=bot_name,
-            avatar_url=avatar_url,
-            background=background,
-            user_title=user_title,
-            width=width,
-            height=height,
-            background_refresh_cost=self._cfg_int(
-                "checkin_background_refresh_cost", 100, 0, 500
-            ),
+        data = (
+            prepared_data
+            if prepared_data is not None
+            else await self._prepare_checkin_card_data(
+                event,
+                profile=profile,
+                record=record,
+                bot_name=bot_name,
+                background=background,
+                user_title=user_title,
+            )
         )
         options = {
             "full_page": False,
@@ -358,6 +408,7 @@ class CheckinArtworkMixin:
         user_title: str,
         preferred_tier: str,
         policy,
+        safety_identity=None,
     ) -> tuple[Path | None, str]:
         for spec in checkin_render_fallbacks(preferred_tier):
             cache_key = await asyncio.to_thread(
@@ -370,6 +421,7 @@ class CheckinArtworkMixin:
                 user_title=user_title,
                 render_tier=spec.name,
                 policy=policy,
+                safety_identity=safety_identity,
             )
             cached = await asyncio.to_thread(
                 self._cache_get_for_tier,
@@ -380,13 +432,13 @@ class CheckinArtworkMixin:
             )
             if cached is not None:
                 logger.debug(
-                    f"{LOG_PREFIX} 签到卡缓存命中: 画质={spec.name} "
-                    f"日期={record.date_key} 输出尺寸={spec.expected_size[0]}x{spec.expected_size[1]}"
+                    f"{LOG_PREFIX} 签到卡缓存命中: quality={spec.name} "
+                    f"date={record.date_key} output_size={spec.expected_size[0]}x{spec.expected_size[1]}"
                 )
                 return Path(cached), spec.name
             logger.debug(
-                f"{LOG_PREFIX} 签到卡缓存未命中: 画质={spec.name} "
-                f"日期={record.date_key} 输出尺寸={spec.expected_size[0]}x{spec.expected_size[1]}"
+                f"{LOG_PREFIX} 签到卡缓存未命中: quality={spec.name} "
+                f"date={record.date_key} output_size={spec.expected_size[0]}x{spec.expected_size[1]}"
             )
         return None, normalize_checkin_render_tier(preferred_tier)
 
@@ -402,16 +454,28 @@ class CheckinArtworkMixin:
         preferred_tier: str,
         cache=None,
         policy=None,
+        safety_identity=None,
     ) -> tuple[Path, str]:
+        """复用资源逐档渲染；源背景编码失败交由调用方撤销作品选择。"""
         last_error: Exception | None = None
         fallback_specs = checkin_render_fallbacks(preferred_tier)
+        prepared_data = None
         for tier_index, spec in enumerate(fallback_specs):
             renderer_source_path = ""
             render_succeeded = False
             started_at = time.monotonic()
 
             async def render_card() -> str:
-                nonlocal renderer_source_path
+                nonlocal renderer_source_path, prepared_data
+                if prepared_data is None:
+                    prepared_data = await self._prepare_checkin_card_data(
+                        event,
+                        profile=profile,
+                        record=record,
+                        background=background,
+                        bot_name=bot_name,
+                        user_title=user_title,
+                    )
                 renderer_source_path = await self._render_checkin_card(
                     event,
                     profile=profile,
@@ -420,14 +484,15 @@ class CheckinArtworkMixin:
                     bot_name=bot_name,
                     user_title=user_title,
                     render_tier=spec.name,
+                    prepared_data=prepared_data,
                 )
                 return renderer_source_path
 
             try:
                 logger.debug(
-                    f"{LOG_PREFIX} 签到卡开始渲染: 画质={spec.name} "
-                    f"输出尺寸={spec.expected_size[0]}x{spec.expected_size[1]} "
-                    f"背景模式={_checkin_background_mode_label(background)}"
+                    f"{LOG_PREFIX} 签到卡渲染已开始: quality={spec.name} "
+                    f"output_size={spec.expected_size[0]}x{spec.expected_size[1]} "
+                    f"background_mode={_checkin_background_mode_label(background)}"
                 )
                 if cache is None:
                     card_path = Path(await render_card())
@@ -447,6 +512,7 @@ class CheckinArtworkMixin:
                         user_title=user_title,
                         render_tier=spec.name,
                         policy=policy,
+                        safety_identity=safety_identity,
                     )
                     card_path = Path(
                         await self._cache_store_for_tier(
@@ -459,19 +525,22 @@ class CheckinArtworkMixin:
                     )
                 render_succeeded = True
                 logger.info(
-                    f"{LOG_PREFIX} 签到卡渲染完成：画质={spec.name} "
-                    f"输出尺寸={spec.expected_size[0]}x{spec.expected_size[1]} "
-                    f"耗时={int((time.monotonic() - started_at) * 1000)}ms"
+                    f"{LOG_PREFIX} 签到卡输出已就绪: quality={spec.name} "
+                    f"output_size={spec.expected_size[0]}x{spec.expected_size[1]} "
+                    f"duration_ms={int((time.monotonic() - started_at) * 1000)}"
                 )
                 return card_path, spec.name
+            except BackgroundEncodingError:
+                # 降画质不能修复被拒绝的源图，交回业务层撤销作品选择。
+                raise
             except Exception as exc:
                 last_error = exc
                 has_lower_tier = tier_index + 1 < len(fallback_specs)
                 logger.warning(
-                    f"{LOG_PREFIX} 签到卡渲染失败: 画质={spec.name} "
-                    f"输出尺寸={spec.expected_size[0]}x{spec.expected_size[1]} "
-                    f"是否降档={'是' if has_lower_tier else '否'} "
-                    f"错误类型={type(exc).__name__}"
+                    f"{LOG_PREFIX} 签到卡输出未就绪: quality={spec.name} "
+                    f"output_size={spec.expected_size[0]}x{spec.expected_size[1]} "
+                    f"fallback_available={'yes' if has_lower_tier else 'no'} "
+                    f"error_type={type(exc).__name__}"
                 )
             finally:
                 if cache is not None or not render_succeeded:
@@ -633,19 +702,19 @@ class CheckinArtworkMixin:
         used_ids: set[str] = set(preview_excluded_ids or ())
         used_source_key = ""
         illusts: list[dict] = []
-        raw_count = 0
-        transient_offset = 0
+        request_state = SourceRequest()
 
         for page_attempt in range(1, CHECKIN_BACKGROUND_PAGE_ATTEMPTS + 1):
             try:
-                illusts, raw_count, source_key = await self._fetch_source_candidates(
+                illusts, _, source_key = await self._fetch_source_candidates(
                     event,
                     selected_tag,
                     count=20,
-                    offset=transient_offset if preview_nonce else 0,
                     aspect_ratio=CHECKIN_ARTWORK_ASPECT_PARAM,
+                    portrait=True,
                     use_page_cursor=not preview_nonce,
                     policy=_policy,
+                    request_state=request_state,
                 )
             except Exception as e:
                 logger.warning(
@@ -654,16 +723,15 @@ class CheckinArtworkMixin:
                     f"error_type={type(e).__name__}"
                 )
                 return None
-            if preview_nonce:
-                transient_offset += raw_count
             if source_key != used_source_key:
                 used_ids = set(preview_excluded_ids or ())
-                used_ids.update(
-                    await self._checkin_background_used_ids(event, source_key)
-                )
+                try:
+                    used_ids.update(await self._checkin_background_used_ids(event, source_key))
+                except SelectionIndexError:
+                    return None
                 used_source_key = source_key
             if not illusts:
-                return None
+                continue
 
             if self._cfg_bool("filter_manga", True):
                 illusts = self._filter_manga(illusts)
@@ -681,22 +749,12 @@ class CheckinArtworkMixin:
                 CHECKIN_ARTWORK_TOLERANCE,
             )
             if not illusts:
-                if preview_nonce:
-                    continue
-                if self.image_index is None:
-                    return None
                 try:
-                    await self.image_index.advance_page_offset(
-                        self._event_scope(event), source_key, raw_count
+                    await self._advance_source_page(
+                        event, source_key, request_state, use_page_cursor=not preview_nonce,
                     )
-                    logger.info(
-                        f"{LOG_PREFIX} 签到背景第 {page_attempt} 页无符合 3:4 的竖向作品\uff0c切换下一页"
-                    )
-                except Exception as e:
-                    logger.warning(
-                        f"{LOG_PREFIX} 签到背景分页游标更新失败: "
-                        f"error_type={type(e).__name__}"
-                    )
+                except Exception as exc:
+                    logger.warning(f"{LOG_PREFIX} 签到背景分页游标更新失败: error_type={type(exc).__name__}")
                     return None
                 continue
 
@@ -709,20 +767,13 @@ class CheckinArtworkMixin:
             if fresh:
                 illusts = fresh
                 break
-            if preview_nonce:
-                continue
-            if self.image_index is None:
-                logger.info(
-                    f"{LOG_PREFIX} 签到背景候选均已在去重窗口内使用，跳过图片源背景"
-                )
-                return None
-
             try:
-                await self.image_index.advance_page_offset(
-                    self._event_scope(event), source_key, raw_count
+                await self._advance_source_page(
+                    event, source_key, request_state, use_page_cursor=not preview_nonce,
                 )
                 logger.info(
-                    f"{LOG_PREFIX} 签到背景第 {page_attempt} 页候选均已使用\uff0c切换下一页"
+                    f"{LOG_PREFIX} 签到背景批次无未用候选: "
+                    f"batch={page_attempt}/{CHECKIN_BACKGROUND_PAGE_ATTEMPTS}"
                 )
             except Exception as e:
                 logger.warning(
@@ -732,7 +783,8 @@ class CheckinArtworkMixin:
                 return None
         else:
             logger.info(
-                f"{LOG_PREFIX} 签到背景连续 {CHECKIN_BACKGROUND_PAGE_ATTEMPTS} 页无可用竖向作品"
+                f"{LOG_PREFIX} 签到背景候选补取已结束: "
+                f"batch_count={CHECKIN_BACKGROUND_PAGE_ATTEMPTS} result=no_portrait_candidate"
             )
             return None
 
@@ -769,12 +821,13 @@ class CheckinArtworkMixin:
                 continue
             claimed = False
             if claim_usage:
-                claimed = await self._claim_checkin_background_usage(
-                    event, source_key, illust_id
-                )
+                try:
+                    claimed = await self._claim_checkin_background_usage(event, source_key, illust_id)
+                except SelectionIndexError:
+                    return None
                 if not claimed:
                     logger.debug(
-                        f"{LOG_PREFIX} 签到背景跳过\uff1a作品 {illust_id} 已被其他签到占用"
+                        f"{LOG_PREFIX} 签到背景候选已跳过: reason=usage_conflict illust_id={illust_id}"
                     )
                     continue
             title = illust.get("title", "无标题")
@@ -784,7 +837,7 @@ class CheckinArtworkMixin:
                     illust,
                     background_quality,
                     timeout=timeout_sec,
-                    downgrade_limit_bytes=0,
+                    size_limit_bytes=0,
                     log_context=f"[签到背景 {idx}] 作品 {illust_id}",
                 )
                 author = str((illust.get("user") or {}).get("name") or "")
@@ -803,7 +856,7 @@ class CheckinArtworkMixin:
                 logger.debug(
                     f"{LOG_PREFIX} 签到背景选择完成: mode=pixiv_daily "
                     f"source={source_key.partition(':')[0] or 'unknown'} "
-                    f"illust_id={illust_id} quality={actual_q} file_size={file_size}"
+                    f"illust_id={illust_id} quality={actual_q} size={format_log_size(file_size)}"
                 )
                 return background
             except asyncio.TimeoutError:
@@ -837,14 +890,12 @@ class CheckinArtworkMixin:
     ) -> bool:
         if self.image_index is None or not source_key or not illust_id:
             return True
+        claim_task = asyncio.ensure_future(self.image_index.claim_usage(
+            scope=self._event_scope(event), source_key=source_key, illust_id=illust_id,
+            feature="checkin_pending", user_id=str(event.get_sender_id() or ""),
+        ))
         try:
-            claimed = await self.image_index.claim_usage(
-                scope=self._event_scope(event),
-                source_key=source_key,
-                illust_id=illust_id,
-                feature="checkin_pending",
-                user_id=str(event.get_sender_id() or ""),
-            )
+            claimed = await asyncio.shield(claim_task)
             logger.debug(
                 f"{LOG_PREFIX} 签到背景占用结果: "
                 f"result={'claimed' if claimed else 'duplicate'} "
@@ -852,12 +903,19 @@ class CheckinArtworkMixin:
                 f"illust_id={illust_id}"
             )
             return claimed
+        except asyncio.CancelledError:
+            try:
+                if await claim_task:
+                    await self._release_checkin_background_usage(event, source_key, illust_id)
+            except Exception as exc:
+                logger.warning(f"{LOG_PREFIX} 取消后签到背景占用处理失败: error_type={type(exc).__name__}")
+            raise
         except Exception as exc:
-            logger.debug(
+            logger.warning(
                 f"{LOG_PREFIX} 签到背景占用失败，拒绝使用候选: "
                 f"reason=index_error error_type={type(exc).__name__}"
             )
-            return False
+            raise SelectionIndexError("签到背景占用失败") from exc
 
     async def _release_checkin_background_usage(
         self, event: AstrMessageEvent, source_key: str, illust_id: str
@@ -872,7 +930,7 @@ class CheckinArtworkMixin:
                 feature="checkin_pending",
             )
             logger.debug(
-                f"{LOG_PREFIX} 签到背景占用已释放: "
+                f"{LOG_PREFIX} 签到背景占用释放调用已完成: "
                 f"source={source_key.partition(':')[0] or 'unknown'} "
                 f"illust_id={illust_id}"
             )
@@ -935,11 +993,14 @@ class CheckinArtworkMixin:
                 f"error_type={type(exc).__name__}"
             )
             return CardBackground(mode="fallback", source="fallback")
-        # Pixiv 回退路径不经过 API 端筛选，本地按 16:9±0.1 复核。
+        # Pixiv 路径不经过 API 端筛选，本地按 16:9±0.1 复核。
         illusts = filter_illusts_by_aspect_ratio(
             illusts, _CALENDAR_BG_RATIO, _CALENDAR_BG_RATIO_TOLERANCE
         )
-        used_ids = set(await self._checkin_background_used_ids(event, source_key))
+        try:
+            used_ids = set(await self._checkin_background_used_ids(event, source_key))
+        except SelectionIndexError:
+            return CardBackground(mode="fallback", source="fallback")
         ordered = [
             illust
             for illust in ordered_by_unused(illusts, used_ids)
@@ -967,7 +1028,7 @@ class CheckinArtworkMixin:
                     illust,
                     background_quality,
                     timeout=timeout_sec,
-                    downgrade_limit_bytes=0,
+                    size_limit_bytes=0,
                     log_context=f"[日历背景] 作品 {illust_id}",
                 )
             except Exception as exc:
@@ -1008,7 +1069,7 @@ class CheckinArtworkMixin:
             background_credit = getattr(background, "pixiv_caption", "") or ""
         # 读文件 + PIL 校验 + base64 可达数 MB，与视图组装一并放进线程池
         background_url = await asyncio.to_thread(
-            _file_to_data_url,
+            _calendar_background_data_url,
             str(getattr(background, "image_path", "") or ""),
         )
         data = await asyncio.to_thread(
@@ -1066,6 +1127,7 @@ class CheckinArtworkMixin:
                     f"{LOG_PREFIX} 签到背景读取去重索引失败: "
                     f"error_type={type(e).__name__}"
                 )
+                raise SelectionIndexError("读取背景去重索引失败") from e
         return used_ids
 
     def _checkin_avatar_url(self, event: AstrMessageEvent) -> str:

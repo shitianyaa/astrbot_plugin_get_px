@@ -1,6 +1,6 @@
 # GetPx 插件文档索引
 
-`astrbot_plugin_get_px` 是中型 AstrBot 插件，文档分为 `project/` 和 `dev/` 两类。用户使用说明以根目录 [`README.md`](../README.md) 为准。
+`astrbot_plugin_get_px` 是中型 AstrBot 插件，文档分为 `project/`、`dev/` 和 `user/` 三类。用户使用说明以根目录 [`README.md`](../README.md) 为准。
 
 ## 文档职责边界
 
@@ -9,6 +9,7 @@
 - `docs/project/overview.md` 只写插件定位、能力边界和当前入口。
 - `docs/project/architecture.md` 写模块关系、主要流程和安全边界。
 - `docs/project/configuration.md` 是配置字段语义的细节来源。
+- `docs/project/cache-and-dedupe.md` 维护缓存身份、有效期、去重范围、幂等与清理边界。
 - `docs/user/` 是用户功能使用说明，包括签到和指令参考。
 
 如果多个文档都提到同一概念，应由最具体的专题文档维护细节，其他文档只链接过去。
@@ -20,6 +21,7 @@
 - [`project/overview.md`](./project/overview.md): 项目定位、能力边界和当前入口
 - [`project/architecture.md`](./project/architecture.md): 模块关系、主要流程和安全边界
 - [`project/configuration.md`](./project/configuration.md): `_conf_schema.json` 字段语义、默认值和文档同步要求
+- [`project/cache-and-dedupe.md`](./project/cache-and-dedupe.md): 缓存复用、图片去重、幂等与失效条件
 
 ### dev
 
@@ -55,6 +57,11 @@
 1. [`project/configuration.md`](./project/configuration.md)
 2. [`_conf_schema.json`](../_conf_schema.json)
 3. [`README.md`](../README.md)
+
+### 我要排查缓存或重复图片
+
+1. [`project/cache-and-dedupe.md`](./project/cache-and-dedupe.md)
+2. [`dev/testing.md`](./dev/testing.md#缓存复用与去重回归)
 
 ### 我要了解用户功能
 

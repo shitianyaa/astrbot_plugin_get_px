@@ -5,6 +5,8 @@ from contextlib import closing
 
 
 class GroupSafetyStoreMixin:
+    """旧表只读归档桥接，不提供策略查询或写入。"""
+
     async def list_group_content_safety_records(self) -> list[dict[str, object]]:
         async with self._lock:
             return await asyncio.to_thread(self._list_group_content_safety_records_sync)
@@ -16,5 +18,7 @@ class GroupSafetyStoreMixin:
                 "WHERE type = 'table' AND name = 'group_content_safety'"
             ).fetchone():
                 return []
-            rows = conn.execute("SELECT group_id, general_only_enabled, builtin_terms_enabled, updated_by, updated_at FROM group_content_safety ORDER BY group_id").fetchall()
-        return [{"group_id": str(row["group_id"]), "general_only_enabled": bool(row["general_only_enabled"]), "builtin_terms_enabled": bool(row["builtin_terms_enabled"]), "updated_by": str(row["updated_by"] or ""), "updated_at": str(row["updated_at"] or "")} for row in rows]
+            rows = conn.execute(
+                "SELECT * FROM group_content_safety ORDER BY group_id"
+            ).fetchall()
+        return [dict(row) for row in rows]

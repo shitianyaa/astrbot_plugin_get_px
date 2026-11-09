@@ -2,532 +2,357 @@ from __future__ import annotations
 
 import asyncio
 from copy import deepcopy
-from datetime import datetime, timezone
-from typing import Any
+import hashlib
+import json
+from pathlib import Path
+import re
+import uuid
 
-# AstrBot loads this plugin as a package, while the repository tests also
-# import modules directly from the checkout root. Keep both contexts explicit
-# so a failed package import never falls through to a top-level fallback.
+from astrbot.api import logger
+from astrbot.core.platform.message_session import MessageSession
+
 if __package__:
-    from .pixiv.safety import normalize_safety_text, normalize_safety_term_identity
+    from .pixiv.safety import (
+        ContentSafetyPolicy,
+        MATCH_MODES,
+        normalize_illust_ids,
+        normalize_terms,
+        normalize_safety_text,
+    )
 else:
-    from pixiv.safety import normalize_safety_text, normalize_safety_term_identity
-
-try:
-    from astrbot.api.all import logger
-except ImportError:
-    import logging
-
-    logger = logging.getLogger(__name__)
-
-CONFIG_KEY = "group_content_safety_policies"
-PRIVATE_CONFIG_KEY = "private_content_safety_policies"
-MIGRATION_KEY = "group_content_safety_policies_migrated"
-TEMPLATE_KEY = "group_policy"
-PRIVATE_TEMPLATE_KEY = "private_policy"
-MAX_GROUP_ID_LENGTH = 128
-LIST_FIELDS = ("custom_terms", "blacklisted_illust_ids")
-
-
-def _normalize_terms(value: object, *, strict: bool = True, field: str = "custom_terms") -> list[str]:
-    if not isinstance(value, list):
-        if strict:
-            raise ValueError(f"{field} must be a list")
-        return []
-    result = {}
-    for index, item in enumerate(value):
-        if not isinstance(item, str):
-            if strict:
-                raise ValueError(f"{field}[{index}] must be a string")
-            continue
-        display = item.strip()
-        normalized = normalize_safety_text(display)
-        if not normalized:
-            if strict:
-                raise ValueError(f"{field}[{index}] is required")
-            continue
-        result.setdefault(normalize_safety_term_identity(display), display)
-    return [result[key] for key in sorted(result, key=lambda k: (k, result[k]))]
-
-
-def _normalize_ids(value: object, *, strict: bool = True, field: str = "blacklisted_illust_ids") -> list[str]:
-    if not isinstance(value, list):
-        if strict:
-            raise ValueError(f"{field} must be a list")
-        return []
-    result = set()
-    for index, item in enumerate(value):
-        if not isinstance(item, str) or not item.strip() or not item.strip().isdigit() or int(item.strip()) <= 0:
-            if strict:
-                raise ValueError(f"{field}[{index}] must be a positive integer string")
-            continue
-        result.add(str(int(item.strip())))
-    return sorted(result, key=int)
-
-
-def _normalize_lists(item: dict, *, strict: bool = True) -> tuple[list[str], list[str]]:
-    return (
-        _normalize_terms(item.get("custom_terms", []), strict=strict),
-        _normalize_ids(item.get("blacklisted_illust_ids", []), strict=strict),
+    from pixiv.safety import (
+        ContentSafetyPolicy,
+        MATCH_MODES,
+        normalize_illust_ids,
+        normalize_terms,
+        normalize_safety_text,
     )
 
 
-def _normalize(value: object, key: str) -> str:
-    if not isinstance(value, str):
-        raise ValueError(f"{key} must be a string")
+CONFIG_KEY = "safety_groups"
+TERMS_KEY = "global_safety_terms"
+IDS_KEY = "global_blacklisted_illust_ids"
+MODE_KEY = "keyword_match_mode"
+VERSION_KEY = "safety_rules_version"
+LEGACY_KEYS = (
+    "group_content_safety_policies",
+    "private_content_safety_policies",
+    "group_content_safety_policies_migrated",
+)
+SAFETY_VERSION = 1
+
+
+def normalize_session(value: object) -> str:
+    if (
+        not isinstance(value, str)
+        or not value.strip()
+        or any(ord(char) < 32 for char in value)
+    ):
+        raise ValueError("会话必须为 /sid 返回的完整 UMO")
     value = value.strip()
-    if not value:
-        raise ValueError(f"{key} is required")
-    if len(value) > MAX_GROUP_ID_LENGTH:
-        raise ValueError(f"{key} must not exceed {MAX_GROUP_ID_LENGTH} characters")
-    if any(ord(char) < 32 or ord(char) == 127 for char in value):
-        raise ValueError(f"{key} contains invalid control characters")
-    return value
+    try:
+        session = MessageSession.from_str(value)
+    except (TypeError, ValueError) as exc:
+        raise ValueError("会话必须为 /sid 返回的完整 UMO") from exc
+    if not session.platform_id.strip() or not session.session_id.strip():
+        raise ValueError("会话必须包含平台实例和会话 ID")
+    return str(session)
 
 
-def normalize_group_id(value: object) -> str:
-    return _normalize(value, "group_id")
-
-
-def normalize_user_id(value: object) -> str:
-    return _normalize(value, "user_id")
-
-
-def strict_policy(identifier: str, *, private: bool = False) -> dict[str, object]:
-    return {
-        "user_id" if private else "group_id": identifier,
-        "general_only_enabled": True,
-        "builtin_terms_enabled": True,
-        "updated_by": "",
-        "updated_at": "",
-        "is_default": True,
-        "custom_terms": [],
-        "blacklisted_illust_ids": [],
-    }
-
-
-def _normalize_entries(raw: object, *, private: bool = False):
-    key = "user_id" if private else "group_id"
-    template = PRIVATE_TEMPLATE_KEY if private else TEMPLATE_KEY
-    normalize_id = normalize_user_id if private else normalize_group_id
+def normalize_groups(raw: object) -> list[dict]:
     if not isinstance(raw, list):
-        return [], [f"{key} policy list must be a list"]
-    entries, warnings, seen = [], [], set()
-    for index, item in enumerate(raw):
+        raise ValueError("安全分组必须是列表")
+    groups, ids, names, sessions = [], set(), set(), set()
+    for item in raw:
         if not isinstance(item, dict):
-            warnings.append(f"entry {index}: must be an object")
-            continue
-        try:
-            identifier = normalize_id(item.get(key))
-            if type(item.get("general_only_enabled")) is not bool:
-                raise ValueError("general_only_enabled must be a boolean")
-            if type(item.get("builtin_terms_enabled")) is not bool:
-                raise ValueError("builtin_terms_enabled must be a boolean")
-            custom_terms, blacklisted_ids = _normalize_lists(item, strict=False)
-            raw_terms = item.get("custom_terms", [])
-            raw_ids = item.get("blacklisted_illust_ids", [])
-            if isinstance(raw_terms, list):
-                warnings.extend(f"entry {index}: custom_terms[{i}] invalid and dropped" for i, v in enumerate(raw_terms) if not isinstance(v, str) or not v.strip() or not normalize_safety_text(v.strip()))
-            elif "custom_terms" in item:
-                warnings.append(f"entry {index}: custom_terms must be a list; dropped")
-            if isinstance(raw_ids, list):
-                warnings.extend(f"entry {index}: blacklisted_illust_ids[{i}] invalid and dropped" for i, v in enumerate(raw_ids) if not isinstance(v, str) or not v.strip().isdigit() or int(v.strip()) <= 0)
-            elif "blacklisted_illust_ids" in item:
-                warnings.append(f"entry {index}: blacklisted_illust_ids must be a list; dropped")
-        except ValueError as exc:
-            warnings.append(f"entry {index}: {exc}")
-            continue
-        if identifier in seen:
-            warnings.append(f"entry {index}: duplicate {key} {identifier}")
-            continue
-        seen.add(identifier)
-        entries.append(
+            raise ValueError("安全分组必须是对象")
+        group_id = item.get("group_id", "")
+        name = item.get("name", "")
+        if not group_id and isinstance(name, str) and name.strip():
+            group_id = uuid.uuid5(
+                uuid.NAMESPACE_URL, f"get-px-safety:{name.strip()}"
+            ).hex
+        if not isinstance(group_id, str) or not re.fullmatch(
+            r"[A-Za-z0-9_.-]{1,64}", group_id
+        ):
+            raise ValueError("分组 ID 无效")
+        if (
+            not isinstance(name, str)
+            or not name.strip()
+            or len(name.strip()) > 64
+            or any(ord(c) < 32 for c in name)
+        ):
+            raise ValueError("分组名称必须为 1–64 个字符")
+        if group_id in ids or name.strip().casefold() in names:
+            raise ValueError("分组 ID 或名称重复")
+        targets = item.get("sessions", [])
+        if not isinstance(targets, list):
+            raise ValueError("关联会话必须是列表")
+        normalized = [normalize_session(value) for value in targets]
+        if len(set(normalized)) != len(normalized) or sessions.intersection(normalized):
+            raise ValueError("一个会话只能属于一个分组")
+        allow_r18 = item.get("allow_r18", False)
+        if type(allow_r18) is not bool:
+            raise ValueError("允许 R18 必须是布尔值")
+        groups.append(
             {
-                "__template_key": template,
-                key: identifier,
-                "general_only_enabled": item["general_only_enabled"],
-                "builtin_terms_enabled": item["builtin_terms_enabled"],
-                "updated_by": str(item.get("updated_by") or ""),
-                "updated_at": str(item.get("updated_at") or ""),
-                "custom_terms": custom_terms,
-                "blacklisted_illust_ids": blacklisted_ids,
+                "__template_key": "safety_group",
+                "group_id": group_id,
+                "name": name.strip(),
+                "sessions": normalized,
+                "allow_r18": allow_r18,
+                "custom_terms": list(normalize_terms(item.get("custom_terms", []))),
             }
         )
-    return sorted(entries, key=lambda entry: entry[key]), warnings
-
-
-def normalize_policy_entries(raw: object):
-    return _normalize_entries(raw)
+        ids.add(group_id)
+        names.add(name.strip().casefold())
+        sessions.update(normalized)
+    return groups
 
 
 class SessionSafetyService:
-    def __init__(self, config: Any, *, log_prefix: str = "[GetPx]"):
+    """Schema 和 Pages 共用的全局规则与命名分组。"""
+
+    def __init__(self, config, *, log_prefix: str = "[GetPx]"):
         self.config = config
         self.log_prefix = log_prefix
         self._lock = asyncio.Lock()
-        self._policies: dict[str, dict[str, object]] = {}
-        self._private_policies: dict[str, dict[str, object]] = {}
+        self.data_dir: Path | None = None
 
-    @staticmethod
-    def _scope(private: bool):
-        return (
-            (PRIVATE_CONFIG_KEY, "user_id", PRIVATE_TEMPLATE_KEY)
-            if private
-            else (CONFIG_KEY, "group_id", TEMPLATE_KEY)
-        )
+    def _container(self):
+        grouped = self.config.get("content_dedupe")
+        if not isinstance(grouped, dict):
+            raise ValueError("安全配置分组无效")
+        return grouped
 
-    def _source(self, private: bool):
-        return self._private_policies if private else self._policies
-
-    def _records(self, entries, *, private: bool):
-        _, key, _ = self._scope(private)
+    def _snapshot(self) -> dict:
+        container = self._container()
+        mode = container.get(MODE_KEY, "宽松")
+        if mode not in MATCH_MODES:
+            raise ValueError("关键词匹配方式无效")
         return {
-            str(entry[key]): {
-                key: str(entry[key]),
-                "general_only_enabled": entry["general_only_enabled"],
-                "builtin_terms_enabled": entry["builtin_terms_enabled"],
-                "updated_by": str(entry.get("updated_by") or ""),
-                "updated_at": str(entry.get("updated_at") or ""),
-                "is_default": False,
-                "custom_terms": list(entry.get("custom_terms", [])),
-                "blacklisted_illust_ids": list(entry.get("blacklisted_illust_ids", [])),
-            }
-            for entry in entries
+            MODE_KEY: mode,
+            TERMS_KEY: list(normalize_terms(container.get(TERMS_KEY, []))),
+            IDS_KEY: list(normalize_illust_ids(container.get(IDS_KEY, []))),
+            CONFIG_KEY: normalize_groups(container.get(CONFIG_KEY, [])),
         }
 
-    def _install(self, entries, *, private: bool = False):
-        target = self._source(private)
-        target.clear()
-        target.update(self._records(entries, private=private))
-
-    def _entries(self, records, *, private: bool):
-        _, key, template = self._scope(private)
-        return [
-            {
-                "__template_key": template,
-                key: identifier,
-                "general_only_enabled": record["general_only_enabled"],
-                "builtin_terms_enabled": record["builtin_terms_enabled"],
-                "updated_by": str(record.get("updated_by") or ""),
-                "updated_at": str(record.get("updated_at") or ""),
-                "custom_terms": list(record.get("custom_terms", [])),
-                "blacklisted_illust_ids": list(record.get("blacklisted_illust_ids", [])),
-            }
-            for identifier, record in sorted(records.items())
-        ]
-
-    def _container(self) -> dict:
-        """Return the grouped config container while keeping the root config as saver."""
-        grouped = self.config.get("content_dedupe")
-        return grouped if isinstance(grouped, dict) else self.config
-
-    def _get_config(self, key: str, default=None):
+    def _save(self, changes: dict) -> None:
         container = self._container()
-        if key in container:
-            nested = container.get(key, default)
-            # AstrBot may materialize invisible flat compatibility defaults.
-            # A non-empty legacy value still needs one-time migration into the
-            # grouped container when the nested template is empty.
-            if container is not self.config and not nested:
-                legacy = self.config.get(key, default)
-                if legacy:
-                    return legacy
-            return nested
-        return self.config.get(key, default)
-
-    def _set_config(self, key: str, value) -> None:
-        self._container()[key] = value
-
-    def _snapshot_config(self):
-        container = self._container()
-        return (
-            container,
-            deepcopy(container),
-            {key: (key in self.config, self.config.get(key),
-                   deepcopy(self.config.get(key))) for key in
-             (CONFIG_KEY, PRIVATE_CONFIG_KEY, MIGRATION_KEY)},
-        )
-
-    def _restore_config(self, snapshot) -> None:
-        container, container_copy, root_snapshot = snapshot
-        existing_refs = {key: self.config.get(key) for key in
-                        (CONFIG_KEY, PRIVATE_CONFIG_KEY, MIGRATION_KEY)}
-        nested_refs = {key: container.get(key) for key in
-                       (CONFIG_KEY, PRIVATE_CONFIG_KEY, MIGRATION_KEY)}
-        restored = deepcopy(container_copy)
-        refs = nested_refs if container is not self.config else existing_refs
-        for key, ref in refs.items():
-            if isinstance(ref, list) and key in restored:
-                ref[:] = deepcopy(restored[key])
+        previous = deepcopy(container)
+        refs = {
+            key: value for key, value in container.items() if isinstance(value, list)
+        }
+        try:
+            for key, value in changes.items():
+                if isinstance(container.get(key), list) and isinstance(value, list):
+                    container[key][:] = deepcopy(value)
+                else:
+                    container[key] = deepcopy(value)
+            self.config.save_config()
+        except Exception:
+            restored = deepcopy(previous)
+            for key, ref in refs.items():
+                ref[:] = restored[key]
                 restored[key] = ref
-        container.clear()
-        container.update(restored)
-        if container is self.config:
-            return
-        for key, (present, value, value_copy) in root_snapshot.items():
-            if present:
-                current = self.config.get(key)
-                if isinstance(current, list) and isinstance(value, list):
-                    current[:] = deepcopy(value_copy)
-                    self.config[key] = current
-                else:
-                    self.config[key] = deepcopy(value_copy)
-            else:
-                self.config.pop(key, None)
-
-    def _save_scope(self, *, private: bool, candidate, migrated=None):
-        config_key, _, _ = self._scope(private)
-        snapshot = self._snapshot_config()
-        serialized = self._entries(candidate, private=private)
-        current = self._container().get(config_key)
-        if isinstance(current, list):
-            current[:] = deepcopy(serialized)
-        else:
-            self._set_config(config_key, deepcopy(serialized))
-        if not private and migrated is not None:
-            self._set_config(MIGRATION_KEY, bool(migrated))
-        try:
-            saver = getattr(self.config, "save_config", None)
-            if not callable(saver):
-                raise RuntimeError("config.save_config is required")
-            saver()
-        except Exception:
-            self._restore_config(snapshot)
+            container.clear()
+            container.update(restored)
             raise
 
-    def _save_candidates(self, group_candidate=None, private_candidate=None, migrated=None):
-        snapshot = self._snapshot_config()
-        try:
-            if group_candidate is not None:
-                serialized = self._entries(group_candidate, private=False)
-                current = self._container().get(CONFIG_KEY)
-                if isinstance(current, list):
-                    current[:] = deepcopy(serialized)
-                else:
-                    self._set_config(CONFIG_KEY, deepcopy(serialized))
-            if private_candidate is not None:
-                serialized = self._entries(private_candidate, private=True)
-                current = self._container().get(PRIVATE_CONFIG_KEY)
-                if isinstance(current, list):
-                    current[:] = deepcopy(serialized)
-                else:
-                    self._set_config(PRIVATE_CONFIG_KEY, deepcopy(serialized))
-            if migrated is not None:
-                self._set_config(MIGRATION_KEY, bool(migrated))
-            saver = getattr(self.config, "save_config", None)
-            if not callable(saver):
-                raise RuntimeError("config.save_config is required")
-            saver()
-        except Exception:
-            self._restore_config(snapshot)
-            raise
-
-    def _log_warnings(self, source: str, warnings):
-        for warning in warnings:
-            logger.warning(f"{self.log_prefix} {source}: {warning}")
-
-    async def initialize(self, legacy_store):
-        async with self._lock:
-            migration_succeeded = True
-            raw_private = self._get_config(PRIVATE_CONFIG_KEY, [])
-            private_entries, warnings = _normalize_entries(raw_private, private=True)
-            self._log_warnings("private config", warnings)
-            self._install(private_entries, private=True)
-            if raw_private != private_entries:
-                try:
-                    self._save_scope(
-                        private=True, candidate=deepcopy(self._private_policies)
-                    )
-                except Exception as exc:
-                    self._install([], private=True)
-                    migration_succeeded = False
-                    self._log_warnings(
-                        "private config",
-                        [f"save failed error_type={type(exc).__name__}"],
-                    )
-
-            raw_group = self._get_config(CONFIG_KEY, [])
-            group_entries, warnings = _normalize_entries(raw_group)
-            self._log_warnings("config", warnings)
-            migrated = bool(self._get_config(MIGRATION_KEY, False))
-            use_legacy = not migrated and isinstance(raw_group, list) and not raw_group
-            if use_legacy:
-                try:
-                    group_entries, warnings = _normalize_entries(
-                        await legacy_store.list_group_content_safety_records()
-                    )
-                    self._log_warnings("legacy", warnings)
-                except Exception as exc:
-                    self._install([], private=False)
-                    migration_succeeded = False
-                    self._log_warnings(
-                        "legacy", [f"read failed error_type={type(exc).__name__}"]
-                    )
-                    return False
-            self._install(group_entries, private=False)
-            if isinstance(raw_group, list) and migrated and raw_group == group_entries:
-                return migration_succeeded
+    def _write_archive(self, legacy: dict) -> Path:
+        if self.data_dir is None:
+            raise RuntimeError("安全归档目录尚未初始化")
+        encoded = json.dumps(legacy, ensure_ascii=False, sort_keys=True).encode("utf-8")
+        digest = hashlib.sha256(encoded).hexdigest()
+        root = self.data_dir / "safety_legacy_backups"
+        root.mkdir(parents=True, exist_ok=True)
+        target = root / f"legacy-{digest}.json"
+        expected = {
+            "schema_version": 1,
+            "kind": "legacy_safety_archive",
+            "legacy": legacy,
+        }
+        if not target.exists():
+            temporary = target.with_suffix(".tmp")
             try:
-                self._save_scope(
-                    private=False,
-                    candidate=deepcopy(self._policies),
-                    migrated=True,
+                temporary.write_text(
+                    json.dumps(expected, ensure_ascii=False, indent=2), encoding="utf-8"
                 )
-            except Exception as exc:
-                self._install([], private=False)
-                migration_succeeded = False
-                self._log_warnings(
-                    "legacy" if use_legacy else "config",
-                    [f"save failed error_type={type(exc).__name__}"],
-                )
-            return migration_succeeded
+                # 先核对临时文件，成功才发布；重试以内容哈希避免重复归档。
+                if json.loads(temporary.read_text(encoding="utf-8")) != expected:
+                    raise RuntimeError("旧策略备份校验失败")
+                temporary.replace(target)
+            finally:
+                temporary.unlink(missing_ok=True)
+        if json.loads(target.read_text(encoding="utf-8")) != expected:
+            raise RuntimeError("旧策略备份校验失败")
+        return target
 
-    async def _list(self, *, private: bool = False):
+    async def initialize(self, legacy_store, image_index, data_dir: Path | str) -> None:
+        self.data_dir = Path(data_dir)
         async with self._lock:
-            return [deepcopy(record) for _, record in sorted(self._source(private).items())]
-
-    async def _get(self, identifier, *, private: bool = False):
-        _, key, _ = self._scope(private)
-        identifier = _normalize(identifier, key)
-        async with self._lock:
-            return deepcopy(
-                self._source(private).get(
-                    identifier, strict_policy(identifier, private=private)
+            container = self._container()
+            version = container.get(VERSION_KEY, 0)
+            if type(version) is not int or version not in (0, SAFETY_VERSION):
+                raise ValueError("不支持的安全配置版本")
+            settings = self._snapshot()
+            if version == SAFETY_VERSION:
+                if container.get(CONFIG_KEY, []) != settings[CONFIG_KEY]:
+                    self._save({CONFIG_KEY: settings[CONFIG_KEY]})
+                return
+            legacy_records = await legacy_store.list_group_content_safety_records()
+            legacy_terms = await image_index.list_safety_terms()
+            legacy_ids = await image_index.list_blacklist_illusts()
+            old = {key: deepcopy(container.get(key)) for key in LEGACY_KEYS}
+            legacy = {
+                "config": old,
+                "database_policies": legacy_records,
+                "global_terms": legacy_terms,
+                "global_blacklist": legacy_ids,
+            }
+            if (
+                legacy_records
+                or legacy_terms
+                or legacy_ids
+                or any(old.get(key) for key in LEGACY_KEYS[:2])
+            ):
+                path = await asyncio.to_thread(self._write_archive, legacy)
+                logger.info(
+                    f"{self.log_prefix} 旧安全策略已备份: file={path.name} restore_supported=no"
                 )
+            # 全局人工数据保留；旧局部策略不猜测 UMO，也不继承旧 R18 开关。
+            terms = normalize_terms(
+                [
+                    *container.get(TERMS_KEY, []),
+                    *(item["term"] for item in legacy_terms),
+                ]
+            )
+            ids = normalize_illust_ids(
+                [
+                    *container.get(IDS_KEY, []),
+                    *(str(item["illust_id"]) for item in legacy_ids),
+                ]
+            )
+            self._save(
+                {
+                    TERMS_KEY: list(terms),
+                    IDS_KEY: list(ids),
+                    CONFIG_KEY: settings[CONFIG_KEY],
+                    VERSION_KEY: SAFETY_VERSION,
+                    LEGACY_KEYS[0]: [],
+                    LEGACY_KEYS[1]: [],
+                    LEGACY_KEYS[2]: True,
+                }
             )
 
-    async def _upsert(
-        self,
-        identifier,
-        *,
-        general_only_enabled,
-        builtin_terms_enabled,
-        updated_by="",
-        private=False,
-        custom_terms=None,
-        blacklisted_illust_ids=None,
-    ):
-        _, key, _ = self._scope(private)
-        identifier = _normalize(identifier, key)
-        if (
-            type(general_only_enabled) is not bool
-            or type(builtin_terms_enabled) is not bool
-        ):
-            raise ValueError("policy values must be booleans")
+    async def settings(self) -> dict:
         async with self._lock:
-            candidate = deepcopy(self._source(private))
-            existing = candidate.get(identifier)
-            if custom_terms is None:
-                normalized_terms = list(existing.get("custom_terms", [])) if existing else []
+            return deepcopy(self._snapshot())
+
+    async def resolve(self, session: str) -> ContentSafetyPolicy:
+        session = normalize_session(session)
+        async with self._lock:
+            settings = self._snapshot()
+            selected = next(
+                (
+                    group
+                    for group in settings[CONFIG_KEY]
+                    if session in group["sessions"]
+                ),
+                None,
+            )
+            terms = [
+                *settings[TERMS_KEY],
+                *(selected["custom_terms"] if selected else []),
+            ]
+            return ContentSafetyPolicy(
+                general_only_enabled=not (selected and selected["allow_r18"]),
+                match_mode=settings[MODE_KEY],
+                custom_terms=tuple(terms),
+                blacklisted_illust_ids=tuple(settings[IDS_KEY]),
+            )
+
+    async def global_policy(self) -> ContentSafetyPolicy:
+        settings = await self.settings()
+        return ContentSafetyPolicy(
+            match_mode=settings[MODE_KEY],
+            custom_terms=tuple(settings[TERMS_KEY]),
+            blacklisted_illust_ids=tuple(settings[IDS_KEY]),
+        )
+
+    async def update_global(self, payload: dict) -> dict:
+        async with self._lock:
+            settings = self._snapshot()
+            if not set(payload).issubset({TERMS_KEY, IDS_KEY, MODE_KEY}):
+                raise ValueError("未知的全局安全字段")
+            settings.update(payload)
+            mode = settings[MODE_KEY]
+            if mode not in MATCH_MODES:
+                raise ValueError("关键词匹配方式无效")
+            settings[TERMS_KEY] = list(normalize_terms(settings[TERMS_KEY]))
+            settings[IDS_KEY] = list(normalize_illust_ids(settings[IDS_KEY]))
+            self._save({key: settings[key] for key in payload})
+            return deepcopy(settings)
+
+    async def change_global_item(self, key: str, value: str, *, remove=False) -> dict:
+        async with self._lock:
+            if key not in (TERMS_KEY, IDS_KEY):
+                raise ValueError("未知的全局安全列表")
+            normalize = normalize_terms if key == TERMS_KEY else normalize_illust_ids
+            item = normalize([value])[0]
+            items = self._snapshot()[key]
+            if remove:
+                identity = normalize_safety_text if key == TERMS_KEY else str
+                items = [value for value in items if identity(value) != identity(item)]
             else:
-                normalized_terms = _normalize_terms(custom_terms)
-            if blacklisted_illust_ids is None:
-                normalized_ids = list(existing.get("blacklisted_illust_ids", [])) if existing else []
-            else:
-                normalized_ids = _normalize_ids(blacklisted_illust_ids)
-            candidate[identifier] = {
-                key: identifier,
-                "general_only_enabled": general_only_enabled,
-                "builtin_terms_enabled": builtin_terms_enabled,
-                "updated_by": str(updated_by or ""),
-                "updated_at": datetime.now(timezone.utc).isoformat(),
-                "is_default": False,
-                "custom_terms": normalized_terms,
-                "blacklisted_illust_ids": normalized_ids,
-            }
-            self._save_scope(private=private, candidate=candidate, migrated=True)
-            target = self._source(private)
-            target.clear()
-            target.update(candidate)
-            return dict(target[identifier])
+                items = list(normalize([*items, item]))
+            self._save({key: items})
+            return {key: items}
 
-    async def _remove(self, identifier, *, private=False):
-        _, key, _ = self._scope(private)
-        identifier = _normalize(identifier, key)
+    async def save_group(self, payload: dict) -> dict:
         async with self._lock:
-            source = self._source(private)
-            if identifier not in source:
-                return False, strict_policy(identifier, private=private)
-            candidate = deepcopy(source)
-            del candidate[identifier]
-            self._save_scope(private=private, candidate=candidate, migrated=True)
-            source.clear()
-            source.update(candidate)
-            return True, strict_policy(identifier, private=private)
+            if not set(payload).issubset(
+                {"group_id", "name", "sessions", "allow_r18", "custom_terms"}
+            ):
+                raise ValueError("未知的安全分组字段")
+            groups = self._snapshot()[CONFIG_KEY]
+            group_id = payload.get("group_id") or uuid.uuid4().hex
+            existing = next(
+                (group for group in groups if group["group_id"] == group_id), None
+            )
+            if payload.get("group_id") and existing is None:
+                raise LookupError("安全分组不存在")
+            item = {**(existing or {}), **payload, "group_id": group_id}
+            candidate = [group for group in groups if group["group_id"] != group_id] + [
+                item
+            ]
+            candidate = normalize_groups(candidate)
+            self._save({CONFIG_KEY: candidate})
+            return next(group for group in candidate if group["group_id"] == group_id)
 
-    async def list_group_policies(self):
-        return await self._list()
-
-    async def get_group_policy(self, group_id):
-        return await self._get(group_id)
-
-    async def upsert_group_policy(self, group_id, **kwargs):
-        return await self._upsert(group_id, **kwargs)
-
-    async def remove_group_policy(self, group_id):
-        return await self._remove(group_id)
-
-    async def list_private_policies(self):
-        return await self._list(private=True)
-
-    async def get_private_policy(self, user_id):
-        return await self._get(user_id, private=True)
-
-    async def upsert_private_policy(self, user_id, **kwargs):
-        return await self._upsert(user_id, private=True, **kwargs)
-
-    async def remove_private_policy(self, user_id):
-        return await self._remove(user_id, private=True)
-
-    async def apply_policy_field(self, source_scope, source_id, field, target, updated_by="web"):
-        if source_scope not in {"group", "private"}:
-            raise ValueError("invalid source_scope")
-        if field not in LIST_FIELDS:
-            raise ValueError("invalid field")
-        if target not in {"group", "private", "all"}:
-            raise ValueError("invalid target")
-        source_private = source_scope == "private"
-        source_id = _normalize(source_id, "user_id" if source_private else "group_id")
+    async def remove_group(self, group_id: str) -> None:
         async with self._lock:
-            source = self._source(source_private)
-            if source_id not in source:
-                raise LookupError("source policy not found")
-            value = list(source[source_id].get(field, []))
-            group_candidate = deepcopy(self._policies) if target in {"group", "all"} else None
-            private_candidate = deepcopy(self._private_policies) if target in {"private", "all"} else None
-            changed_group = changed_private = 0
-            for candidate, count in ((group_candidate, "group"), (private_candidate, "private")):
-                if candidate is None:
-                    continue
-                for identifier, record in candidate.items():
-                    if record.get(field, []) != value:
-                        record[field] = list(value)
-                        record["updated_by"] = str(updated_by or "")
-                        record["updated_at"] = datetime.now(timezone.utc).isoformat()
-                        if count == "group":
-                            changed_group += 1
-                        else:
-                            changed_private += 1
-            if not changed_group and not changed_private:
-                return {"field": field, "target": target, "updated_count": 0, "group_updated_count": 0, "private_updated_count": 0}
-            self._save_candidates(group_candidate, private_candidate, migrated=True if group_candidate is not None else None)
-            if group_candidate is not None:
-                self._policies = group_candidate
-            if private_candidate is not None:
-                self._private_policies = private_candidate
-            return {"field": field, "target": target, "updated_count": changed_group + changed_private, "group_updated_count": changed_group, "private_updated_count": changed_private}
+            groups = self._snapshot()[CONFIG_KEY]
+            if not any(group["group_id"] == group_id for group in groups):
+                raise LookupError("安全分组不存在")
+            self._save(
+                {
+                    CONFIG_KEY: [
+                        group for group in groups if group["group_id"] != group_id
+                    ]
+                }
+            )
 
-    async def list_policies(self):
-        return await self.list_group_policies()
+    async def legacy_archives(self) -> list[dict]:
+        if self.data_dir is None:
+            raise RuntimeError("安全归档目录尚未初始化")
 
-    async def get_policy(self, group_id):
-        return await self.get_group_policy(group_id)
+        def read():
+            return [
+                json.loads(path.read_text(encoding="utf-8"))
+                for path in sorted(
+                    (self.data_dir / "safety_legacy_backups").glob("legacy-*.json")
+                )
+            ]
 
-    async def upsert_policy(self, group_id, **kwargs):
-        return await self.upsert_group_policy(group_id, **kwargs)
-
-    async def remove_policy(self, group_id):
-        return await self.remove_group_policy(group_id)
-
-
-GroupSafetyService = SessionSafetyService
+        return await asyncio.to_thread(read)

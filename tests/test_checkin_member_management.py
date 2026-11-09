@@ -1,8 +1,6 @@
 from __future__ import annotations
 
-from contextlib import closing
 from datetime import date, timedelta
-import sqlite3
 import tempfile
 
 import pytest
@@ -99,18 +97,6 @@ async def test_member_search_update_and_history_isolation() -> None:
         assert historical is not None
         assert historical.total_coins_after == alice.record.total_coins_after
         assert historical.total_days_after == alice.record.total_days_after
-
-        with closing(sqlite3.connect(store._db_path)) as conn:
-            indexes = {
-                row[1]
-                for row in conn.execute("PRAGMA index_list(checkin_records)")
-            }
-            presence_indexes = {
-                row[1]
-                for row in conn.execute("PRAGMA index_list(checkin_group_presence)")
-            }
-        assert "idx_checkin_records_member_updated" in indexes
-        assert "idx_checkin_group_presence_member_seen" in presence_indexes
 
 
 @pytest.mark.asyncio

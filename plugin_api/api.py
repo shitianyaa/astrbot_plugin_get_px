@@ -3,38 +3,29 @@ from __future__ import annotations
 import asyncio
 import base64
 from datetime import datetime
+from io import BytesIO
+import json
 import math
 from pathlib import Path
-import tempfile
 import time
 from typing import Any
 
-from astrbot.api.all import logger
+from astrbot.api import logger
 from quart import jsonify, request, send_file
 
 try:
     from ..checkin import load_checkin_snapshot_json
-    from ..pixiv.downloader import cleanup, pick_image_url_exact
-    from ..pixiv.safety import (
-        BUILTIN_SAFETY_TERMS,
-        illustration_texts,
-        match_safety_term,
-        normalize_safety_text,
-        normalized_builtin_terms,
-    )
+    from ..pixiv.downloader import cleanup, format_log_size, pick_image_url_exact
+    from ..pixiv.safety import matched_illustration_term, normalize_illust_ids
+    from ..group_safety import TERMS_KEY, IDS_KEY
     from .web_api_compat import unregister_web_apis
     from .settings import save_settings, settings_snapshot
 except ImportError:
     # Direct imports used by the test suite.
     from checkin import load_checkin_snapshot_json
-    from pixiv.downloader import cleanup, pick_image_url_exact
-    from pixiv.safety import (
-        BUILTIN_SAFETY_TERMS,
-        illustration_texts,
-        match_safety_term,
-        normalize_safety_text,
-        normalized_builtin_terms,
-    )
+    from pixiv.downloader import cleanup, format_log_size, pick_image_url_exact
+    from pixiv.safety import matched_illustration_term, normalize_illust_ids
+    from group_safety import TERMS_KEY, IDS_KEY
     from plugin_api.web_api_compat import unregister_web_apis
     from plugin_api.settings import save_settings, settings_snapshot
 
@@ -88,18 +79,9 @@ class PluginWebApi:
                 ["GET"],
                 "Get content safety policy",
             ),
-            (
-                "content-safety/group-policy",
-                self.content_safety_group_policy,
-                ["POST"],
-                "Update a group content safety policy",
-            ),
-            ("content-safety/group-policies", self.content_safety_group_policies, ["GET"], "List group content safety policies"),
-            ("content-safety/group-policy/remove", self.content_safety_group_policy_remove, ["POST"], "Remove a group content safety policy"),
-            ("content-safety/private-policy", self.content_safety_private_policy, ["POST"], "Update a private content safety policy"),
-            ("content-safety/private-policies", self.content_safety_private_policies, ["GET"], "List private content safety policies"),
-            ("content-safety/private-policy/remove", self.content_safety_private_policy_remove, ["POST"], "Remove a private content safety policy"),
-            ("content-safety/policies/apply-field", self.content_safety_policy_apply_field, ["POST"], "Apply one session policy field"),
+            ("content-safety/global", self.content_safety_global, ["POST"], "Update global safety rules"),
+            ("content-safety/groups/save", self.content_safety_group_save, ["POST"], "Save a safety group"),
+            ("content-safety/groups/remove", self.content_safety_group_remove, ["POST"], "Remove a safety group"),
             (
                 "content-safety/terms/add",
                 self.content_safety_term_add,
@@ -131,18 +113,12 @@ class PluginWebApi:
                 "Remove Pixiv illustration from blacklist",
             ),
             (
-                "image-blacklist/thumb-data",
-                self.image_blacklist_thumb_data,
-                ["GET"],
-                "Get blacklist thumbnail",
-            ),
-            (
                 "image-blacklist/thumb-data-batch",
                 self.image_blacklist_thumb_data_batch,
                 ["POST"],
                 "Get blacklist thumbnails",
             ),
-            ("checkin-export", self.checkin_export, ["GET"], "Export check-in backup"),
+            ("data-export", self.data_export, ["GET"], "Export plugin data and legacy safety archives"),
             ("checkin-import", self.checkin_import, ["POST"], "Import check-in backup"),
             (
                 "cache-storage",
@@ -189,18 +165,16 @@ class PluginWebApi:
         if self.plugin.checkin_store is None or self.plugin.image_index is None:
             return self._unavailable()
         try:
-            checkin, blacklist, custom_terms = await asyncio.gather(
+            checkin, safety = await asyncio.gather(
                 self.plugin.checkin_store.get_checkin_overview(),
-                self.plugin.image_index.list_blacklist_illusts(),
-                self.plugin.image_index.list_safety_terms(),
+                self.plugin.safety_service.settings(),
             )
             return jsonify(
                 {
                     "success": True,
                     **checkin,
-                    "blacklist_count": len(blacklist),
-                    "builtin_term_count": len(BUILTIN_SAFETY_TERMS),
-                    "custom_term_count": len(custom_terms),
+                    "blacklist_count": len(safety[IDS_KEY]),
+                    "custom_term_count": len(safety[TERMS_KEY]),
                     "latest_backup_at": self._latest_backup_at(),
                 }
             )
@@ -325,216 +299,61 @@ class PluginWebApi:
             return self.internal_error("调整签到成员数值", exc)
 
     async def content_safety(self):
-        if self.plugin.image_index is None:
-            return self._unavailable("内容安全数据尚未初始化")
-        try:
-            custom_terms = await self.plugin.image_index.list_safety_terms()
-            group_id = str(request.args.get("group_id", "") or "").strip()
-            user_id = str(request.args.get("user_id", "") or "").strip()
-            if "group_id" in request.args and "user_id" in request.args:
-                return jsonify({"success": False, "error": "group_id 与 user_id 只能填写一个"}), 400
-            group_policy = None
-            private_policy = None
-            if group_id or user_id:
-                service = getattr(self.plugin, "group_safety_service", None)
-                if service is None:
-                    return self._unavailable("群内容安全设置尚未初始化")
-                if group_id:
-                    group_policy = await service.get_group_policy(group_id)
-                else:
-                    private_policy = await service.get_private_policy(user_id)
-            effective_policy = group_policy or private_policy
-            general_only = (
-                bool(effective_policy["general_only_enabled"])
-                if effective_policy is not None
-                else True
-            )
-            return jsonify(
-                {
-                    "success": True,
-                    "rating_policy": (
-                        "general_only" if general_only else "allow_sensitive"
-                    ),
-                    "rating_label": (
-                        "仅允许普通分级作品"
-                        if general_only
-                        else "允许普通与 R18 分级作品"
-                    ),
-                    "builtin_terms": list(BUILTIN_SAFETY_TERMS),
-                    "custom_terms": custom_terms,
-                    "default_group_policy": {
-                        "general_only_enabled": True,
-                        "builtin_terms_enabled": True,
-                    },
-                    "private_policy": {
-                        "general_only_enabled": True,
-                        "builtin_terms_enabled": True,
-                    },
-                    **({"group_policy": group_policy} if group_policy else {}),
-                    **({"private_policy": private_policy} if private_policy else {}),
-                }
-            )
-        except ValueError as exc:
-            return jsonify({"success": False, "error": str(exc)}), 400
-        except Exception as exc:
-            return self.internal_error("读取内容安全策略", exc)
-
-    async def content_safety_group_policy(self):
-        service = getattr(self.plugin, "group_safety_service", None)
+        service = getattr(self.plugin, "safety_service", None)
         if service is None:
-            return self._unavailable("群内容安全设置尚未初始化")
-        payload = await self._request_json_object()
-        if payload is None:
-            return jsonify({"success": False, "error": "请求内容必须是对象"}), 400
-        required = {
-            "group_id",
-            "general_only_enabled",
-            "builtin_terms_enabled",
-        }
-        if not required.issubset(payload):
-            return jsonify({"success": False, "error": "缺少群策略必填字段"}), 400
-        for field in ("custom_terms", "blacklisted_illust_ids"):
-            if field in payload and not isinstance(payload[field], list):
-                return jsonify({"success": False, "error": f"{field} 必须是数组"}), 400
+            return self._unavailable("安全策略尚未初始化")
         try:
-            policy = await service.upsert_policy(payload["group_id"], general_only_enabled=payload["general_only_enabled"], builtin_terms_enabled=payload["builtin_terms_enabled"], custom_terms=payload.get("custom_terms"), blacklisted_illust_ids=payload.get("blacklisted_illust_ids"), updated_by="web")
-            return jsonify({"success": True, "group_policy": policy})
-        except ValueError as exc:
-            return jsonify({"success": False, "error": str(exc)}), 400
+            return jsonify({"success": True, **await service.settings()})
         except Exception as exc:
-            return self.internal_error("更新群内容安全策略", exc)
+            return self.internal_error("读取安全策略", exc)
 
-    async def content_safety_group_policies(self):
-        service = getattr(self.plugin, "group_safety_service", None)
+    async def _safety_update(self, action: str):
+        service = getattr(self.plugin, "safety_service", None)
         if service is None:
-            return self._unavailable("群内容安全设置尚未初始化")
-        try:
-            return jsonify({"success": True, "group_policies": await service.list_policies()})
-        except Exception as exc:
-            return self.internal_error("读取群内容安全策略", exc)
-
-    async def content_safety_group_policy_remove(self):
-        service = getattr(self.plugin, "group_safety_service", None)
-        if service is None:
-            return self._unavailable("群内容安全设置尚未初始化")
+            return self._unavailable("安全策略尚未初始化")
         payload = await self._request_json_object()
         if payload is None:
             return jsonify({"success": False, "error": "请求内容必须是对象"}), 400
         try:
-            removed, policy = await service.remove_policy(payload.get("group_id"))
-            return jsonify({"success": True, "removed": removed, "group_policy": policy})
-        except ValueError as exc:
-            return jsonify({"success": False, "error": str(exc)}), 400
-        except Exception as exc:
-            return self.internal_error("删除群内容安全策略", exc)
-
-    async def content_safety_private_policy(self):
-        service = getattr(self.plugin, "group_safety_service", None)
-        if service is None:
-            return self._unavailable("私聊内容安全设置尚未初始化")
-        payload = await self._request_json_object()
-        required = {"user_id", "general_only_enabled", "builtin_terms_enabled"}
-        if payload is None or not required.issubset(payload):
-            return jsonify({"success": False, "error": "缺少私聊策略必填字段"}), 400
-        if type(payload["general_only_enabled"]) is not bool or type(payload["builtin_terms_enabled"]) is not bool:
-            return jsonify({"success": False, "error": "策略开关必须是布尔值"}), 400
-        for field in ("custom_terms", "blacklisted_illust_ids"):
-            if field in payload and not isinstance(payload[field], list):
-                return jsonify({"success": False, "error": f"{field} 必须是数组"}), 400
-        try:
-            return jsonify({"success": True, "private_policy": await service.upsert_private_policy(payload["user_id"], general_only_enabled=payload["general_only_enabled"], builtin_terms_enabled=payload["builtin_terms_enabled"], custom_terms=payload.get("custom_terms"), blacklisted_illust_ids=payload.get("blacklisted_illust_ids"), updated_by="web")})
-        except ValueError as exc:
-            return jsonify({"success": False, "error": str(exc)}), 400
-        except Exception as exc:
-            return self.internal_error("更新私聊内容安全策略", exc)
-
-    async def content_safety_private_policies(self):
-        service = getattr(self.plugin, "group_safety_service", None)
-        if service is None:
-            return self._unavailable("私聊内容安全设置尚未初始化")
-        try:
-            return jsonify({"success": True, "private_policies": await service.list_private_policies()})
-        except Exception as exc:
-            return self.internal_error("读取私聊内容安全策略", exc)
-
-    async def content_safety_private_policy_remove(self):
-        service = getattr(self.plugin, "group_safety_service", None)
-        if service is None:
-            return self._unavailable("私聊内容安全设置尚未初始化")
-        payload = await self._request_json_object()
-        if payload is None:
-            return jsonify({"success": False, "error": "请求内容必须是对象"}), 400
-        try:
-            removed, policy = await service.remove_private_policy(payload.get("user_id"))
-            return jsonify({"success": True, "removed": removed, "private_policy": policy})
-        except ValueError as exc:
-            return jsonify({"success": False, "error": str(exc)}), 400
-        except Exception as exc:
-            return self.internal_error("删除私聊内容安全策略", exc)
-
-    async def content_safety_policy_apply_field(self):
-        service = getattr(self.plugin, "group_safety_service", None)
-        if service is None:
-            return self._unavailable("群内容安全设置尚未初始化")
-        payload = await self._request_json_object()
-        required = {"source_scope", "source_id", "field", "target"}
-        if payload is None or not required.issubset(payload):
-            return jsonify({"success": False, "error": "缺少批量应用必填字段"}), 400
-        try:
-            result = await service.apply_policy_field(payload["source_scope"], payload["source_id"], payload["field"], payload["target"], updated_by="web")
+            if action == "global":
+                result = await service.update_global(payload)
+            elif action == "group":
+                result = {"group": await service.save_group(payload)}
+            elif action == "remove":
+                await service.remove_group(payload.get("group_id"))
+                result = {}
+            else:
+                result = await service.change_global_item(TERMS_KEY, payload.get("term"), remove=action == "term_remove")
             return jsonify({"success": True, **result})
         except LookupError as exc:
             return jsonify({"success": False, "error": str(exc)}), 404
         except ValueError as exc:
             return jsonify({"success": False, "error": str(exc)}), 400
         except Exception as exc:
-            return self.internal_error("批量应用内容安全策略", exc)
+            return self.internal_error("保存安全策略", exc)
+
+    async def content_safety_global(self):
+        return await self._safety_update("global")
+
+    async def content_safety_group_save(self):
+        return await self._safety_update("group")
+
+    async def content_safety_group_remove(self):
+        return await self._safety_update("remove")
 
     async def content_safety_term_add(self):
-        if self.plugin.image_index is None:
-            return self._unavailable("内容安全数据尚未初始化")
-        payload = await self._request_json_object()
-        if payload is None:
-            return jsonify({"success": False, "error": "请求内容必须是对象"}), 400
-        term = str(payload.get("term") or "").strip()
-        if normalize_safety_text(term) in {
-            normalize_safety_text(item) for item in BUILTIN_SAFETY_TERMS
-        }:
-            return jsonify({"success": False, "error": "该词已经属于内置安全词"}), 400
-        try:
-            await self.plugin.image_index.add_safety_term(term, added_by="web")
-            return jsonify({"success": True, "term": term})
-        except ValueError as exc:
-            return jsonify({"success": False, "error": str(exc)}), 400
-        except Exception as exc:
-            return self.internal_error("添加自定义安全词", exc)
+        return await self._safety_update("term_add")
 
     async def content_safety_term_remove(self):
-        if self.plugin.image_index is None:
-            return self._unavailable("内容安全数据尚未初始化")
-        payload = await self._request_json_object()
-        if payload is None:
-            return jsonify({"success": False, "error": "请求内容必须是对象"}), 400
-        term = str(payload.get("term") or "").strip()
-        if normalize_safety_text(term) in {
-            normalize_safety_text(item) for item in BUILTIN_SAFETY_TERMS
-        }:
-            return jsonify({"success": False, "error": "内置安全词不能删除"}), 400
-        try:
-            removed = await self.plugin.image_index.remove_safety_term(term)
-            if not removed:
-                return jsonify({"success": False, "error": "自定义安全词不存在"}), 404
-            return jsonify({"success": True, "term": term})
-        except ValueError as exc:
-            return jsonify({"success": False, "error": str(exc)}), 400
-        except Exception as exc:
-            return self.internal_error("删除自定义安全词", exc)
+        return await self._safety_update("term_remove")
 
     async def image_blacklist(self):
         if self.plugin.image_index is None:
             return self._unavailable("作品黑名单尚未初始化")
         try:
-            records = await self.plugin.image_index.list_blacklist_illusts()
+            settings = await self.plugin.safety_service.settings()
+            metadata = {item["illust_id"]: item for item in await self.plugin.image_index.list_blacklist_illusts()}
+            records = [metadata.get(illust_id, {"illust_id": illust_id}) for illust_id in settings[IDS_KEY]]
             return jsonify({"success": True, "records": records})
         except Exception as exc:
             return self.internal_error("读取作品黑名单", exc)
@@ -545,11 +364,10 @@ class PluginWebApi:
         payload = await self._request_json_object()
         if payload is None:
             return jsonify({"success": False, "error": "请求内容必须是对象"}), 400
-        illust_id = str(payload.get("illust_id") or "").strip()
-        if not illust_id.isdigit() or int(illust_id) <= 0:
-            return jsonify(
-                {"success": False, "error": "请输入有效的 Pixiv 作品 ID"}
-            ), 400
+        try:
+            illust_id = normalize_illust_ids([payload.get("illust_id")])[0]
+        except ValueError:
+            return jsonify({"success": False, "error": "请输入有效的 Pixiv 作品 ID"}), 400
         reason = str(payload.get("reason") or "").strip()
         if len(reason) > 200:
             return jsonify({"success": False, "error": "原因不能超过 200 个字符"}), 400
@@ -564,8 +382,12 @@ class PluginWebApi:
             except Exception as exc:
                 logger.warning(
                     f"{self.log_prefix} 黑名单作品信息获取失败: "
-                    f"illust_id={illust_id} error={type(exc).__name__}"
+                    f"illust_id={illust_id} error_type={type(exc).__name__}"
                 )
+        try:
+            await self.plugin.safety_service.change_global_item(IDS_KEY, illust_id)
+        except Exception as exc:
+            return self.internal_error("保存作品黑名单", exc)
         try:
             await self.plugin.image_index.add_blacklist_illust(
                 illust_id=illust_id,
@@ -587,7 +409,8 @@ class PluginWebApi:
             )
             return jsonify({"success": True, "record": record})
         except Exception as exc:
-            return self.internal_error("添加作品黑名单", exc)
+            logger.warning(f"{self.log_prefix} 黑名单已保存，辅助信息更新失败: illust_id={illust_id} error_type={type(exc).__name__}")
+            return jsonify({"success": True, "record": {"illust_id": illust_id}, "warning": "黑名单已生效，作品辅助信息未保存"})
 
     async def _try_save_blacklist_thumbnail(
         self, illust_id: str, illust: dict[str, Any]
@@ -627,7 +450,7 @@ class PluginWebApi:
         except Exception as exc:
             logger.warning(
                 f"{self.log_prefix} 黑名单缩略图获取失败: "
-                f"illust_id={illust_id} error={type(exc).__name__}"
+                f"illust_id={illust_id} error_type={type(exc).__name__}"
             )
         finally:
             cleanup(temp_path)
@@ -636,17 +459,14 @@ class PluginWebApi:
         if int(illust.get("x_restrict", 0) or 0) != 0:
             return False
         try:
-            terms = set(normalized_builtin_terms())
-            terms.update(await self.plugin.image_index.get_custom_safety_terms())
+            policy = await self.plugin.safety_service.global_policy()
         except Exception as exc:
             logger.warning(
                 f"{self.log_prefix} 黑名单缩略图安全检查失败: "
-                f"error={type(exc).__name__}"
+                f"error_type={type(exc).__name__}"
             )
             return False
-        return not any(
-            match_safety_term(value, terms) for value in illustration_texts(illust)
-        )
+        return not matched_illustration_term(illust, policy)
 
     async def image_blacklist_remove(self):
         if self.plugin.image_index is None:
@@ -654,38 +474,21 @@ class PluginWebApi:
         payload = await self._request_json_object()
         if payload is None:
             return jsonify({"success": False, "error": "请求内容必须是对象"}), 400
-        illust_id = str(payload.get("illust_id") or "").strip()
-        if not illust_id.isdigit() or int(illust_id) <= 0:
-            return jsonify(
-                {"success": False, "error": "请输入有效的 Pixiv 作品 ID"}
-            ), 400
         try:
-            removed = await self.plugin.image_index.remove_blacklist_illust(illust_id)
-            if removed is None:
-                return jsonify({"success": False, "error": "黑名单记录不存在"}), 404
-            return jsonify({"success": True, "record": removed})
+            illust_id = normalize_illust_ids([payload.get("illust_id")])[0]
+        except ValueError:
+            return jsonify({"success": False, "error": "请输入有效的 Pixiv 作品 ID"}), 400
+        try:
+            await self.plugin.safety_service.change_global_item(IDS_KEY, illust_id, remove=True)
         except Exception as exc:
             return self.internal_error("解除作品黑名单", exc)
-
-    async def image_blacklist_thumb_data(self):
-        if self.plugin.image_index is None:
-            return self._unavailable("作品黑名单尚未初始化")
-        illust_id = request.args.get("id", "").strip()
-        path = await self.plugin.image_index.get_blacklist_thumbnail_path(illust_id)
-        if path is None:
-            return jsonify({"success": False, "error": "缩略图不存在"}), 404
         try:
-            raw = await asyncio.to_thread(path.read_bytes)
-            encoded = base64.b64encode(raw).decode("ascii")
-        except OSError as exc:
-            return self.internal_error("读取黑名单缩略图", exc)
-        return jsonify(
-            {
-                "success": True,
-                "illust_id": illust_id,
-                "data_url": f"data:image/jpeg;base64,{encoded}",
-            }
-        )
+            # SQLite 仅存辅助信息，不决定黑名单是否生效。
+            removed = await self.plugin.image_index.remove_blacklist_illust(illust_id)
+            return jsonify({"success": True, "record": removed or {"illust_id": illust_id}})
+        except Exception as exc:
+            logger.warning(f"{self.log_prefix} 黑名单已解除，辅助信息清理失败: illust_id={illust_id} error_type={type(exc).__name__}")
+            return jsonify({"success": True, "record": {"illust_id": illust_id}, "warning": "黑名单已解除，辅助信息未清理"})
 
     async def image_blacklist_thumb_data_batch(self):
         if self.plugin.image_index is None:
@@ -706,21 +509,24 @@ class PluginWebApi:
             }
         )
 
-    async def checkin_export(self):
+    async def data_export(self):
         if self.plugin.checkin_store is None:
             return self._unavailable("签到数据尚未初始化")
         try:
-            path = await self.plugin._write_checkin_snapshot_backup(
-                prefix="checkin-export"
-            )
-            return await send_file(
-                str(path),
-                mimetype="application/json",
-                as_attachment=True,
-                attachment_filename=path.name,
-            )
+            package = {
+                "schema_version": 1,
+                "plugin_name": self.plugin_name,
+                "kind": "plugin_data_export",
+                "exported_at": datetime.now().astimezone().isoformat(),
+                "checkin": await self.plugin.checkin_store.export_snapshot(),
+                "safety": await self.plugin.safety_service.settings(),
+                "blacklist_metadata": await self.plugin.image_index.list_blacklist_illusts(),
+                "legacy_safety_archives": await self.plugin.safety_service.legacy_archives(),
+            }
+            data = json.dumps(package, ensure_ascii=False, indent=2).encode("utf-8")
+            return await send_file(BytesIO(data), mimetype="application/json", as_attachment=True, attachment_filename="get-px-data.json")
         except Exception as exc:
-            return self.internal_error("导出签到备份", exc)
+            return self.internal_error("导出插件数据", exc)
 
     async def checkin_import(self):
         if self.plugin.checkin_store is None:
@@ -743,9 +549,15 @@ class PluginWebApi:
                 return jsonify({"success": False, "error": "只支持 JSON 备份文件"}), 400
             raw = await self.plugin._read_uploaded_file_bytes(upload)
             logger.info(
-                f"{self.log_prefix} 开始导入签到 JSON 备份: "
-                f"size_bytes={len(raw)}"
+                f"{self.log_prefix} 签到 JSON 备份请求已接收: "
+                f"size={format_log_size(len(raw))}"
             )
+            parsed = json.loads(raw.decode("utf-8-sig"))
+            if isinstance(parsed, dict) and parsed.get("kind") == "plugin_data_export":
+                if parsed.get("schema_version") != 1 or parsed.get("plugin_name") != self.plugin_name:
+                    raise ValueError("不支持的插件数据包")
+                # 只恢复签到；安全配置与旧档案均不允许通过导入改变。
+                raw = json.dumps(parsed.get("checkin"), ensure_ascii=False)
             snapshot = load_checkin_snapshot_json(raw)
             rollback_path, result = (
                 await self.plugin.checkin_store.import_snapshot_with_rollback(
@@ -761,7 +573,7 @@ class PluginWebApi:
             )
             logger.warning(
                 f"{self.log_prefix} 现有签到数据已由 JSON 备份覆盖: "
-                f"users={result['users']}, records={result['records']}"
+                f"users={result['users']} records={result['records']}"
             )
             return jsonify(
                 {
@@ -861,8 +673,9 @@ class PluginWebApi:
                         )
 
         # Check temporary downloaded images (get_px_*)
-        tmp_dir = Path(tempfile.gettempdir())
-        if tmp_dir.exists():
+        data_dir = getattr(self.plugin, "data_dir", None)
+        tmp_dir = Path(data_dir) / "temp" if data_dir is not None else None
+        if tmp_dir is not None and tmp_dir.exists():
             for p in tmp_dir.glob("get_px_*"):
                 if p.is_file():
                     try:
@@ -919,8 +732,9 @@ class PluginWebApi:
                         pass
 
         # Clear temporary downloaded images (skip files modified in last 10 min)
-        tmp_dir = Path(tempfile.gettempdir())
-        if tmp_dir.exists():
+        data_dir = getattr(self.plugin, "data_dir", None)
+        tmp_dir = Path(data_dir) / "temp" if data_dir is not None else None
+        if tmp_dir is not None and tmp_dir.exists():
             for p in tmp_dir.glob("get_px_*"):
                 if p.is_file():
                     try:

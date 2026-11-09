@@ -17,8 +17,8 @@ function renderField(field) {
   if (field.delegated) {
     const row = element("div", "setting-delegation");
     row.append(element("div", "setting-field-copy", field.label));
-    row.append(element("p", "setting-hint", field.hint || "由会话策略编辑器管理。"));
-    const button = element("button", "", "打开会话策略");
+    row.append(element("p", "setting-hint", field.hint || "由安全分组编辑器管理。"));
+    const button = element("button", "", "打开安全分组");
     button.type = "button";
     button.dataset.navigate = field.view || "policies";
     row.append(button);

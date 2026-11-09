@@ -1,4 +1,3 @@
-import json
 import asyncio
 import sys
 import tempfile
@@ -15,7 +14,15 @@ from astrbot_plugin_get_px.checkin.artwork import (  # noqa: E402
 )
 from astrbot_plugin_get_px.checkin.card import CardBackground  # noqa: E402
 from astrbot_plugin_get_px.pixiv.index import ImageIndexStore  # noqa: E402
+from astrbot_plugin_get_px.pixiv.pagination import PixivPage, SelectionIndexError
 from astrbot_plugin_get_px.main import GetPxPlugin  # noqa: E402
+
+def _new_plugin():
+    from astrbot_plugin_get_px.pixiv.safety import ContentSafetyPolicy
+    plugin = object.__new__(GetPxPlugin)
+    plugin._content_safety_policy = AsyncMock(return_value=ContentSafetyPolicy())
+    return plugin
+
 
 
 class FakeEvent:
@@ -32,14 +39,20 @@ class FakePixivClient:
         self.search_pages = search_pages or {}
         self.recommended_offsets = []
         self.search_calls = []
+        self.portrait_requests = []
 
-    async def recommended(self, offset: int = 0):
+    async def recommended(self, offset: int = 0, *, continuation=None):
+        offset = continuation["offset"] if continuation is not None else offset
         self.recommended_offsets.append(offset)
-        return list(self.pages.get(offset, []))
+        next_offsets = sorted(value for value in self.pages if value > offset)
+        return PixivPage(list(self.pages.get(offset, [])), {"offset": next_offsets[0]} if next_offsets else None)
 
-    async def search(self, tag: str, offset: int = 0):
+    async def search(self, tag: str, offset: int = 0, *, continuation=None, portrait=False):
+        offset = continuation["offset"] if continuation is not None else offset
         self.search_calls.append((tag, offset))
-        return list(self.search_pages.get((tag, offset), []))
+        self.portrait_requests.append(portrait)
+        next_offsets = sorted(value for key, value in self.search_pages if key == tag and value > offset)
+        return PixivPage(list(self.search_pages.get((tag, offset), [])), {"offset": next_offsets[0]} if next_offsets else None)
 
 
 class FakeDownloader:
@@ -53,12 +66,12 @@ class FakeDownloader:
         illust,
         background_quality,
         timeout,
-        downgrade_limit_bytes,
+        size_limit_bytes,
         log_context,
     ):
         self.illust_ids.append(str(illust["id"]))
         self.qualities.append(background_quality)
-        self.downgrade_limits.append(downgrade_limit_bytes)
+        self.downgrade_limits.append(size_limit_bytes)
         return f"picked_{illust['id']}.jpg", background_quality, 123
 
 
@@ -104,29 +117,13 @@ class CheckinBackgroundSelectionTest(unittest.IsolatedAsyncioTestCase):
         )
 
     def test_checkin_background_tag_candidates_are_randomized(self):
-        plugin = object.__new__(GetPxPlugin)
+        plugin = _new_plugin()
         with patch(
             "astrbot_plugin_get_px.checkin.artwork.random.shuffle",
             side_effect=lambda tags: tags.reverse(),
         ):
             candidates = plugin._checkin_background_tag_candidates("alpha,beta,gamma")
         self.assertEqual(candidates, ["gamma", "beta", "alpha"])
-
-    def test_greeting_schema_defaults_to_hitokoto(self):
-        schema_path = Path(__file__).resolve().parents[1] / "_conf_schema.json"
-        schema = json.loads(schema_path.read_text(encoding="utf-8"))
-
-        basic = schema["checkin_basic"]["items"]
-        self.assertEqual(basic["checkin_greeting_mode"]["default"], "hitokoto")
-        self.assertEqual(
-            basic["checkin_greeting_mode"]["options"],
-            ["local", "hitokoto", "ai"],
-        )
-        categories = basic["checkin_hitokoto_categories"]
-        self.assertEqual(categories["type"], "list")
-        self.assertEqual(categories["default"], ["全部"])
-        self.assertIn("动画", categories["options"])
-        self.assertIn("诗词", categories["options"])
 
     def test_checkin_artwork_ratio_uses_fixed_closed_portrait_range(self):
         self.assertEqual(
@@ -158,7 +155,7 @@ class CheckinBackgroundSelectionTest(unittest.IsolatedAsyncioTestCase):
 
     async def test_invalid_custom_background_falls_back_to_pixiv(self):
         with tempfile.TemporaryDirectory() as tmp:
-            plugin = object.__new__(GetPxPlugin)
+            plugin = _new_plugin()
             plugin.config = {
                 "checkin_background_mode": "custom",
                 "checkin_custom_background": str(Path(tmp) / "missing.jpg"),
@@ -196,7 +193,7 @@ class CheckinBackgroundSelectionTest(unittest.IsolatedAsyncioTestCase):
         self,
     ):
         with tempfile.TemporaryDirectory() as tmp:
-            plugin = object.__new__(GetPxPlugin)
+            plugin = _new_plugin()
             plugin.config = {
                 "checkin_background_mode": "pixiv_daily",
                 "pixiv_refresh_token": "token",
@@ -254,7 +251,7 @@ class CheckinBackgroundSelectionTest(unittest.IsolatedAsyncioTestCase):
                 plugin.image_index.close()
 
     async def test_preview_background_prunes_expired_users(self):
-        plugin = object.__new__(GetPxPlugin)
+        plugin = _new_plugin()
         plugin.config = {"checkin_background_mode": "pixiv_daily"}
         plugin._checkin_preview_background_ids = {
             "expired": [("1", 0.0)],
@@ -278,7 +275,7 @@ class CheckinBackgroundSelectionTest(unittest.IsolatedAsyncioTestCase):
 
     async def test_checkin_background_tries_remaining_configured_tags(self):
         with tempfile.TemporaryDirectory() as tmp:
-            plugin = object.__new__(GetPxPlugin)
+            plugin = _new_plugin()
             plugin.config = {
                 "pixiv_refresh_token": "token",
                 "filter_manga": True,
@@ -307,12 +304,18 @@ class CheckinBackgroundSelectionTest(unittest.IsolatedAsyncioTestCase):
                     plugin.client.search_calls,
                     [("empty", 0), ("available", 0)],
                 )
+                self.assertTrue(all(plugin.client.portrait_requests))
+                await plugin._fetch_source_candidates(
+                    FakeEvent(), "available", aspect_ratio="gt0.60lt0.90",
+                    use_page_cursor=False,
+                )
+                self.assertFalse(plugin.client.portrait_requests[-1])
             finally:
                 plugin.image_index.close()
 
     async def test_checkin_background_skips_page_used_by_index(self):
         with tempfile.TemporaryDirectory() as tmp:
-            plugin = object.__new__(GetPxPlugin)
+            plugin = _new_plugin()
             plugin.config = {
                 "pixiv_refresh_token": "token",
                 "filter_manga": True,
@@ -354,7 +357,7 @@ class CheckinBackgroundSelectionTest(unittest.IsolatedAsyncioTestCase):
 
     async def test_checkin_background_claim_can_be_released(self):
         with tempfile.TemporaryDirectory() as tmp:
-            plugin = object.__new__(GetPxPlugin)
+            plugin = _new_plugin()
             plugin.config = {
                 "pixiv_refresh_token": "token",
                 "filter_manga": True,
@@ -390,6 +393,11 @@ class CheckinBackgroundSelectionTest(unittest.IsolatedAsyncioTestCase):
                     ),
                     set(),
                 )
+                with patch.object(plugin.image_index, "claim_usage", side_effect=OSError("fixture")):
+                    with self.assertRaises(SelectionIndexError):
+                        await plugin._claim_checkin_background_usage(
+                            FakeEvent(), "pixiv:recommended", "30"
+                        )
             finally:
                 plugin.image_index.close()
 
@@ -399,7 +407,7 @@ class CheckinBackgroundSelectionTest(unittest.IsolatedAsyncioTestCase):
                 raise asyncio.CancelledError
 
         with tempfile.TemporaryDirectory() as tmp:
-            plugin = object.__new__(GetPxPlugin)
+            plugin = _new_plugin()
             plugin.config = {
                 "pixiv_refresh_token": "token",
                 "filter_manga": True,
@@ -426,7 +434,7 @@ class CheckinBackgroundSelectionTest(unittest.IsolatedAsyncioTestCase):
 
     async def test_landscape_only_page_advances_to_portrait_page(self):
         with tempfile.TemporaryDirectory() as tmp:
-            plugin = object.__new__(GetPxPlugin)
+            plugin = _new_plugin()
             plugin.config = {
                 "pixiv_refresh_token": "token",
                 "filter_manga": True,
@@ -460,7 +468,7 @@ class CheckinBackgroundSelectionTest(unittest.IsolatedAsyncioTestCase):
 
     async def test_pixiv_fallback_resumes_from_persisted_cursor(self):
         with tempfile.TemporaryDirectory() as tmp:
-            plugin = object.__new__(GetPxPlugin)
+            plugin = _new_plugin()
             plugin.config = {
                 "filter_manga": True,
                 "request_timeout": 30.0,
@@ -477,11 +485,8 @@ class CheckinBackgroundSelectionTest(unittest.IsolatedAsyncioTestCase):
                 }
             )
             try:
-                await plugin.image_index.advance_page_offset(
-                    "group:20001", "pixiv:recommended", 20
-                )
-                await plugin.image_index.advance_page_offset(
-                    "group:20001", "pixiv:recommended", 20
+                await plugin.image_index.set_page_offset(
+                    "group:20001", "pixiv:recommended", 40
                 )
 
                 background = await plugin._download_checkin_pixiv_background(
@@ -526,7 +531,7 @@ class CheckinBackgroundSelectionTest(unittest.IsolatedAsyncioTestCase):
                 return await super().download_for_send(illust, *args, **kwargs)
 
         with tempfile.TemporaryDirectory() as tmp:
-            plugin = object.__new__(GetPxPlugin)
+            plugin = _new_plugin()
             plugin.config = {
                 "pixiv_refresh_token": "token",
                 "request_timeout": 30.0,
@@ -560,7 +565,7 @@ class CheckinBackgroundSelectionTest(unittest.IsolatedAsyncioTestCase):
 
     async def test_all_landscape_pages_use_fallback_without_downloading(self):
         with tempfile.TemporaryDirectory() as tmp:
-            plugin = object.__new__(GetPxPlugin)
+            plugin = _new_plugin()
             plugin.config = {
                 "pixiv_refresh_token": "token",
                 "filter_manga": True,

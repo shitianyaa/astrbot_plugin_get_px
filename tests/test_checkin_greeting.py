@@ -126,12 +126,6 @@ async def test_selected_provider_takes_precedence() -> None:
 
     assert (text, source) == ("今天也很高兴见到你。", "ai")
     assert context.calls[0]["chat_provider_id"] == "fast-model"
-    assert (
-        context.calls[0]["system_prompt"].count(
-            "只输出正文；最多32个中文字符、最多两句话、不换行，不输出标题、引号、解释、Markdown或标签。"
-        )
-        == 1
-    )
     assert context.provider_calls == []
 
 

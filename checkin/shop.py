@@ -1,12 +1,14 @@
 from __future__ import annotations
 
-from dataclasses import dataclass
+import asyncio
+from dataclasses import dataclass, replace
 from pathlib import Path
 
-from astrbot.api.all import Image, Plain, logger
+from astrbot.api import logger
+from astrbot.api.all import Image, Plain
 from astrbot.api.event import AstrMessageEvent
 
-from .card import CardBackground
+from .card import CardBackground, _file_to_data_url
 from .models import BOOST_PRODUCTS
 from .rules import boost_status_text
 from .store import CheckinStore
@@ -18,8 +20,10 @@ from .themes import (
 )
 
 try:
+    from ..pixiv.delivery import DeliveryNotSubmitted, DeliveryStatus, send_once
     from ..pixiv.downloader import cleanup
 except ImportError:  # Direct imports used by the test suite.
+    from pixiv.delivery import DeliveryNotSubmitted, DeliveryStatus, send_once
     from pixiv.downloader import cleanup
 
 
@@ -224,8 +228,8 @@ class CheckinShopMixin:
                         user_id=user_id, amount=cost
                     )
                     logger.warning(
-                        f"{LOG_PREFIX} 生图额度发放失败，金币已退回: "
-                        f"user_id={user_id} cost={cost} reason={granted.message or 'unknown'}"
+                        f"{LOG_PREFIX} 生图额度未发放，退款调用已完成: "
+                        f"user_id={user_id} cost={cost} reason=quota_not_granted"
                     )
                     yield event.plain_result(
                         f"生图额度发放失败（{granted.message or '未知原因'}），"
@@ -235,7 +239,7 @@ class CheckinShopMixin:
                     logger.error(
                         f"{LOG_PREFIX} 生图额度发放失败且退款异常: "
                         f"user_id={user_id} cost={cost} "
-                        f"error_type={type(exc).__name__} reason={exc}"
+                        f"error_type={type(exc).__name__}"
                     )
                     yield event.plain_result(
                         f"生图额度发放失败（{granted.message or '未知原因'}），"
@@ -243,8 +247,8 @@ class CheckinShopMixin:
                     )
             else:
                 logger.warning(
-                    f"{LOG_PREFIX} 生图额度发放失败: "
-                    f"user_id={user_id} cost={cost} reason={granted.message or 'unknown'}"
+                    f"{LOG_PREFIX} 生图额度未发放: "
+                    f"user_id={user_id} cost={cost} reason=quota_not_granted"
                 )
                 yield event.plain_result(
                     f"生图额度发放失败（{granted.message or '未知原因'}）。"
@@ -428,8 +432,9 @@ class CheckinShopMixin:
         cache = getattr(self, "checkin_cache", None)
         card_path: Path | None = None
         refresh_tier = self._configured_checkin_render_tier()
-        policy = await self._content_safety_policy(event)
         try:
+            policy = await self._content_safety_policy(event)
+            safety_identity = policy.cache_identity()
             background = await self._prepare_checkin_background(
                 event,
                 record,
@@ -449,6 +454,14 @@ class CheckinShopMixin:
             ):
                 yield event.plain_result("暂时没有找到新的合适背景，本次不扣金币")
                 return
+            data_url = await asyncio.to_thread(_file_to_data_url, background.image_path)
+            if not data_url:
+                logger.warning(
+                    f"{LOG_PREFIX} 更新签到背景被拒绝: reason=background_encoding_failed"
+                )
+                yield event.plain_result("新背景无法处理，本次不扣金币，请稍后重试")
+                return
+            background = replace(background, data_url=data_url)
             purchase = await self.checkin_store.purchase_background_refresh(
                 user_id=user_id,
                 cost=cost,
@@ -478,12 +491,31 @@ class CheckinShopMixin:
                 preferred_tier=refresh_tier,
                 cache=cache,
                 policy=policy,
+                safety_identity=safety_identity,
             )
             record = await self._persist_checkin_render_tier(record, actual_tier)
             content = [Plain(purchase.message), Image.fromFileSystem(str(card_path))]
             if background.pixiv_caption:
                 content.append(Plain(background.pixiv_caption))
-            await event.send(event.chain_result(content))
+            try:
+                delivery_status = await send_once(event, content, context="feature=checkin_refresh")
+            except DeliveryNotSubmitted:
+                raise
+            except asyncio.CancelledError:
+                claim_held = False
+                if cache is None:
+                    self.downloader.defer_cleanup(str(card_path))
+                    card_path = None
+                raise
+            if delivery_status is DeliveryStatus.FAILED:
+                raise RuntimeError("刷新签到卡尚未提交")
+            claim_held = False
+            if delivery_status in (DeliveryStatus.ACCEPTED, DeliveryStatus.TIMED_OUT, DeliveryStatus.UNKNOWN) and cache is None:
+                self.downloader.defer_cleanup(str(card_path))
+                card_path = None
+            if delivery_status is DeliveryStatus.UNKNOWN:
+                logger.warning(f"{LOG_PREFIX} 刷新签到卡送达未知，保留背景与卡片: delivery_status=unknown retry=no")
+                return
             try:
                 await self._record_checkin_background(event, background)
             except Exception as exc:
@@ -491,8 +523,6 @@ class CheckinShopMixin:
                     f"{LOG_PREFIX} 记录签到背景使用状态失败: "
                     f"error_type={type(exc).__name__}"
                 )
-            else:
-                claim_held = False
             return
         except Exception as exc:
             logger.warning(

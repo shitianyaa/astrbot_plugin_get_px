@@ -8,6 +8,7 @@
     <meta name="description" content="AstrBot 插件 GetPx 插件管理中心 - 管理群签到排行、成员数值、内容安全过滤和签到备份数据。" />
     <title>插件管理中心</title>
     <link rel="stylesheet" href="./styles.css" />
+    <link rel="stylesheet" href="./safety.css" />
   </head>
   <body>
     <a class="skip-link" href="#mainContent">跳到主要内容</a>
@@ -20,7 +21,7 @@
         </div>
         <div class="safety-lock" role="status" aria-label="内容安全状态">
           <span class="pulse" aria-hidden="true"></span>
-          <span><strong>会话策略可配置</strong><span id="safetyStatusSummary">群聊与私聊用户均可分别设置分级与内置词</span></span>
+          <span><strong>全局规则与安全分组</strong><span id="safetyStatusSummary">未分组会话默认关闭 R18；全局规则始终生效</span></span>
         </div>
       </header>
 
@@ -35,7 +36,7 @@
         <button class="active" data-view="ranking" type="button">群排行</button>
         <button data-view="members" type="button">成员数值</button>
         <button data-view="safety" type="button">内容安全</button>
-        <button data-view="policies" type="button">会话策略</button>
+        <button data-view="policies" type="button">安全分组</button>
         <button data-view="settings" type="button">插件设置</button>
         <button data-view="data" type="button">数据管理</button>
         <button id="refreshBtn" class="refresh" type="button">刷新数据</button>
@@ -122,30 +123,16 @@
           <div class="section-heading wide">
             <p>CONTENT GUARD</p>
             <h2 id="safetyTitle">内容安全策略</h2>
-            <span>群聊与私聊用户均可单独设置普通分级限制和内置安全词。</span>
-          </div>
-
-          <p>策略已移至独立的“会话策略”页面。</p>
-
-          <div class="policy-strip">
-            <div><b>1</b><span>分级限制<strong>按会话设置</strong></span></div>
-            <div><b>2</b><span>文本检查<strong>标题 / 简介 / 标签 / 翻译标签</strong></span></div>
-            <div><b>3</b><span>ID 拦截<strong>Pixiv 作品黑名单</strong></span></div>
+            <span>全局规则适用于所有会话；未分组会话默认仅普通分级，没有内置关键词。</span>
           </div>
 
           <div class="safety-columns">
-            <!-- 内置安全词 -->
-            <section class="panel">
-              <div class="panel-title">
-                <div>
-                  <p>BUILT-IN TERMS</p>
-                  <h3>系统内置安全词</h3>
-                </div>
-                <span id="builtinCount" class="count" aria-live="polite"></span>
-              </div>
-              <label for="builtinSearch" class="sr-only">搜索内置词</label>
-              <input id="builtinSearch" name="builtin_search" class="search" type="search" autocomplete="off" spellcheck="false" placeholder="输入关键字筛选内置安全词…" />
-              <div id="builtinTerms" class="term-cloud readonly"></div>
+            <section class="panel safety-mode-panel">
+              <div class="panel-title"><h3>所有分组的匹配方式</h3></div>
+              <label for="keywordMatchMode">关键词过滤</label>
+              <select id="keywordMatchMode"><option>宽松</option><option>严格</option></select>
+              <p id="keywordModeHint" class="safety-hint"></p>
+              <p class="safety-hint">全局与分组关键词使用同一模式。不检查简介，不执行正则或通配符。</p>
             </section>
 
             <!-- 自定义屏蔽词 -->
@@ -153,7 +140,7 @@
               <div class="panel-title">
                 <div>
                   <p>CUSTOM TERMS</p>
-                  <h3>自定义屏蔽词</h3>
+                  <h3>全局屏蔽关键词</h3>
                 </div>
                 <span id="customCount" class="count" aria-live="polite"></span>
               </div>
@@ -193,79 +180,40 @@
         </section>
 
         <section id="policiesView" class="workspace" aria-labelledby="policiesTitle">
-          <div class="section-heading wide policy-heading">
-            <p>CONTENT GUARD</p>
-            <h2 id="policiesTitle">会话策略配置</h2>
-            <div class="policy-scope-switch" role="group" aria-label="会话策略类型">
-              <button id="policyGroupScopeBtn" type="button" aria-pressed="true">群聊策略</button>
-              <button id="policyPrivateScopeBtn" type="button" aria-pressed="false">私聊策略</button>
-            </div>
-            <span id="policyScopeHint">按群 ID 独立保存；删除后恢复严格策略。</span>
-          </div>
-          <div class="policies-layout">
-            <section class="panel policy-catalog" aria-labelledby="policyCatalogTitle">
-              <div class="panel-title">
-                <h3 id="policyCatalogTitle">已配置会话 <span id="policyCount" class="count" aria-live="polite">0</span></h3>
-                <button id="policyAddBtn" type="button">添加会话</button>
-              </div>
-              <label for="policySearch">搜索会话 ID</label>
-              <input id="policySearch" type="search" autocomplete="off" placeholder="输入 ID 筛选">
-              <div id="policyList" aria-live="polite" aria-label="已配置会话列表"></div>
-            </section>
-            <section class="panel policy-editor" aria-labelledby="policyEditorTitle">
-              <div class="panel-title">
-                <h3 id="policyEditorTitle">策略编辑</h3>
-                <span id="policyEditorStatus" class="policy-editor-status" aria-live="polite">未选择</span>
-              </div>
-              <p id="policyEditorEmpty" class="empty editor-empty">从左侧选择会话，或添加第一条策略。</p>
-              <form id="policyEditorForm" hidden>
-                <div class="policy-meta">
-                  <label id="policyIdLabel" for="policyGroupId">群 ID</label>
-                  <input id="policyGroupId" maxlength="128" required readonly>
-                  <small id="policySavedAt">尚无保存记录</small>
+          <div class="section-heading wide"><p>SAFETY GROUPS</p><h2 id="policiesTitle">安全分组</h2><span>一个会话只属于一个分组。全局关键词与作品黑名单始终生效。</span></div>
+          <section class="panel">
+            <div class="panel-title"><h3>规则分组 <span id="policyCount" class="count">0</span></h3><button id="policyAddBtn" type="button">新建分组</button></div>
+            <label for="policySearch">搜索名称或会话</label><input id="policySearch" type="search" placeholder="分组名称或完整 UMO">
+            <div id="policyList" class="safety-group-grid" aria-live="polite"></div>
+          </section>
+          <dialog id="safetyGroupDialog" class="safety-group-dialog" aria-labelledby="safetyGroupTitle">
+            <form id="safetyGroupForm">
+              <header class="safety-group-header">
+                <h3 id="safetyGroupTitle">安全分组</h3>
+                <p>为关联会话设置分级与附加屏蔽词。</p>
+              </header>
+              <div class="safety-group-fields">
+                <div class="safety-group-field">
+                  <label for="safetyGroupName">分组名称</label>
+                  <input id="safetyGroupName" required maxlength="64" placeholder="例如：日常插画" autocomplete="off">
                 </div>
-                  <label class="policy-toggle-card">
-                  <input id="policyGeneralToggle" type="checkbox">
-                  <span><strong>强制普通分级</strong><small>开启后仅允许普通分级作品。</small></span>
-                  </label>
-                <label class="policy-toggle-card">
-                  <input id="policyBuiltinToggle" type="checkbox">
-                  <span><strong>启用内置安全词</strong><small>开启使用内置词与全局列表并忽略独立列表；关闭仅使用当前会话独立列表。</small></span>
+                <div class="safety-group-field">
+                  <label for="safetyGroupSessions">关联会话 <span>每行一个完整 UMO</span></label>
+                  <textarea id="safetyGroupSessions" rows="3" placeholder="粘贴 /sid 返回的完整值" aria-describedby="safetyGroupSessionsHint" spellcheck="false"></textarea>
+                  <p id="safetyGroupSessionsHint" class="safety-hint">在目标聊天发送 /sid 获取；一个会话只能加入一个分组。</p>
+                </div>
+                <label class="safety-r18-toggle">
+                  <span><strong>允许 R18</strong><small id="safetyGroupR18Hint">默认关闭；开启后允许混合分级，不保证只返回 R18。</small></span>
+                  <input id="safetyGroupR18" type="checkbox" role="switch" aria-label="允许 R18" aria-describedby="safetyGroupR18Hint">
                 </label>
-                <div class="policy-rule-mode-group">
-                  <p id="policyRuleModeStatus" class="policy-mode-status" aria-live="polite"></p>
-                  <section class="policy-list-editor" aria-labelledby="policyCustomTermTitle">
-                    <h4 id="policyCustomTermTitle">独立自定义屏蔽词</h4>
-                    <div class="policy-list-add"><input id="policyCustomTermInput" type="text"><button id="policyCustomTermAddBtn" type="button">添加</button></div>
-                    <p id="policyCustomTermError" class="form-error" aria-live="polite"></p><div id="policyCustomTermList" class="policy-chip-list" aria-live="polite"></div>
-                    <div class="policy-bulk-actions"><button type="button" data-policy-field="custom_terms" data-policy-target="group">应用到全部群聊策略</button><button type="button" data-policy-field="custom_terms" data-policy-target="private">应用到全部私聊策略</button><button type="button" data-policy-field="custom_terms" data-policy-target="all">应用到全部策略</button></div>
-                  </section>
+                <div class="safety-group-field">
+                  <label for="safetyGroupTerms">附加屏蔽关键词 <span>每行一个</span></label>
+                  <textarea id="safetyGroupTerms" rows="3" placeholder="可选，留空仅使用全局关键词" aria-describedby="safetyGroupTermsHint"></textarea>
+                  <p id="safetyGroupTermsHint" class="safety-hint">与全局词叠加，使用全局匹配方式；全局作品黑名单始终生效。</p>
                 </div>
-                <section class="policy-list-editor" aria-labelledby="policyIllustIdTitle">
-                    <h4 id="policyIllustIdTitle">独立作品 ID 黑名单</h4>
-                    <div class="policy-list-add"><input id="policyIllustIdInput" type="text" inputmode="numeric"><button id="policyIllustIdAddBtn" type="button">添加</button></div>
-                    <p id="policyIllustIdError" class="form-error" aria-live="polite"></p><div id="policyIllustIdList" class="policy-chip-list" aria-live="polite"></div>
-                    <div class="policy-bulk-actions"><button type="button" data-policy-field="blacklisted_illust_ids" data-policy-target="group">应用到全部群聊策略</button><button type="button" data-policy-field="blacklisted_illust_ids" data-policy-target="private">应用到全部私聊策略</button><button type="button" data-policy-field="blacklisted_illust_ids" data-policy-target="all">应用到全部策略</button></div>
-                </section>
-                <p id="policyError" class="form-error" aria-live="polite"></p>
-                <p id="policyBatchStatus" class="policy-mode-status policy-batch-status" aria-live="polite" hidden></p>
-                <div class="policy-actions">
-                  <button id="policySaveBtn" type="submit">保存修改</button>
-                  <button id="policyDeleteBtn" type="button">删除会话</button>
-                </div>
-              </form>
-            </section>
-          </div>
-          <dialog id="policyAddDialog">
-            <form id="policyAddForm">
-              <h3 id="policyAddTitle">添加群策略</h3>
-              <label id="policyAddLabel" for="policyAddInput">群 ID</label>
-              <input id="policyAddInput" maxlength="128" required>
-              <p id="policyAddError" class="form-error" aria-live="polite"></p>
-              <div class="dialog-actions">
-                <button value="cancel" type="button" id="policyAddCancel">取消</button>
-                <button type="submit" id="policyAddSubmit">添加</button>
+                <p id="safetyGroupError" class="form-error" role="alert"></p>
               </div>
+              <div class="dialog-actions"><button id="safetyGroupDelete" class="danger" type="button">删除分组</button><button id="safetyGroupCancel" type="button">关闭</button><button type="submit">保存分组</button></div>
             </form>
           </dialog>
         </section>
@@ -274,7 +222,7 @@
           <div class="section-heading wide">
             <p>PLUGIN SETTINGS</p>
             <h2 id="settingsTitle">插件设置</h2>
-            <span>按配置分组编辑插件选项；群聊与私聊策略继续在“会话策略”中独立管理。</span>
+            <span>按配置分组编辑插件选项；全局安全规则与安全分组继续在“安全分组”中独立管理。</span>
           </div>
           <p id="settingsNotice" class="settings-notice" role="status">保存后建议重载插件，让连接、代理及缓存等选项完整生效。</p>
           <p id="settingsStatus" class="form-status" aria-live="polite"></p>
@@ -291,16 +239,16 @@
         <section id="dataView" class="workspace" aria-labelledby="dataTitle">
           <div class="section-heading wide">
             <p>DATA OPERATIONS</p>
-            <h2 id="dataTitle">签到数据管理</h2>
-            <span>备份包含用户资料、签到记录、群活跃数据和主题配置。</span>
+            <h2 id="dataTitle">数据管理</h2>
+            <span>导出签到数据、当前安全规则及旧策略归档。导入只恢复签到，安全规则与旧策略不会恢复。</span>
           </div>
 
           <div class="data-grid">
             <!-- 导出备份 -->
             <section class="data-action export-action">
               <span class="action-index">EXPORT</span>
-              <h3>下载完整签到备份</h3>
-              <p>将当前签到记录导出为 schema v7 JSON 备份文件，并兼容导入 schema v6，供迁移或手工备份使用。</p>
+              <h3>数据导出</h3>
+              <p>导出插件数据 JSON。查看旧策略请展开 legacy_safety_archives；旧策略仅供查看，不支持重新导入。包内不含 token 或代理地址。</p>
               <button id="exportBtn" type="button">下载备份 (.json)</button>
               <small id="latestBackup" aria-live="polite">最近备份：尚无备份记录</small>
             </section>
@@ -320,7 +268,7 @@
             <section class="data-action cache-action">
               <span class="action-index">STORAGE</span>
               <h3>临时图片与卡片缓存</h3>
-              <p>包含已生成的签到卡片渲染缓存及 Pixiv 下载过程中的临时图片。清理缓存不会影响任何签到记录或用户数据。</p>
+              <p>保存当天签到卡片及背景摘要，并统计下载临时图片。下载图片通常在发送流程结束后删除；送达未知的路径图片保留 10 分钟后自动清理。手动清理会移除卡片缓存和下载残余，跳过最近 10 分钟的下载临时文件。签到记录及用户数据不受影响，卡片缓存清理后会按需重建。</p>
               <div class="cache-stat-line">
                 <span id="cacheStorageText">正在统计缓存占用…</span>
               </div>
@@ -339,7 +287,7 @@
     <div id="toast" class="toast" role="status" aria-live="polite"></div>
 
     <!-- 全局确认对话框 -->
-    <dialog id="confirmDialog">
+    <dialog id="confirmDialog" aria-labelledby="dialogTitle" aria-describedby="dialogMessage">
       <form method="dialog">
         <p class="kicker">CONFIRM ACTION</p>
         <h2 id="dialogTitle">确认操作</h2>

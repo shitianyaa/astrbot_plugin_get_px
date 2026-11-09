@@ -15,8 +15,10 @@ import threading
 from typing import Any, Awaitable, Callable
 from zoneinfo import ZoneInfo
 
-from astrbot.api.all import logger
+from astrbot.api import logger
 from PIL import Image
+
+from .card import CardBackground
 
 
 LOG_PREFIX = "[GetPx]"
@@ -166,6 +168,55 @@ class CheckinCardCache:
                 return stored
         finally:
             self._end_store(date_key)
+
+    def get_background(self, date_key: str, key: str) -> CardBackground | None:
+        """Read the background summary for a daily safety variant."""
+        path = _inside(self._cache_path(date_key, key).with_suffix(".json"), self.root)
+        try:
+            data = json.loads(path.read_text(encoding="utf-8"))
+            fields = ("mode", "source", "illust_id", "title", "author", "quality")
+            if not isinstance(data, dict) or set(data) != set(fields):
+                raise ValueError("invalid background summary")
+            if any(not isinstance(data[field], str) for field in fields):
+                raise ValueError("invalid background field")
+            return CardBackground(**data)
+        except FileNotFoundError:
+            return None
+        except (OSError, ValueError) as exc:
+            logger.warning(
+                f"{LOG_PREFIX} 签到背景缓存读取失败: error_type={type(exc).__name__}"
+            )
+            return None
+
+    def store_background(
+        self, date_key: str, key: str, background: CardBackground
+    ) -> None:
+        """Atomically publish only the caption fields, never source paths or metadata."""
+        path = _inside(self._cache_path(date_key, key).with_suffix(".json"), self.root)
+        data = {
+            field: getattr(background, field)
+            for field in ("mode", "source", "illust_id", "title", "author", "quality")
+        }
+        temporary = None
+        with self._active_store_lock:
+            self._active_store_dates[date_key] = self._active_store_dates.get(date_key, 0) + 1
+        try:
+            path.parent.mkdir(parents=True, exist_ok=True)
+            with tempfile.NamedTemporaryFile(
+                mode="w", encoding="utf-8", dir=path.parent,
+                prefix=f".{key}.", suffix=".tmp", delete=False,
+            ) as stream:
+                temporary = Path(stream.name)
+                json.dump(data, stream, ensure_ascii=False)
+                stream.flush()
+                os.fsync(stream.fileno())
+            os.replace(temporary, path)
+        finally:
+            try:
+                if temporary is not None:
+                    temporary.unlink(missing_ok=True)
+            finally:
+                self._end_store(date_key)
 
     def cleanup_expired(
         self,
