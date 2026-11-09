@@ -1,0 +1,369 @@
+"""管理中心真实浏览器交互回归：保存/读取冻结、草稿保留与后台刷新。
+
+依赖本机已安装的 Python Playwright 与 Chromium；缺失时整组跳过，
+CI 只跑其余静态与单元测试。页面通过本地 HTTP 提供，bridge 与后端数据
+全部为测试内合成，不访问 AstrBot 宿主、网络、QQ 或真实用户配置。
+"""
+
+from __future__ import annotations
+
+import functools
+import http.server
+import json
+import threading
+from collections.abc import Iterator
+from pathlib import Path
+
+import pytest
+
+pytest.importorskip("playwright.sync_api")
+from playwright.sync_api import sync_playwright  # noqa: E402
+
+PAGE_DIR = Path(__file__).resolve().parents[1] / "pages" / "pluginCenter"
+
+SETTINGS = {
+    "success": True,
+    "groups": [
+        {
+            "key": "pixiv_source",
+            "label": "图源",
+            "fields": [
+                {
+                    "key": "max_count",
+                    "label": "单次最大数量",
+                    "type": "int",
+                    "hint": "测试用数值项",
+                    "options": [],
+                    "slider": {"min": 1, "max": 20, "step": 1},
+                    "default": 3,
+                    "value": 3,
+                },
+                {
+                    "key": "preferred_image_source",
+                    "label": "首选图片源",
+                    "type": "string",
+                    "hint": "",
+                    "options": ["Lolicon", "Pixiv"],
+                    "slider": None,
+                    "default": "Lolicon",
+                    "value": "Lolicon",
+                },
+                {
+                    "key": "pixiv_refresh_token",
+                    "label": "Pixiv refresh token",
+                    "type": "string",
+                    "hint": "留空保持",
+                    "options": [],
+                    "slider": None,
+                    "secret": True,
+                    "configured": True,
+                },
+            ],
+        },
+        {
+            "key": "checkin_basic",
+            "label": "签到基础",
+            "fields": [
+                {
+                    "key": "checkin_enabled",
+                    "label": "签到总开关",
+                    "type": "bool",
+                    "hint": "",
+                    "options": [],
+                    "slider": None,
+                    "default": True,
+                    "value": True,
+                },
+                {
+                    "key": "checkin_ai_greeting_prompt",
+                    "label": "AI 问候提示词",
+                    "type": "text",
+                    "hint": "",
+                    "options": [],
+                    "slider": None,
+                    "default": "",
+                    "value": "原始提示词",
+                },
+                {
+                    "key": "checkin_hitokoto_categories",
+                    "label": "一言类型",
+                    "type": "list",
+                    "hint": "",
+                    "options": ["全部", "动画", "文学"],
+                    "slider": None,
+                    "default": ["全部"],
+                    "value": ["全部", "旧分类"],
+                },
+            ],
+        },
+    ],
+}
+
+SAFETY = {
+    "success": True,
+    "global_safety_terms": ["示例词"],
+    "keyword_match_mode": "宽松",
+    "global_blacklisted_illust_ids": [],
+    "safety_groups": [
+        {
+            "group_id": "g1",
+            "name": "日常插画",
+            "sessions": ["bot:GroupMessage:10001"],
+            "allow_r18": False,
+            "custom_terms": [],
+        }
+    ],
+}
+
+RESPONSES = {
+    "settings": SETTINGS,
+    "overview": {
+        "success": True,
+        "custom_term_count": 1,
+        "blacklist_count": 0,
+        "latest_backup_at": "",
+    },
+    "checkin-groups": {"success": True, "groups": []},
+    "content-safety": SAFETY,
+    "image-blacklist": {"success": True, "records": []},
+    "checkin-members": {"success": True, "members": [], "total": 0},
+    "config": {"success": True, "font_source": "none", "font_url": ""},
+    "cache-storage": {
+        "success": True,
+        "total_human": "0 B",
+        "total_count": 0,
+        "card_cache_human": "0 B",
+        "card_cache_count": 0,
+        "temp_download_human": "0 B",
+        "temp_download_count": 0,
+    },
+}
+
+BRIDGE_SCRIPT = """
+window.__responses = %s;
+window.__getHandlers = {};
+window.__postHandlers = {};
+window.__posts = [];
+window.AstrBotPluginPage = {
+  ready: () => Promise.resolve({ isDark: false }),
+  getContext: () => ({ isDark: false }),
+  onContext: (handler) => { handler({ isDark: false }); return () => {}; },
+  apiGet: (endpoint) => (
+    window.__getHandlers[endpoint]
+      ? window.__getHandlers[endpoint]()
+      : Promise.resolve(window.__responses[endpoint] || { success: true })
+  ),
+  apiPost: (endpoint, body) => {
+    window.__posts.push({ endpoint, body });
+    return window.__postHandlers[endpoint]
+      ? window.__postHandlers[endpoint](body)
+      : Promise.resolve({ success: true });
+  },
+  download: () => Promise.resolve(),
+  upload: () => Promise.resolve({ success: true }),
+};
+""" % json.dumps(RESPONSES, ensure_ascii=False)
+
+
+class _QuietHandler(http.server.SimpleHTTPRequestHandler):
+    def log_message(self, *_args) -> None:  # noqa: D102 - 静默测试服务器日志
+        pass
+
+    def end_headers(self) -> None:  # noqa: D102 - 页面资源不缓存
+        self.send_header("Cache-Control", "no-store")
+        super().end_headers()
+
+
+@pytest.fixture()
+def page() -> Iterator[object]:
+    server = http.server.ThreadingHTTPServer(
+        ("127.0.0.1", 0),
+        functools.partial(_QuietHandler, directory=str(PAGE_DIR)),
+    )
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    try:
+        with sync_playwright() as playwright:
+            try:
+                browser = playwright.chromium.launch()
+            except Exception as exc:  # 已安装 Playwright 但缺少浏览器时跳过
+                pytest.skip(f"Chromium 不可用：{type(exc).__name__}")
+            context = browser.new_context(viewport={"width": 1440, "height": 900})
+            context.add_init_script(BRIDGE_SCRIPT)
+            page = context.new_page()
+            errors: list[str] = []
+            page.on("pageerror", lambda error: errors.append(str(error)))
+            try:
+                page.goto(
+                    f"http://127.0.0.1:{server.server_address[1]}/index.html",
+                    wait_until="networkidle",
+                )
+                page.click('.nav-tabs [data-view="settings"]')
+                page.wait_for_selector("#settingsGroups .config-item")
+                yield page
+                assert errors == []
+            finally:
+                context.close()
+                browser.close()
+    finally:
+        server.shutdown()
+        server.server_close()
+        thread.join(timeout=5)
+
+
+def _disabled(page, selector: str) -> bool:
+    return page.eval_on_selector(selector, "element => element.disabled")
+
+
+def _open_checkin_group(page) -> None:
+    page.click('#settingsNav [data-group="checkin_basic"]')
+    page.wait_for_selector("#setting-checkin_ai_greeting_prompt")
+
+
+def _start_pending_update(page) -> None:
+    page.evaluate(
+        """() => {
+          window.__postHandlers["settings/update"] = () => new Promise((resolve) => {
+            window.__resolveUpdate = resolve;
+          });
+        }"""
+    )
+
+
+def _start_pending_settings_read(page) -> None:
+    page.evaluate(
+        """() => {
+          window.__getHandlers["settings"] = () => new Promise((resolve) => {
+            window.__resolveSettings = resolve;
+          });
+        }"""
+    )
+
+
+def test_save_freezes_draft_controls_and_restores_original_disabled_state(page):
+    _open_checkin_group(page)
+    page.fill("#setting-checkin_ai_greeting_prompt", "新的问候")
+    page.click('#settingsNav [data-group="pixiv_source"]')
+    page.wait_for_selector("#setting-max_count")
+    _start_pending_update(page)
+    page.click("#settingsSaveBtn")
+    page.wait_for_function(
+        "document.querySelector('#settingsStatus').textContent.includes('正在保存')"
+    )
+
+    for selector in (
+        "#setting-max_count",
+        "#setting-preferred_image_source .dd-trigger",
+        "#setting-pixiv_refresh_token",
+        '[name="clear-pixiv_refresh_token"]',
+        "#settingsSearch",
+        "#settingsGroupPicker .dd-trigger",
+        "#settingsDiscardBtn",
+        "#settingsReloadBtn",
+        "#settingsSaveBtn",
+    ):
+        assert _disabled(page, selector), selector
+    assert page.eval_on_selector_all(
+        "#settingsNav [data-group]", "nodes => nodes.every((node) => node.disabled)"
+    )
+
+    page.evaluate("window.__resolveUpdate({ success: true })")
+    page.wait_for_function(
+        "document.querySelector('#settingsStatus').textContent.includes('设置已保存')"
+    )
+    assert not _disabled(page, "#setting-max_count")
+    assert not _disabled(page, "#setting-preferred_image_source .dd-trigger")
+    assert not _disabled(page, "#setting-pixiv_refresh_token")
+    assert not _disabled(page, "#settingsSearch")
+    assert not _disabled(page, "#settingsReloadBtn")
+    assert not _disabled(page, "#settingsDiscardBtn")
+    assert _disabled(page, "#settingsSaveBtn")
+    assert page.eval_on_selector_all(
+        "#settingsNav [data-group]", "nodes => nodes.every((node) => !node.disabled)"
+    )
+    page.click('#settingsNav [data-group="checkin_basic"]')
+    assert page.input_value("#setting-checkin_ai_greeting_prompt") == "新的问候"
+
+
+def test_failed_save_keeps_draft_and_restores_controls(page):
+    page.click('#settingsNav [data-group="pixiv_source"]')
+    page.wait_for_selector("#setting-max_count")
+    page.fill("#setting-max_count", "5")
+    _start_pending_update(page)
+    page.click("#settingsSaveBtn")
+    page.wait_for_function(
+        "document.querySelector('#settingsStatus').textContent.includes('正在保存')"
+    )
+    assert _disabled(page, "#setting-max_count")
+
+    page.evaluate(
+        """window.__resolveUpdate({ success: false, error: "模拟保存失败" })"""
+    )
+    page.wait_for_function(
+        "document.querySelector('#settingsStatus').textContent.includes('模拟保存失败')"
+    )
+    status = page.text_content("#settingsStatus")
+    assert "修改仍保留" in status
+    assert page.input_value("#setting-max_count") == "5"
+    assert not _disabled(page, "#setting-max_count")
+    assert not _disabled(page, "#settingsSaveBtn")
+
+
+def test_failed_reload_keeps_secret_clear_disabled_state(page):
+    page.click('#settingsNav [data-group="pixiv_source"]')
+    page.wait_for_selector('[name="clear-pixiv_refresh_token"]')
+    page.check('[name="clear-pixiv_refresh_token"]')
+    assert _disabled(page, "#setting-pixiv_refresh_token")
+    page.evaluate(
+        """() => {
+          window.__getHandlers["settings"] = () => Promise.resolve({
+            success: false, error: "模拟读取失败",
+          });
+        }"""
+    )
+    page.click("#settingsReloadBtn")
+    page.wait_for_selector("#confirmDialog[open]")
+    page.click("#dialogConfirm")
+    page.wait_for_function(
+        "document.querySelector('#settingsStatus').textContent.includes('模拟读取失败')"
+    )
+    assert page.is_checked('[name="clear-pixiv_refresh_token"]')
+    assert _disabled(page, "#setting-pixiv_refresh_token")
+    assert not _disabled(page, '[name="clear-pixiv_refresh_token"]')
+    page.uncheck('[name="clear-pixiv_refresh_token"]')
+    assert not _disabled(page, "#setting-pixiv_refresh_token")
+
+
+def test_topbar_refresh_keeps_unsaved_settings_draft(page):
+    _open_checkin_group(page)
+    page.fill("#setting-checkin_ai_greeting_prompt", "刷新后保留")
+    page.click("#refreshBtn")
+    page.wait_for_function(
+        "document.querySelector('#refreshBtn').disabled === false"
+        " && document.querySelector('#refreshBtn').textContent.includes('刷新数据')"
+    )
+    assert page.input_value("#setting-checkin_ai_greeting_prompt") == "刷新后保留"
+    assert "未保存的修改" in page.text_content("#settingsStatus")
+
+
+def test_background_refresh_keeps_safety_group_dialog_draft(page):
+    page.evaluate(
+        """() => {
+          const original = window.__responses["content-safety"];
+          window.__getHandlers["content-safety"] = () => new Promise((resolve) => {
+            window.__resolveSafety = () => resolve(original);
+          });
+        }"""
+    )
+    page.click("#refreshBtn")
+    page.click('.nav-tabs [data-view="policies"]')
+    page.click('#policyList [data-edit-group="g1"]')
+    page.wait_for_selector("#safetyGroupDialog[open]")
+    page.fill("#safetyGroupName", "草稿名称")
+    page.evaluate("window.__resolveSafety()")
+    page.wait_for_function(
+        "document.querySelector('#refreshBtn').disabled === false"
+        " && document.querySelector('#refreshBtn').textContent.includes('刷新数据')"
+    )
+    assert page.eval_on_selector("#safetyGroupDialog", "dialog => dialog.open")
+    assert page.input_value("#safetyGroupName") == "草稿名称"

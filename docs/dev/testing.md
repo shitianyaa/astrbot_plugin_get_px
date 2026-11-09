@@ -18,6 +18,7 @@
 | JSON schema 检查 | 插件目录 | `python -m json.tool _conf_schema.json` |
 | JavaScript 语法检查 | 插件目录 | `node --check pages/pluginCenter/app.js`（含 `settings.mjs`、`safety.mjs`、`ui.mjs`） |
 | 管理页状态测试 | 插件目录 | `node --test tests/js/safety.test.mjs tests/js/settings.test.mjs tests/js/ui.test.mjs` |
+| 管理页真实浏览器回归（可选） | 插件目录 | `python -m pytest tests/test_plugin_center_browser.py`（需本机安装 Playwright 与 Chromium，否则整组跳过） |
 | pytest 全部测试 | 插件目录 | `python -m pytest -v tests` |
 | pytest 快速测试 | 插件目录 | `python -m pytest -q tests` |
 | pytest 特定模块 | 插件目录 | `python -m pytest tests/test_checkin_*.py -v` |
@@ -29,7 +30,7 @@
 
 ## PR 快速 CI
 
-PR 快速 CI（`AstrBot Plugin Quality Gate`，`.github/workflows/plugin-quality-gate.yml`）在 Ubuntu + Python 3.12 下安装最新正式版 AstrBot，通过 `scripts/ci/check_plugin_quality_gate.py` 执行 Python 编译检查、JSON schema 检查、前端 JavaScript/ES module 语法、分组草稿 JS 测试和全量 `python -m pytest -v tests`；同一个检查脚本也可以在本地执行。生命周期检查脚本只服务于独立的 `AstrBot Plugin Lifecycle` CI。
+PR 快速 CI（`AstrBot Plugin Quality Gate`，`.github/workflows/plugin-quality-gate.yml`）在 Ubuntu + Python 3.12 下安装最新正式版 AstrBot，通过 `scripts/ci/check_plugin_quality_gate.py` 执行 Python 编译检查、JSON schema 检查、前端 JavaScript/ES module 语法、分组草稿 JS 测试和全量 `python -m pytest -v tests`；同一个检查脚本也可以在本地执行。门禁会枚举 `pages/pluginCenter` 下全部 `.js`／`.mjs` 模块和 `tests/js/*.test.mjs`，新增文件无需再改门禁；同时从 `index.html` 递归解析 HTML／CSS／模块相对资源，任一层缺失即失败。生命周期检查脚本只服务于独立的 `AstrBot Plugin Lifecycle` CI。
 
 本地等价质量门禁（在已安装项目依赖、`pytest`、`pytest-asyncio` 和 Node.js 的环境中执行）：
 
@@ -168,6 +169,7 @@ python -m pytest tests/test_command_registration.py -v
 node --check pages/pluginCenter/app.js
 node --check pages/pluginCenter/ui.mjs
 node --test tests/js/safety.test.mjs tests/js/settings.test.mjs tests/js/ui.test.mjs
+python -m pytest tests/test_plugin_center_browser.py
 # 手工验证：页面加载、导航、草稿确认、读写、重置与移动端
 # 浏览器检查明暗主题、配置搜索/切组草稿、数字清空阻止保存与键盘操作下拉
 ```
@@ -337,3 +339,7 @@ python -m pytest -q tests/test_checkin_cache.py tests/test_checkin_calendar.py t
 - `tests/test_plugin_management_api.py`、`test_checkin_backup_web.py`：配置／Pages 同源、辅助信息不决定黑名单、数据包无凭据、导入只恢复签到、原回滚保护。
 - `node --test tests/js/safety.test.mjs tests/js/settings.test.mjs tests/js/ui.test.mjs`：草稿深拷贝、R18 默认关闭、UMO 单组验证，设置页选项规范化、跨组搜索、数字清空/越界判定、多选旧值保留与部分补丁／清除令牌的纯函数契约，以及自绘下拉的选项规范化与键盘下标边界。旧状态机与专属测试已删除，不保留布局／台词／历史实现身份快照。
 - 页面接线及视觉用浏览器验证：新建、编辑、保存失败、草稿关闭确认、重复 UMO、删除、模式／全局词、导出；桌面与移动端检查明暗主题、溢出、焦点和弹窗滚动；配置页检查跨组搜索草稿、改回无改动、放弃／重新载入确认、保存失败保留、数字清空阻止保存、自绘下拉的 ↑↓/Home/End/Enter/Space/Escape/Tab 与开关键盘焦点。离线 bridge 验证不等于真实 AstrBot 页面鉴权或 QQ 端到端。
+
+### 管理中心浏览器回归（可选依赖）
+
+`tests/test_plugin_center_browser.py` 使用本机 Python Playwright 驱动真实 Chromium，通过临时本地 HTTP 提供页面，并用合成 bridge 数据验证：保存期间输入框、开关、下拉、搜索、分组导航、手机组选择、清除令牌、放弃与重新载入全部冻结；成功与失败都恢复控件原有 disabled 状态（勾选清除令牌后密码框仍禁用）；保存失败保留草稿；主页刷新不重载设置草稿；后台刷新不关闭安全分组弹窗或丢弃其中草稿。模块在缺少 Playwright 时 `importorskip`，CI 不安装该可选依赖，因此本地通过不等于 CI 执行；测试不访问生产 AstrBot、QQ、Pixiv 或真实用户配置。

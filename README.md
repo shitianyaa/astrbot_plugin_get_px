@@ -58,7 +58,7 @@
 
 <br>
 
-插件管理中心提供群排行与趋势、成员数值编辑、内容安全、安全分组、签到数据备份和 Schema 驱动的插件配置页；1200px 紧凑控制台布局，明暗主题跟随 AstrBot 宿主（独立预览回退系统偏好），所有操作均通过可视化界面完成。
+插件管理中心提供群排行与趋势、成员数值编辑、内容安全、安全分组、签到数据备份和 Schema 驱动的插件配置页；1200px 紧凑控制台布局，明暗主题跟随 AstrBot 宿主（独立预览回退系统偏好），所有操作均通过可视化界面完成。配置页保存期间冻结会改变草稿的控件，保存失败保留修改，成功不自动重载插件或页面。
 
 ## 功能一览
 
@@ -428,6 +428,7 @@ lunar-python
 - Pixiv `refresh_token` 获取方案来自 [piglig/pixiv-token](https://github.com/piglig/pixiv-token)，感谢 [piglig](https://github.com/piglig) 提供基于 Playwright 的 OAuth 自动取码工具
 - 作品黑名单缩略图生成基于 [Pillow](https://python-pillow.org/)
 - 签到每日一言由 [Hitokoto API](https://github.com/hitokoto-osc/hitokoto-api) 提供，感谢一言开源社区和公共 API 服务
+- 插件配置页的普通设置能力由 ke mi 在 [PR #27](https://github.com/shitianyaa/astrbot_plugin_get_px/pull/27) 贡献，本仓库在此基础上整合了管理中心布局与安全边界
 - 签到卡片内置字体由 [霞鹜文楷轻便版](https://github.com/lxgw/LxgwWenKai-Lite) 生成，采用 SIL Open Font License 1.1 授权
 - 每日签到设计参考 [zhenxun_bot](https://github.com/zhenxun-org/zhenxun_bot)
 - 万象画卷联动接入 [astrbot_plugin_omnidraw](https://github.com/diaomin66/astrbot_plugin_omnidraw/)（作者 雪碧bir），生图额度由对方插件管理

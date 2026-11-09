@@ -186,6 +186,11 @@ export function createSettingsPage({ bridge, notify, navigate, confirm }) {
   let saved = false;
   let errorNotice = "";
   let mobileSelect = null;
+  let busy = false;
+  // 冻结期间记录每个控件原本的 disabled，结束后逐项恢复：
+  // 清除令牌勾选后密码框本就禁用，不能被统一的 false 解除。
+  const busyStates = new Map();
+  let customControls = [];
 
   function groupOf(key) {
     return groups.find((group) => group.key === key) || null;
@@ -269,7 +274,7 @@ export function createSettingsPage({ bridge, notify, navigate, confirm }) {
   }
 
   function selectGroup(key, fromUser) {
-    if (key === activeKey) return;
+    if (busy || key === activeKey) return;
     activeKey = key;
     if (fromUser) pinned = true;
     if (mobileSelect && mobileSelect.value !== key) mobileSelect.value = key;
@@ -279,7 +284,7 @@ export function createSettingsPage({ bridge, notify, navigate, confirm }) {
   }
 
   function commit(key, value) {
-    if (saving || loading) return;
+    if (busy) return;
     const field = fieldOf(key);
     if (!field) return;
     saved = false;
@@ -401,6 +406,7 @@ export function createSettingsPage({ bridge, notify, navigate, confirm }) {
       checked: valueOf(field) === true,
       onChange: (checked) => commit(field.key, checked),
     });
+    customControls.push(control);
     row.append(control);
     return row;
   }
@@ -459,6 +465,7 @@ export function createSettingsPage({ bridge, notify, navigate, confirm }) {
       ),
       onChange: (next) => commit(field.key, next),
     });
+    customControls.push(control);
     row.append(control);
     return row;
   }
@@ -539,6 +546,7 @@ export function createSettingsPage({ bridge, notify, navigate, confirm }) {
 
   function renderFields() {
     const group = groupOf(activeKey);
+    customControls = [];
     fieldsNode.replaceChildren();
     if (!group) {
       fieldsNode.append(element("div", "empty", "配置数据不可用，请重新载入。"));
@@ -575,6 +583,8 @@ export function createSettingsPage({ bridge, notify, navigate, confirm }) {
       const error = row?.querySelector("[data-field-error]");
       if (error) error.textContent = invalid.get(key).message;
     }
+    // 保存/读取期间重建的控件也必须处于冻结状态，结束后统一恢复。
+    if (busy) freezeControls();
   }
 
   function ensureMobileSelect() {
@@ -586,19 +596,44 @@ export function createSettingsPage({ bridge, notify, navigate, confirm }) {
       onChange: (next) => selectGroup(next, true),
     });
     mobileSlot.replaceChildren(mobileSelect);
+    if (busy) mobileSelect.setDisabled(true);
+  }
+
+  function freezableControls() {
+    return [
+      ...form.querySelectorAll("input, textarea, button"),
+      ...document.querySelectorAll(
+        "#settingsDiscardBtn, #settingsReloadBtn, #settingsSaveBtn",
+      ),
+    ];
+  }
+
+  function freezeControls() {
+    for (const control of freezableControls()) {
+      if (!busyStates.has(control)) busyStates.set(control, control.disabled);
+      control.disabled = true;
+    }
+    for (const control of customControls) control.setDisabled(true);
+    mobileSelect?.setDisabled(true);
   }
 
   function setBusy(value) {
-    saveButton.disabled = value;
-    reloadButton.disabled = value;
-    form.setAttribute("aria-busy", String(value));
-    for (const control of form.querySelectorAll("input, textarea, button")) {
-      control.disabled = value;
+    busy = value;
+    if (value) {
+      freezeControls();
+    } else {
+      for (const [control, wasDisabled] of busyStates) {
+        if (control.isConnected) control.disabled = wasDisabled;
+      }
+      busyStates.clear();
+      for (const control of customControls) control.setDisabled(false);
+      mobileSelect?.setDisabled(false);
     }
+    form.setAttribute("aria-busy", String(value));
   }
 
   async function load() {
-    if (saving || loading) return;
+    if (busy) return;
     loading = true;
     setBusy(true);
     status.textContent = "正在读取设置…";
@@ -651,7 +686,7 @@ export function createSettingsPage({ bridge, notify, navigate, confirm }) {
 
   async function save(event) {
     event?.preventDefault?.();
-    if (saving || loading) return;
+    if (busy) return;
     if (invalid.size) {
       status.textContent = `有 ${invalid.size} 项数值需要修正`;
       focusFirstInvalid();
@@ -666,6 +701,7 @@ export function createSettingsPage({ bridge, notify, navigate, confirm }) {
     saving = true;
     saved = false;
     errorNotice = "";
+    setBusy(true);
     updateChrome();
     try {
       const result = await bridge.apiPost("settings/update", {
@@ -701,12 +737,13 @@ export function createSettingsPage({ bridge, notify, navigate, confirm }) {
       notify(errorNotice, "error");
     } finally {
       saving = false;
+      setBusy(false);
       updateChrome();
     }
   }
 
   async function discard() {
-    if (saving || loading) return;
+    if (busy) return;
     if (!changedCount()) return;
     const confirmed = await confirm({
       title: "放弃未保存的修改",
@@ -724,7 +761,7 @@ export function createSettingsPage({ bridge, notify, navigate, confirm }) {
   }
 
   async function reload() {
-    if (saving || loading) return;
+    if (busy) return;
     if (changedCount()) {
       const confirmed = await confirm({
         title: "重新载入设置",
@@ -737,6 +774,7 @@ export function createSettingsPage({ bridge, notify, navigate, confirm }) {
   }
 
   function onSearch() {
+    if (busy) return;
     query = searchInput?.value || "";
     pinned = false;
     errorNotice = "";
