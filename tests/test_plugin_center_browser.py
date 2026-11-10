@@ -541,7 +541,10 @@ def test_list_options_expose_group_name_and_keep_legacy_values(page):
     ).split()
     assert described[0] == "setting-error-checkin_hitokoto_categories"
     assert "setting-hint-checkin_hitokoto_categories" in described
-    assert page.text_content("#setting-hint-checkin_hitokoto_categories") == "测试用多选说明"
+    assert (
+        page.text_content("#setting-hint-checkin_hitokoto_categories")
+        == "测试用多选说明"
+    )
     assert (
         page.eval_on_selector(
             "#setting-checkin_hitokoto_categories-0",
@@ -569,7 +572,9 @@ def test_field_text_is_rendered_as_text_without_native_dialogs(page):
     _open_checkin_group(page)
     page.fill("#setting-checkin_ai_greeting_prompt", "草稿")
     payload = json.loads(json.dumps(SETTINGS))
-    payload["groups"][1]["fields"][1]["label"] = '<img src="x" onerror="window.__xss=1">'
+    payload["groups"][1]["fields"][1]["label"] = (
+        '<img src="x" onerror="window.__xss=1">'
+    )
     payload["groups"][1]["fields"][1]["hint"] = "<script>window.__xss=2</script>"
     page.evaluate(
         "payload => { window.__getHandlers['settings'] = () => Promise.resolve(payload); }",
@@ -585,16 +590,24 @@ def test_field_text_is_rendered_as_text_without_native_dialogs(page):
     )
 
     assert page.evaluate("window.__xss") is None
-    assert page.eval_on_selector(
-        '[data-field-key="checkin_ai_greeting_prompt"] .config-item-label',
-        "node => node.textContent",
-    ) == '<img src="x" onerror="window.__xss=1">'
-    assert page.eval_on_selector(
-        '[data-field-key="checkin_ai_greeting_prompt"] .config-hint',
-        "node => node.textContent",
-    ) == "<script>window.__xss=2</script>"
     assert (
-        page.eval_on_selector_all("#settingsView img, #settingsView script", "nodes => nodes.length")
+        page.eval_on_selector(
+            '[data-field-key="checkin_ai_greeting_prompt"] .config-item-label',
+            "node => node.textContent",
+        )
+        == '<img src="x" onerror="window.__xss=1">'
+    )
+    assert (
+        page.eval_on_selector(
+            '[data-field-key="checkin_ai_greeting_prompt"] .config-hint',
+            "node => node.textContent",
+        )
+        == "<script>window.__xss=2</script>"
+    )
+    assert (
+        page.eval_on_selector_all(
+            "#settingsView img, #settingsView script", "nodes => nodes.length"
+        )
         == 0
     )
     assert not native_dialogs, f"页面不应弹出原生对话框: {native_dialogs}"
@@ -608,10 +621,13 @@ def test_opaque_iframe_keeps_settings_working_without_storage(page):
         == "allow-scripts"
     )
     frame = next(item for item in page.frames if "/index.html" in item.url)
-    assert frame.evaluate(
-        "() => { try { localStorage.length; return 'ok'; }"
-        " catch (error) { return error.name; } }"
-    ) == "SecurityError"
+    assert (
+        frame.evaluate(
+            "() => { try { localStorage.length; return 'ok'; }"
+            " catch (error) { return error.name; } }"
+        )
+        == "SecurityError"
+    )
     assert frame.evaluate("document.styleSheets.length") == 2
     assert (
         frame.evaluate("getComputedStyle(document.body).backgroundColor")

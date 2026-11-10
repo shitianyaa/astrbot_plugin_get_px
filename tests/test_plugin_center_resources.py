@@ -76,7 +76,9 @@ def test_resource_closure_reports_missing_nested_assets(tmp_path: Path):
     assert "hero.png" in names
 
 
-def test_resource_closure_accepts_bare_relative_names_and_ignores_external(tmp_path: Path):
+def test_resource_closure_accepts_bare_relative_names_and_ignores_external(
+    tmp_path: Path,
+):
     page = tmp_path / "page"
     (page / "fonts").mkdir(parents=True)
     (page / "index.html").write_text(
@@ -85,7 +87,7 @@ def test_resource_closure_accepts_bare_relative_names_and_ignores_external(tmp_p
         "<a href='https://example.com/other.css'>外部</a>"
         "<script type='module' src='//cdn.example.com/other.mjs'></script>"
         "<img src='/root.png'>"
-        "<img src=\"data:image/png;base64,AAAA\">",
+        '<img src="data:image/png;base64,AAAA">',
         encoding="utf-8",
     )
     (page / "theme.css").write_text(
