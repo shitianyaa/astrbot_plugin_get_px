@@ -440,13 +440,19 @@ export function createSettingsPage({ bridge, notify, navigate, confirm }) {
   function buildList(field) {
     const row = element("div", "config-item");
     const head = element("div", "config-item-head");
-    head.append(element("span", "config-item-label", fieldLabel(field)));
+    const labelId = `setting-label-${field.key}`;
+    const label = element("span", "config-item-label", fieldLabel(field));
+    label.id = labelId;
+    head.append(label);
     head.append(element("span", "config-item-key", field.key));
     row.append(head);
     const options = Array.isArray(field.options) ? field.options : [];
     const legacy = legacyListValues(field);
     const current = new Set(Array.isArray(valueOf(field)) ? valueOf(field) : []);
+    // 多选项是一个整体：整组带字段名，说明与错误挂在组上而不是第一个勾选框。
     const wrap = element("div", "config-options");
+    wrap.setAttribute("role", "group");
+    wrap.setAttribute("aria-labelledby", labelId);
     const entries = [
       ...options.map((value) => ({ value, legacy: false })),
       ...legacy.map((value) => ({ value, legacy: true })),
@@ -606,9 +612,8 @@ export function createSettingsPage({ bridge, notify, navigate, confirm }) {
         describedBy.push(hint.id);
       }
       if (field.warning) row.append(element("p", "config-warning", field.warning));
-      const control = row.querySelector(
-        "input:not([type=hidden]), textarea, .dd-trigger, button",
-      );
+      const control = row.querySelector(".config-options")
+        ?? row.querySelector("input:not([type=hidden]), textarea, .dd-trigger, button");
       control?.setAttribute("aria-describedby", describedBy.join(" "));
       fieldsNode.append(row);
     }

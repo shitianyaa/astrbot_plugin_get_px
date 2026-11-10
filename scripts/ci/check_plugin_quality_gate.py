@@ -8,6 +8,7 @@ import subprocess
 import sys
 from collections.abc import Sequence
 from pathlib import Path
+from urllib.parse import urlsplit
 
 
 REPOSITORY_ROOT = Path(__file__).resolve().parents[2]
@@ -15,15 +16,19 @@ PAGE_DIR = REPOSITORY_ROOT / "pages" / "pluginCenter"
 JS_TEST_DIR = REPOSITORY_ROOT / "tests" / "js"
 
 # 相对引用：模块的静态/动态/副作用 import、HTML 的 src/href、CSS 的 url()/@import。
+# JS 只认 ./ 与 ../ 说明符，避免把裸模块名当本地文件；HTML／CSS 允许裸相对名。
 # 同时匹配 ../，交由 resource_closure 拒绝逃出页面目录。
 _JS_REFERENCE_PATTERNS = (
-    r"""from\s+['"]((?:\.{1,2}/)[^'"]+)['"]""",
-    r"""import\s*\(\s*['"]((?:\.{1,2}/)[^'"]+)['"]""",
-    r"""import\s+['"]((?:\.{1,2}/)[^'"]+)['"]""",
+    r"""from\s*['"]([^'"]+)['"]""",
+    r"""import\s*\(\s*['"]([^'"]+)['"]""",
+    r"""import\s+['"]([^'"]+)['"]""",
 )
-_HTML_REFERENCE_PATTERN = r"""(?:src|href)\s*=\s*['"]((?:\.{1,2}/)[^'"]+)['"]"""
-_CSS_URL_PATTERN = r"""url\(\s*['"]?((?:\.{1,2}/)[^'")]+)['"]?\s*\)"""
-_CSS_IMPORT_PATTERN = r"""@import\s+(?:url\(\s*)?['"]((?:\.{1,2}/)[^'"]+)['"]"""
+_HTML_REFERENCE_PATTERN = r"""(?:src|href)\s*=\s*['"]([^'"]+)['"]"""
+_CSS_URL_PATTERN = r"""url\(\s*['"]?([^'")]+)['"]?\s*\)"""
+_CSS_IMPORT_PATTERN = r"""@import\s+(?:url\(\s*)?['"]([^'"]+)['"]"""
+
+# 外部地址、协议相对、根绝对、纯锚点与 data: 都不是页面目录内的资源。
+_EXTERNAL_REFERENCE = re.compile(r"^(?:[A-Za-z][A-Za-z0-9+.-]*:|//|/|#)")
 
 
 def _run_check(command: Sequence[str]) -> None:
@@ -52,22 +57,39 @@ def _js_tests() -> list[str]:
     return [_relative(path) for path in sorted(JS_TEST_DIR.glob("*.test.mjs"))]
 
 
+def _local_reference(reference: str, *, relative_specifier: bool) -> str | None:
+    """把引用还原成页面目录内的相对路径；外部地址、根绝对与纯锚点返回 None。"""
+
+    reference = reference.strip()
+    if not reference or _EXTERNAL_REFERENCE.match(reference):
+        return None
+    path = urlsplit(reference).path
+    if not path:
+        return None
+    if relative_specifier and not path.startswith(("./", "../")):
+        return None
+    return path
+
+
 def _local_resources(path: Path) -> set[Path]:
     """页面、样式或模块直接引用的同目录相对资源；忽略 query/hash 与绝对地址。"""
 
     if path.suffix in {".js", ".mjs"}:
-        patterns = _JS_REFERENCE_PATTERNS
+        patterns, relative_specifier = _JS_REFERENCE_PATTERNS, True
     elif path.suffix == ".html":
-        patterns = (_HTML_REFERENCE_PATTERN,)
+        patterns, relative_specifier = (_HTML_REFERENCE_PATTERN,), False
     elif path.suffix == ".css":
-        patterns = (_CSS_URL_PATTERN, _CSS_IMPORT_PATTERN)
+        patterns, relative_specifier = (_CSS_URL_PATTERN, _CSS_IMPORT_PATTERN), False
     else:
         return set()
     source = path.read_text(encoding="utf-8")
     references = {ref for pattern in patterns for ref in re.findall(pattern, source)}
-    return {
-        (path.parent / ref.split("?")[0].split("#")[0]).resolve() for ref in references
-    }
+    resolved = set()
+    for reference in references:
+        local = _local_reference(reference, relative_specifier=relative_specifier)
+        if local:
+            resolved.add((path.parent / local).resolve())
+    return resolved
 
 
 def resource_closure(entry: Path, root: Path | None = None) -> set[Path]:

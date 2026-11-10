@@ -76,6 +76,47 @@ def test_resource_closure_reports_missing_nested_assets(tmp_path: Path):
     assert "hero.png" in names
 
 
+def test_resource_closure_accepts_bare_relative_names_and_ignores_external(tmp_path: Path):
+    page = tmp_path / "page"
+    (page / "fonts").mkdir(parents=True)
+    (page / "index.html").write_text(
+        "<link rel='stylesheet' href='theme.css'>"
+        "<a href='#main'>跳转</a>"
+        "<a href='https://example.com/other.css'>外部</a>"
+        "<script type='module' src='//cdn.example.com/other.mjs'></script>"
+        "<img src='/root.png'>"
+        "<img src=\"data:image/png;base64,AAAA\">",
+        encoding="utf-8",
+    )
+    (page / "theme.css").write_text(
+        "@import 'base.css';\n"
+        "@font-face { src: url(fonts/a.woff2); }\n"
+        ".hero { background: url('/root.png'); }\n",
+        encoding="utf-8",
+    )
+    (page / "base.css").write_text(".a { color: #000; }\n", encoding="utf-8")
+    (page / "fonts" / "a.woff2").write_bytes(b"woff2")
+
+    names = {path.name for path in gate.resource_closure(page / "index.html", page)}
+    assert names == {"index.html", "theme.css", "base.css", "a.woff2"}
+
+
+def test_module_bare_specifiers_are_not_local_files(tmp_path: Path):
+    page = tmp_path / "page"
+    page.mkdir()
+    (page / "index.html").write_text(
+        '<script type="module" src="./main.mjs"></script>', encoding="utf-8"
+    )
+    (page / "main.mjs").write_text(
+        "import quart from'quart';\nimport { a } from'./a.mjs';\n",
+        encoding="utf-8",
+    )
+    (page / "a.mjs").write_text("export const a = 1;\n", encoding="utf-8")
+
+    names = {path.name for path in gate.resource_closure(page / "index.html", page)}
+    assert names == {"index.html", "main.mjs", "a.mjs"}
+
+
 def test_resource_closure_rejects_paths_outside_page_directory(tmp_path: Path):
     page = tmp_path / "page"
     page.mkdir()

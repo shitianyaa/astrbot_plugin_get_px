@@ -162,7 +162,8 @@ def settings_snapshot(plugin: Any) -> dict[str, Any]:
                         # 声明选项或该键当前已存值，不把未知项扩成新选项。
                         descriptor["value"] = (
                             [item for item in value if isinstance(item, str)]
-                            if isinstance(value, list) else []
+                            if isinstance(value, list)
+                            else []
                         )
                     else:
                         # 没有可选清单的列表无法安全编辑，避免保存时被空值覆盖。
@@ -227,9 +228,7 @@ def _validate_value(
     slider = spec.get("slider")
     if slider and kind in {"int", "float"}:
         if value < slider["min"] or value > slider["max"]:
-            raise ValueError(
-                f"{label}需在 {slider['min']} 至 {slider['max']} 之间"
-            )
+            raise ValueError(f"{label}需在 {slider['min']} 至 {slider['max']} 之间")
         # 与页面同语义：步长相对 slider.min，容浮点误差；旧值未改动不会走到这里。
         step = slider.get("step")
         if isinstance(step, (int, float)) and not isinstance(step, bool) and step:
@@ -334,7 +333,9 @@ def save_settings(plugin: Any, patch: Any, clear_secrets: Any = ()) -> None:
                 if present:
                     if isinstance(original_value, list) and isinstance(old_value, list):
                         original_value[:] = old_value
-                    elif isinstance(original_value, dict) and isinstance(old_value, dict):
+                    elif isinstance(original_value, dict) and isinstance(
+                        old_value, dict
+                    ):
                         original_value.clear()
                         original_value.update(old_value)
                     group[key] = original_value

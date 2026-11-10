@@ -98,7 +98,7 @@ SETTINGS = {
                     "key": "checkin_hitokoto_categories",
                     "label": "一言类型",
                     "type": "list",
-                    "hint": "",
+                    "hint": "测试用多选说明",
                     "options": ["全部", "动画", "文学"],
                     "slider": None,
                     "default": ["全部"],
@@ -179,8 +179,25 @@ class _QuietHandler(http.server.SimpleHTTPRequestHandler):
     def log_message(self, *_args) -> None:  # noqa: D102 - 静默测试服务器日志
         pass
 
+    def do_GET(self) -> None:  # noqa: D102 - 额外提供不透明源沙箱包装页
+        if self.path.split("?")[0] == "/sandbox.html":
+            body = (
+                '<!doctype html><meta charset="utf-8"><title>sandbox</title>'
+                '<iframe sandbox="allow-scripts" src="./index.html"'
+                ' width="1200" height="800"></iframe>'
+            ).encode("utf-8")
+            self.send_response(200)
+            self.send_header("Content-Type", "text/html; charset=utf-8")
+            self.send_header("Content-Length", str(len(body)))
+            self.end_headers()
+            self.wfile.write(body)
+            return
+        super().do_GET()
+
     def end_headers(self) -> None:  # noqa: D102 - 页面资源不缓存
         self.send_header("Cache-Control", "no-store")
+        # 不透明源沙箱里的模块脚本需要 CORS 头，与真实宿主静态资源一致。
+        self.send_header("Access-Control-Allow-Origin", "*")
         super().end_headers()
 
 
@@ -510,3 +527,116 @@ def test_skip_link_focuses_main_content(page):
     page.locator(".skip-link").focus()
     page.keyboard.press("Enter")
     assert page.evaluate("document.activeElement.id") == "mainContent"
+
+
+def test_list_options_expose_group_name_and_keep_legacy_values(page):
+    _open_checkin_group(page)
+    assert page.get_by_role("group", name="一言类型").count() == 1
+    assert page.get_by_role("checkbox", name="全部").count() == 1
+    assert page.get_by_role("checkbox", name="动画").count() == 1
+    assert page.get_by_role("checkbox", name="旧分类（已保存的旧值）").count() == 1
+    described = page.eval_on_selector(
+        '[data-field-key="checkin_hitokoto_categories"] .config-options',
+        "node => node.getAttribute('aria-describedby')",
+    ).split()
+    assert described[0] == "setting-error-checkin_hitokoto_categories"
+    assert "setting-hint-checkin_hitokoto_categories" in described
+    assert page.text_content("#setting-hint-checkin_hitokoto_categories") == "测试用多选说明"
+    assert (
+        page.eval_on_selector(
+            "#setting-checkin_hitokoto_categories-0",
+            "node => node.getAttribute('aria-describedby')",
+        )
+        is None
+    )
+
+    page.check("#setting-checkin_hitokoto_categories-1")
+    page.click("#settingsSaveBtn")
+    page.wait_for_function(
+        "document.querySelector('#settingsStatus').textContent.includes('设置已保存')"
+    )
+    assert page.evaluate(
+        "window.__posts.at(-1).body.groups.checkin_basic.checkin_hitokoto_categories"
+    ) == ["全部", "动画", "旧分类"]
+
+
+def test_field_text_is_rendered_as_text_without_native_dialogs(page):
+    native_dialogs: list[str] = []
+    page.on(
+        "dialog",
+        lambda dialog: (native_dialogs.append(dialog.message), dialog.dismiss()),
+    )
+    _open_checkin_group(page)
+    page.fill("#setting-checkin_ai_greeting_prompt", "草稿")
+    payload = json.loads(json.dumps(SETTINGS))
+    payload["groups"][1]["fields"][1]["label"] = '<img src="x" onerror="window.__xss=1">'
+    payload["groups"][1]["fields"][1]["hint"] = "<script>window.__xss=2</script>"
+    page.evaluate(
+        "payload => { window.__getHandlers['settings'] = () => Promise.resolve(payload); }",
+        payload,
+    )
+    page.click("#settingsReloadBtn")
+    page.wait_for_selector("#confirmDialog[open]")
+    page.click("#dialogConfirm")
+    page.wait_for_function(
+        "() => document.querySelector("
+        "'[data-field-key=\"checkin_ai_greeting_prompt\"] .config-item-label'"
+        ")?.textContent.includes('onerror')"
+    )
+
+    assert page.evaluate("window.__xss") is None
+    assert page.eval_on_selector(
+        '[data-field-key="checkin_ai_greeting_prompt"] .config-item-label',
+        "node => node.textContent",
+    ) == '<img src="x" onerror="window.__xss=1">'
+    assert page.eval_on_selector(
+        '[data-field-key="checkin_ai_greeting_prompt"] .config-hint',
+        "node => node.textContent",
+    ) == "<script>window.__xss=2</script>"
+    assert (
+        page.eval_on_selector_all("#settingsView img, #settingsView script", "nodes => nodes.length")
+        == 0
+    )
+    assert not native_dialogs, f"页面不应弹出原生对话框: {native_dialogs}"
+
+
+def test_opaque_iframe_keeps_settings_working_without_storage(page):
+    base = page.url.rsplit("/", 1)[0]
+    page.goto(f"{base}/sandbox.html", wait_until="networkidle")
+    assert (
+        page.evaluate("document.querySelector('iframe').getAttribute('sandbox')")
+        == "allow-scripts"
+    )
+    frame = next(item for item in page.frames if "/index.html" in item.url)
+    assert frame.evaluate(
+        "() => { try { localStorage.length; return 'ok'; }"
+        " catch (error) { return error.name; } }"
+    ) == "SecurityError"
+    assert frame.evaluate("document.styleSheets.length") == 2
+    assert (
+        frame.evaluate("getComputedStyle(document.body).backgroundColor")
+        != "rgba(0, 0, 0, 0)"
+    )
+
+    frame.locator('.nav-tabs [data-view="settings"]').click()
+    frame.locator("#settingsGroups .config-item").first.wait_for()
+    assert frame.locator("#settingsGroups .config-item").count() == 4
+    frame.locator('#settingsNav [data-group="checkin_basic"]').click()
+    frame.locator("#setting-checkin_ai_greeting_prompt").wait_for()
+    assert frame.locator("#settingsGroups .config-item").count() == 3
+
+
+@pytest.mark.parametrize(
+    ("token", "accepted"),
+    [
+        ("application/json", True),
+        (".json", True),
+        ("image/png", False),
+        ("text/plain", False),
+    ],
+)
+def test_backup_file_input_only_accepts_json(page, token, accepted):
+    tokens = page.eval_on_selector(
+        "#importFile", "node => node.accept.split(',').map((item) => item.trim())"
+    )
+    assert (token in tokens) is accepted
