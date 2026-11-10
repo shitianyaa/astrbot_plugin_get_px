@@ -233,6 +233,8 @@ export function createSettingsPage({ bridge, notify, navigate, confirm }) {
       saved,
       error: errorNotice,
     });
+    saveButton.setAttribute("aria-busy", String(saving));
+    saveButton.textContent = saving ? "正在保存…" : "保存设置";
     status.dataset.state = saving
       ? "busy"
       : errorNotice || invalid.size || count
@@ -541,7 +543,8 @@ export function createSettingsPage({ bridge, notify, navigate, confirm }) {
   }
 
   function buildText(field) {
-    const row = element("div", "config-item");
+    const isPrompt = field.key === "checkin_ai_greeting_prompt";
+    const row = element("div", isPrompt ? "config-item config-item-long" : "config-item");
     const head = element("div", "config-item-head");
     const labelId = `setting-label-${field.key}`;
     const label = element("span", "config-item-label", fieldLabel(field));
@@ -615,6 +618,16 @@ export function createSettingsPage({ bridge, notify, navigate, confirm }) {
       const control = row.querySelector(".config-options")
         ?? row.querySelector("input:not([type=hidden]), textarea, .dd-trigger, button");
       control?.setAttribute("aria-describedby", describedBy.join(" "));
+      const meta = element("div", "config-item-meta");
+      const inputs = element("div", "config-item-control");
+      for (const child of [...row.children]) {
+        if (child.classList.contains("config-item-head") || child.classList.contains("config-hint")) {
+          meta.append(child);
+        } else {
+          inputs.append(child);
+        }
+      }
+      row.append(meta, inputs);
       fieldsNode.append(row);
     }
     for (const key of invalid.keys()) {

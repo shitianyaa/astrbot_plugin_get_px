@@ -688,6 +688,7 @@ function switchView(name) {
     view.classList.toggle("active", active);
     view.hidden = !active;
   });
+  document.documentElement.dataset.view = name;
   history.replaceState(null, "", `#${name}`);
   if (name === "members" && !state.loaded.members) {
     loadMembers({ reset: true }).catch((error) => {
@@ -729,6 +730,9 @@ function applyTheme(isDark) {
     ? isDark
     : Boolean(window.matchMedia?.("(prefers-color-scheme: dark)").matches);
   document.documentElement.setAttribute("data-theme", dark ? "dark" : "light");
+  document.querySelector('meta[name="theme-color"]')?.setAttribute(
+    "content", dark ? "#171c2b" : "#f5f7fc",
+  );
 }
 
 function followHostTheme() {
@@ -941,7 +945,26 @@ function bindEvents() {
   els.refreshCacheBtn?.addEventListener("click", loadCacheStorage);
 }
 
+function followStickyHeights() {
+  const root = document.documentElement;
+  const shell = document.querySelector(".nav-shell");
+  const toolbar = document.querySelector(".config-actionbar");
+  const observer = new ResizeObserver((entries) => {
+    for (const entry of entries) {
+      const height = entry.borderBoxSize?.[0]?.blockSize ?? entry.target.getBoundingClientRect().height;
+      if (!height) continue;
+      root.style.setProperty(
+        entry.target === shell ? "--shell-height" : "--config-toolbar-height",
+        `${Math.ceil(height)}px`,
+      );
+    }
+  });
+  observer.observe(shell);
+  observer.observe(toolbar);
+}
+
 async function start() {
+  followStickyHeights();
   if (!bridge) {
     showToast("AstrBot 页面桥接不可用，请在 AstrBot 内置环境中打开", "error");
     return;

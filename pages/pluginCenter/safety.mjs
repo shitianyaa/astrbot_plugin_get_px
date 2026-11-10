@@ -113,9 +113,16 @@ export function mountSafety({ apiGet, apiPost, escapeHtml, showToast, confirmAct
     catch (error) { $("termError").textContent = error.message; }
     finally { button.disabled = false; }
   });
-  function setBusy(value) {
+  function setBusy(value, action = "save") {
     busy = value;
+    form.setAttribute("aria-busy", String(value));
     form.querySelectorAll("input,textarea,button").forEach(control => { control.disabled = value; });
+    const save = form.querySelector('button[type="submit"]');
+    const remove = $("safetyGroupDelete");
+    save.textContent = value && action === "save" ? "正在保存…" : "保存分组";
+    save.setAttribute("aria-busy", String(value && action === "save"));
+    remove.textContent = value && action === "remove" ? "正在删除…" : "删除分组";
+    remove.setAttribute("aria-busy", String(value && action === "remove"));
   }
   form.addEventListener("submit", async event => {
     event.preventDefault();
@@ -124,18 +131,38 @@ export function mountSafety({ apiGet, apiPost, escapeHtml, showToast, confirmAct
       const payload = validateGroupDraft(readDraft(), settings.safety_groups);
       if (!payload.group_id) delete payload.group_id;
       setBusy(true);
-      await apiPost("content-safety/groups/save", payload);
-      baseline = createGroupDraft(payload);
+      const result = await apiPost("content-safety/groups/save", payload);
+      const savedGroup = result.group;
+      if (savedGroup) {
+        settings.safety_groups = settings.safety_groups.filter(
+          group => group.group_id !== savedGroup.group_id,
+        ).concat(savedGroup);
+        baseline = createGroupDraft(savedGroup);
+        onChange(settings);
+        render();
+      }
       dialog.close();
-      await reload();
       showToast("安全分组已保存");
+      // 当前接口返回规范化分组，无需再等一轮 GET；旧响应才补读。
+      if (!savedGroup) {
+        try { await reload(); }
+        catch { showToast("安全分组已保存，列表刷新失败，请刷新数据", "error"); }
+      }
     } catch (error) { if (dialog.open) $("safetyGroupError").textContent = error.message; else showToast(error.message, "error"); }
     finally { setBusy(false); }
   });
   $("safetyGroupDelete").addEventListener("click", async () => {
     if (busy || !await confirmAction("删除安全分组", "该组会话将恢复全局规则并关闭 R18，确认删除吗？")) return;
-    setBusy(true);
-    try { await apiPost("content-safety/groups/remove", { group_id: draft.group_id }); dialog.close(); await reload(); showToast("安全分组已删除"); }
+    setBusy(true, "remove");
+    try {
+      const groupId = draft.group_id;
+      await apiPost("content-safety/groups/remove", { group_id: groupId });
+      settings.safety_groups = settings.safety_groups.filter(group => group.group_id !== groupId);
+      onChange(settings);
+      render();
+      dialog.close();
+      showToast("安全分组已删除");
+    }
     catch (error) { if (dialog.open) $("safetyGroupError").textContent = error.message; else showToast(error.message, "error"); }
     finally { setBusy(false); }
   });

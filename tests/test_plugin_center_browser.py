@@ -656,3 +656,58 @@ def test_backup_file_input_only_accepts_json(page, token, accepted):
         "#importFile", "node => node.accept.split(',').map((item) => item.trim())"
     )
     assert (token in tokens) is accepted
+
+
+def test_settings_heading_and_group_remain_visible_while_scrolling(page):
+    page.evaluate("""() => {
+      document.querySelector('#settingsGroups').style.minHeight = '1500px';
+      window.scrollTo(0, 700);
+    }""")
+    page.wait_for_timeout(100)
+    for selector in ("#settingsTitle", "#settingsGroupTitle", "#settingsSaveBtn"):
+        assert page.eval_on_selector(
+            selector,
+            "element => { const r = element.getBoundingClientRect(); return r.top >= 0 && r.bottom <= innerHeight; }",
+        )
+    assert page.eval_on_selector(
+        "#settingsTitle",
+        "element => { const r=element.getBoundingClientRect(); return r.top >= document.querySelector('.nav-shell').getBoundingClientRect().bottom; }",
+    )
+
+
+def test_group_save_uses_authoritative_response_without_waiting_for_reload(page):
+    page.click('.nav-tabs [data-view="policies"]')
+    page.click('#policyList [data-edit-group="g1"]')
+    page.fill("#safetyGroupName", "已保存名称")
+    page.evaluate("""() => {
+      window.__getHandlers['content-safety'] = () => { throw new Error('unexpected reload'); };
+      window.__postHandlers['content-safety/groups/save'] = body => new Promise(resolve => {
+        window.__resolveGroupSave = () => resolve({ success: true, group: { ...body, name: '已保存名称' } });
+      });
+    }""")
+    page.locator('#safetyGroupForm button[type="submit"]').click()
+    assert page.get_attribute("#safetyGroupForm", "aria-busy") == "true"
+    assert page.locator("#safetyGroupName").is_disabled()
+    page.evaluate("window.__resolveGroupSave()")
+    page.wait_for_function("!document.querySelector('#safetyGroupDialog').open")
+    assert (
+        page.locator('#policyList [data-edit-group="g1"] strong').inner_text()
+        == "已保存名称"
+    )
+    assert "已保存" in page.locator("#toast").inner_text()
+
+
+def test_group_save_failure_keeps_editable_draft(page):
+    page.click('.nav-tabs [data-view="policies"]')
+    page.click('#policyList [data-edit-group="g1"]')
+    page.fill("#safetyGroupName", "未提交的草稿")
+    page.evaluate("""() => {
+      window.__postHandlers['content-safety/groups/save'] = () => Promise.resolve({ success: false, error: '存储不可用' });
+    }""")
+    page.locator('#safetyGroupForm button[type="submit"]').click()
+    page.wait_for_function(
+        "document.querySelector('#safetyGroupError').textContent.length > 0"
+    )
+    assert page.locator("#safetyGroupDialog").is_visible()
+    assert page.input_value("#safetyGroupName") == "未提交的草稿"
+    assert page.locator("#safetyGroupName").is_enabled()

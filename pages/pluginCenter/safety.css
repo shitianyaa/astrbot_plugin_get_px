@@ -188,7 +188,7 @@
   margin-right: auto;
   border-color: transparent;
   background: transparent;
-  color: var(--danger);
+  color: var(--danger-solid);
 }
 
 .safety-group-dialog .dialog-actions .danger:hover {

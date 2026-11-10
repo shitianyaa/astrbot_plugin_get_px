@@ -78,8 +78,19 @@ export function createSelect({
   if (describedBy) trigger.setAttribute("aria-describedby", describedBy);
 
   const labelNode = element("span", "dd-label");
-  const caret = element("span", "dd-caret", "▾");
+  const caret = document.createElementNS("http://www.w3.org/2000/svg", "svg");
+  caret.classList.add("dd-caret");
+  caret.setAttribute("viewBox", "0 0 24 24");
   caret.setAttribute("aria-hidden", "true");
+  caret.setAttribute("focusable", "false");
+  const chevron = document.createElementNS("http://www.w3.org/2000/svg", "path");
+  chevron.setAttribute("d", "m6 9 6 6 6-6");
+  chevron.setAttribute("fill", "none");
+  chevron.setAttribute("stroke", "currentColor");
+  chevron.setAttribute("stroke-width", "2");
+  chevron.setAttribute("stroke-linecap", "round");
+  chevron.setAttribute("stroke-linejoin", "round");
+  caret.append(chevron);
   trigger.append(labelNode, caret);
 
   const list = element("div", "dd-list");
@@ -273,7 +284,7 @@ export function createSelect({
     }
   });
 
-  trigger.addEventListener("blur", () => {
+  root.addEventListener("focusout", () => {
     // 焦点从触发按钮直接移到页面其它控件（如 Shift+Tab）时收起。
     setTimeout(() => {
       if (expanded && !root.contains(document.activeElement)) close(false);
