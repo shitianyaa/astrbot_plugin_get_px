@@ -39,6 +39,16 @@ SETTINGS = {
                     "value": 3,
                 },
                 {
+                    "key": "p_coin_cost",
+                    "label": "单次发图金币消耗",
+                    "type": "int",
+                    "hint": "测试用步长项",
+                    "options": [],
+                    "slider": {"min": 0, "max": 200, "step": 5},
+                    "default": 20,
+                    "value": 20,
+                },
+                {
                     "key": "preferred_image_source",
                     "label": "首选图片源",
                     "type": "string",
@@ -367,3 +377,136 @@ def test_background_refresh_keeps_safety_group_dialog_draft(page):
     )
     assert page.eval_on_selector("#safetyGroupDialog", "dialog => dialog.open")
     assert page.input_value("#safetyGroupName") == "草稿名称"
+
+
+def test_secret_clear_stays_disabled_across_rerender(page):
+    page.click('#settingsNav [data-group="pixiv_source"]')
+    page.wait_for_selector('[name="clear-pixiv_refresh_token"]')
+    page.check('[name="clear-pixiv_refresh_token"]')
+    assert _disabled(page, "#setting-pixiv_refresh_token")
+
+    page.click('#settingsNav [data-group="checkin_basic"]')
+    page.wait_for_selector("#setting-checkin_ai_greeting_prompt")
+    page.click('#settingsNav [data-group="pixiv_source"]')
+    page.wait_for_selector('[name="clear-pixiv_refresh_token"]')
+    assert page.is_checked('[name="clear-pixiv_refresh_token"]')
+    assert _disabled(page, "#setting-pixiv_refresh_token")
+
+    page.fill("#settingsSearch", "留空")
+    page.wait_for_selector('[name="clear-pixiv_refresh_token"]')
+    assert page.is_checked('[name="clear-pixiv_refresh_token"]')
+    assert _disabled(page, "#setting-pixiv_refresh_token")
+    page.fill("#settingsSearch", "")
+
+    page.uncheck('[name="clear-pixiv_refresh_token"]')
+    assert not _disabled(page, "#setting-pixiv_refresh_token")
+
+
+def test_settings_controls_expose_field_accessible_names(page):
+    page.click('#settingsNav [data-group="pixiv_source"]')
+    page.wait_for_selector("#setting-max_count")
+    assert page.get_by_role("spinbutton", name="单次最大数量").count() == 1
+    assert page.get_by_label("Pixiv refresh token").count() == 1
+    assert page.eval_on_selector(
+        "#setting-max_count",
+        "node => node.getAttribute('aria-describedby')",
+    ).startswith("setting-error-max_count")
+    assert page.get_by_role("checkbox", name="清除已保存的令牌").count() == 1
+
+    page.click('#settingsNav [data-group="checkin_basic"]')
+    page.wait_for_selector("#setting-checkin_enabled")
+    assert page.get_by_role("checkbox", name="签到总开关").count() == 1
+    assert page.get_by_label("AI 问候提示词").count() == 1
+    assert (
+        page.eval_on_selector(
+            "#settingsGroupPicker .dd-trigger",
+            "node => node.getAttribute('aria-labelledby')",
+        )
+        == "settingsGroupPickerLabel"
+    )
+
+
+def test_invalid_number_counts_as_unsaved_edit_for_discard_and_reload(page):
+    page.click('#settingsNav [data-group="pixiv_source"]')
+    page.wait_for_selector("#setting-max_count")
+    page.fill("#setting-max_count", "")
+    page.wait_for_function(
+        "document.querySelector('#settingsStatus').textContent.includes('需要修正')"
+    )
+    assert _disabled(page, "#settingsSaveBtn")
+
+    page.click("#settingsDiscardBtn")
+    page.wait_for_selector("#confirmDialog[open]")
+    page.click('#confirmDialog button[value="cancel"]')
+    page.wait_for_function("!document.querySelector('#confirmDialog').open")
+    assert page.input_value("#setting-max_count") == ""
+
+    page.click("#settingsDiscardBtn")
+    page.wait_for_selector("#confirmDialog[open]")
+    page.click("#dialogConfirm")
+    page.wait_for_function("document.querySelector('#setting-max_count').value === '3'")
+    assert page.get_attribute("#setting-max_count", "aria-invalid") is None
+
+    page.fill("#setting-max_count", "")
+    page.wait_for_function(
+        "document.querySelector('#settingsStatus').textContent.includes('需要修正')"
+    )
+    page.click("#settingsReloadBtn")
+    page.wait_for_selector("#confirmDialog[open]")
+    page.click('#confirmDialog button[value="cancel"]')
+    page.wait_for_function("!document.querySelector('#confirmDialog').open")
+    assert page.input_value("#setting-max_count") == ""
+
+
+def test_number_step_error_blocks_save_with_inline_message(page):
+    page.click('#settingsNav [data-group="pixiv_source"]')
+    page.wait_for_selector("#setting-p_coin_cost")
+    page.fill("#setting-p_coin_cost", "22")
+    page.wait_for_function(
+        "document.querySelector('#setting-p_coin_cost').getAttribute('aria-invalid') === 'true'"
+    )
+    assert "5" in page.text_content('[data-field-key="p_coin_cost"] [data-field-error]')
+    assert _disabled(page, "#settingsSaveBtn")
+
+    page.fill("#setting-p_coin_cost", "25")
+    page.wait_for_function(
+        "document.querySelector('#setting-p_coin_cost').getAttribute('aria-invalid') === null"
+    )
+    assert not _disabled(page, "#settingsSaveBtn")
+    page.click("#settingsSaveBtn")
+    page.wait_for_function(
+        "document.querySelector('#settingsStatus').textContent.includes('设置已保存')"
+    )
+    assert (
+        page.evaluate("window.__posts.at(-1).body.groups.pixiv_source.p_coin_cost")
+        == 25
+    )
+
+
+def test_tabs_use_roving_focus_and_arrow_keys(page):
+    page.focus("#tab-ranking")
+    page.keyboard.press("ArrowRight")
+    assert page.evaluate("document.activeElement.id") == "tab-members"
+    assert page.get_attribute("#tab-members", "aria-selected") == "true"
+    assert page.get_attribute("#tab-members", "tabindex") == "0"
+    assert page.get_attribute("#tab-ranking", "tabindex") == "-1"
+    assert page.get_attribute("#tab-members", "aria-controls") == "membersView"
+    assert page.eval_on_selector("#membersView", "node => node.hidden === false")
+    assert page.eval_on_selector("#rankingView", "node => node.hidden === true")
+
+    page.keyboard.press("End")
+    assert page.evaluate("document.activeElement.id") == "tab-settings"
+    page.keyboard.press("Home")
+    assert page.evaluate("document.activeElement.id") == "tab-ranking"
+    page.keyboard.press("ArrowLeft")
+    assert page.evaluate("document.activeElement.id") == "tab-settings"
+
+    page.click("#tab-settings")
+    assert page.get_attribute("#tab-settings", "aria-selected") == "true"
+    assert page.eval_on_selector("#settingsView", "node => node.hidden === false")
+
+
+def test_skip_link_focuses_main_content(page):
+    page.locator(".skip-link").focus()
+    page.keyboard.press("Enter")
+    assert page.evaluate("document.activeElement.id") == "mainContent"

@@ -30,7 +30,7 @@
 
 ## PR 快速 CI
 
-PR 快速 CI（`AstrBot Plugin Quality Gate`，`.github/workflows/plugin-quality-gate.yml`）在 Ubuntu + Python 3.12 下安装最新正式版 AstrBot，通过 `scripts/ci/check_plugin_quality_gate.py` 执行 Python 编译检查、JSON schema 检查、前端 JavaScript/ES module 语法、分组草稿 JS 测试和全量 `python -m pytest -v tests`；同一个检查脚本也可以在本地执行。门禁会枚举 `pages/pluginCenter` 下全部 `.js`／`.mjs` 模块和 `tests/js/*.test.mjs`，新增文件无需再改门禁；同时从 `index.html` 递归解析 HTML／CSS／模块相对资源，任一层缺失即失败。生命周期检查脚本只服务于独立的 `AstrBot Plugin Lifecycle` CI。
+PR 快速 CI（`AstrBot Plugin Quality Gate`，`.github/workflows/plugin-quality-gate.yml`）在 Ubuntu + Python 3.12 下安装最新正式版 AstrBot，通过 `scripts/ci/check_plugin_quality_gate.py` 执行 Python 编译检查、JSON schema 检查、前端 JavaScript/ES module 语法、分组草稿 JS 测试和全量 `python -m pytest -v tests`；同一个检查脚本也可以在本地执行。门禁会枚举 `pages/pluginCenter` 下全部 `.js`／`.mjs` 模块和 `tests/js/*.test.mjs`，新增文件无需再改门禁；同时从 `index.html` 递归解析相对资源：HTML 的 `src`／`href`、CSS 的 `url()`／`@import`、模块的静态／动态／副作用 `import`（单双引号均可），忽略 query 与 hash，任一层缺失或逃出页面目录即失败。`tests/test_plugin_center_resources.py` 直接复用门禁的 `resource_closure()`，只校验资源与桥接端点契约，不锁定文案、类名或页签顺序。生命周期检查脚本只服务于独立的 `AstrBot Plugin Lifecycle` CI。
 
 本地等价质量门禁（在已安装项目依赖、`pytest`、`pytest-asyncio` 和 Node.js 的环境中执行）：
 
@@ -342,4 +342,4 @@ python -m pytest -q tests/test_checkin_cache.py tests/test_checkin_calendar.py t
 
 ### 管理中心浏览器回归（可选依赖）
 
-`tests/test_plugin_center_browser.py` 使用本机 Python Playwright 驱动真实 Chromium，通过临时本地 HTTP 提供页面，并用合成 bridge 数据验证：保存期间输入框、开关、下拉、搜索、分组导航、手机组选择、清除令牌、放弃与重新载入全部冻结；成功与失败都恢复控件原有 disabled 状态（勾选清除令牌后密码框仍禁用）；保存失败保留草稿；主页刷新不重载设置草稿；后台刷新不关闭安全分组弹窗或丢弃其中草稿。模块在缺少 Playwright 时 `importorskip`，CI 不安装该可选依赖，因此本地通过不等于 CI 执行；测试不访问生产 AstrBot、QQ、Pixiv 或真实用户配置。
+`tests/test_plugin_center_browser.py` 使用本机 Python Playwright 驱动真实 Chromium，通过临时本地 HTTP 提供页面，并用合成 bridge 数据验证：保存期间输入框、开关、下拉、搜索、分组导航、手机组选择、清除令牌、放弃与重新载入全部冻结；成功与失败都恢复控件原有 disabled 状态（勾选清除令牌后密码框仍禁用，切组与搜索重渲后保持）；保存失败保留草稿；主页刷新不重载设置草稿；后台刷新不关闭安全分组弹窗或丢弃其中草稿；字段标签／开关名称与 `aria-describedby` 可被真实可访问名查询命中；无效数字同样触发放弃与重新载入确认，取消时保留草稿、确认后恢复已保存值；数字步长不合规时字段内提示并禁用保存；页签方向键／Home／End 自动激活与 roving tabindex；跳转链接把焦点移到主内容。模块在缺少 Playwright 时 `importorskip`，CI 不安装该可选依赖，因此本地通过不等于 CI 执行；测试不访问生产 AstrBot、QQ、Pixiv 或真实用户配置。

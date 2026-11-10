@@ -230,6 +230,13 @@ def _validate_value(
             raise ValueError(
                 f"{label}需在 {slider['min']} 至 {slider['max']} 之间"
             )
+        # 与页面同语义：步长相对 slider.min，容浮点误差；旧值未改动不会走到这里。
+        step = slider.get("step")
+        if isinstance(step, (int, float)) and not isinstance(step, bool) and step:
+            base = slider.get("min", 0)
+            ratio = (value - base) / step
+            if not math.isclose(ratio, round(ratio), rel_tol=1e-9, abs_tol=1e-9):
+                raise ValueError(f"{label}需为 {base} 起每 {step} 的倍数")
     return value
 
 

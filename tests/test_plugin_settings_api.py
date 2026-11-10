@@ -192,6 +192,33 @@ def test_slider_bounds_are_inclusive_and_rejected_patches_change_nothing():
     assert target.config["content_dedupe"]["dedupe_days"] == 7
 
 
+def test_step_is_validated_relative_to_min_and_legacy_values_survive():
+    target = plugin(Config(pixiv_source={"p_coin_cost": 20}, unrelated={"keep": 1}))
+    before = deepcopy(target.config)
+    with pytest.raises(ValueError):
+        save_settings(target, {"pixiv_source": {"p_coin_cost": 22}})
+    assert target.config == before
+    assert target.config.saves == 0
+
+    save_settings(target, {"pixiv_source": {"p_coin_cost": 25}})
+    save_settings(target, {"pixiv_source": {"p_coin_cost": 20}})
+    assert target.config["pixiv_source"]["p_coin_cost"] == 20
+
+    save_settings(target, {"pixiv_source": {"auto_downgrade_original_mb": 10.5}})
+    assert target.config["pixiv_source"]["auto_downgrade_original_mb"] == 10.5
+    before = deepcopy(target.config)
+    with pytest.raises(ValueError):
+        save_settings(target, {"pixiv_source": {"auto_downgrade_original_mb": 10.25}})
+    assert target.config == before
+
+    # 已存的不合步长旧值不因其它字段保存而被改写或强制修正。
+    legacy = plugin(Config(pixiv_source={"p_coin_cost": 22}, unrelated={"keep": 1}))
+    assert _field(settings_snapshot(legacy), "p_coin_cost")["value"] == 22
+    save_settings(legacy, {"pixiv_source": {"max_count": 6}})
+    assert legacy.config["pixiv_source"]["p_coin_cost"] == 22
+    assert legacy.config["pixiv_source"]["max_count"] == 6
+
+
 SCHEMA_PATH = Path(__file__).parents[1] / "_conf_schema.json"
 
 
@@ -416,3 +443,32 @@ async def test_settings_update_rejects_delegated_hidden_and_blank_secret():
     assert cleared.status_code == 200
     assert (await cleared.get_json())["reload_required"] is True
     assert target.config["pixiv_source"]["pixiv_refresh_token"] == ""
+
+
+@pytest.mark.asyncio
+async def test_settings_update_rejects_step_mismatch_without_mutating():
+    target = plugin(Config(pixiv_source={"p_coin_cost": 20}))
+    target._cfg_str = lambda key, default="": default
+    target.checkin_store = None
+    target.image_index = None
+    api = PluginWebApi(
+        target, plugin_name="x", log_prefix="[x]", internal_error_message="internal"
+    )
+    app = Quart(__name__)
+    app.add_url_rule(
+        "/settings/update", view_func=api.settings_update, methods=["POST"]
+    )
+    client = app.test_client()
+
+    rejected = await client.post(
+        "/settings/update", json={"groups": {"pixiv_source": {"p_coin_cost": 22}}}
+    )
+    assert rejected.status_code == 400
+    assert target.config.saves == 0
+    assert target.config["pixiv_source"]["p_coin_cost"] == 20
+
+    accepted = await client.post(
+        "/settings/update", json={"groups": {"pixiv_source": {"p_coin_cost": 25}}}
+    )
+    assert accepted.status_code == 200
+    assert target.config["pixiv_source"]["p_coin_cost"] == 25

@@ -165,9 +165,25 @@ export function createSelect({
     expanded = true;
     root.classList.add("open");
     trigger.setAttribute("aria-expanded", "true");
+    placeList();
     document.addEventListener("pointerdown", onDocumentPointerDown, true);
     openSelect = api;
     focusSelected();
+  }
+
+  // 矮屏/弹窗内按可用空间选向上或向下开，并把高度限制在可见区域内，
+  // 避免选项被视口或 dialog 的滚动容器裁切。
+  function placeList() {
+    const triggerRect = trigger.getBoundingClientRect();
+    const dialogRect = root.closest("dialog")?.getBoundingClientRect();
+    const topEdge = dialogRect ? dialogRect.top : 0;
+    const bottomEdge = dialogRect ? dialogRect.bottom : window.innerHeight;
+    const above = triggerRect.top - topEdge - 8;
+    const below = bottomEdge - triggerRect.bottom - 8;
+    const wanted = Math.min(list.scrollHeight, 240);
+    const up = below < wanted && above > below;
+    root.classList.toggle("dd-up", up);
+    list.style.maxHeight = `${Math.max(72, Math.min(240, up ? above : below))}px`;
   }
 
   function close(restoreFocus = false) {
@@ -302,6 +318,7 @@ export function createSwitch({
   id = "",
   name = "",
   checked = false,
+  labelledBy = "",
   describedBy = "",
   disabled = false,
   labelOn = "已启用",
@@ -315,6 +332,7 @@ export function createSwitch({
   if (name) input.name = name;
   input.checked = checked === true;
   input.disabled = disabled;
+  if (labelledBy) input.setAttribute("aria-labelledby", labelledBy);
   if (describedBy) input.setAttribute("aria-describedby", describedBy);
 
   const track = element("span", "switch-track");

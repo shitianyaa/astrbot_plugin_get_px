@@ -669,6 +669,7 @@ textarea {
   flex-direction: column;
   gap: 1px;
   min-width: 100%;
+  max-width: min(340px, 100%, calc(100vw - 24px));
   max-height: 240px;
   overflow-y: auto;
   padding: 4px;
@@ -676,6 +677,12 @@ textarea {
   border-radius: var(--radius-sm);
   background: var(--surface-elevated);
   box-shadow: var(--shadow-md);
+}
+
+/* 空间不足时向上展开，避免矮屏或弹窗内选项被裁切。 */
+.dd.dd-up .dd-list {
+  top: auto;
+  bottom: calc(100% + 4px);
 }
 
 .dd-list[hidden] {
@@ -692,7 +699,8 @@ textarea {
   color: var(--text);
   font-size: 12.5px;
   text-align: left;
-  white-space: nowrap;
+  white-space: normal;
+  overflow-wrap: anywhere;
 }
 
 .dd-option:hover:not(:disabled) {
@@ -1482,8 +1490,9 @@ input:checked + .switch-track::after {
   box-shadow: var(--shadow-sm);
 }
 
+/* 搜索无命中用语义弱化色，不靠整块透明度降低对比度。 */
 .config-nav-item.no-hit {
-  opacity: 0.55;
+  color: var(--text-subtle);
 }
 
 .config-nav-badge {
@@ -1910,10 +1919,12 @@ dialog p:not(.eyebrow):not(.member-history-note) {
   }
 
   .config-actionbar {
-    position: static;
+    position: sticky;
+    top: var(--sticky-top);
     flex-direction: column;
     align-items: stretch;
-    gap: 8px;
+    gap: 6px;
+    padding: 6px 10px;
   }
 
   .config-bar-actions {

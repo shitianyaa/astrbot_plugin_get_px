@@ -34,7 +34,9 @@ const state = {
 
 let settingsPage = null;
 let memberBoostSelect = null;
-let hostThemeKnown = false;
+// 宿主已给出主题（首帧注入或 theme 参数）时不再跟随系统偏好。
+let hostThemeKnown = document.documentElement.getAttribute("data-theme-source") === "host"
+  || new URLSearchParams(window.location.search).has("theme");
 
 const MAX_BACKUP_BYTES = 5 * 1024 * 1024;
 const dateFormatter = new Intl.DateTimeFormat("zh-CN", {
@@ -668,16 +670,24 @@ function backupFileError(file) {
   return "";
 }
 
+function tabButtons() {
+  return [...document.querySelectorAll(".nav-tabs [data-view]")];
+}
+
 function switchView(name) {
   const validNames = new Set(["ranking", "members", "safety", "policies", "data", "settings"]);
   if (!validNames.has(name)) name = "ranking";
-  document.querySelectorAll(".nav-tabs [data-view]").forEach((button) => {
+  for (const button of tabButtons()) {
     const active = button.dataset.view === name;
     button.classList.toggle("active", active);
     button.setAttribute("aria-selected", active ? "true" : "false");
+    button.tabIndex = active ? 0 : -1;
+  }
+  document.querySelectorAll(".view").forEach((view) => {
+    const active = view.id === `${name}View`;
+    view.classList.toggle("active", active);
+    view.hidden = !active;
   });
-  document.querySelectorAll(".view").forEach((view) =>
-    view.classList.toggle("active", view.id === `${name}View`));
   history.replaceState(null, "", `#${name}`);
   if (name === "members" && !state.loaded.members) {
     loadMembers({ reset: true }).catch((error) => {
@@ -758,6 +768,23 @@ function bindEvents() {
   mountMemberBoostSelect();
   document.querySelectorAll(".nav-tabs [data-view]").forEach((button) =>
     button.addEventListener("click", () => switchView(button.dataset.view)));
+
+  // 自动激活：方向键/Home/End 移动焦点同时切换面板，与鼠标点击一致。
+  $("navTabs").addEventListener("keydown", (event) => {
+    const tabs = tabButtons();
+    const index = tabs.indexOf(event.target);
+    if (index < 0) return;
+    let next = null;
+    if (event.key === "ArrowRight") next = index + 1;
+    else if (event.key === "ArrowLeft") next = index - 1;
+    else if (event.key === "Home") next = 0;
+    else if (event.key === "End") next = tabs.length - 1;
+    if (next === null) return;
+    event.preventDefault();
+    const target = tabs[(next + tabs.length) % tabs.length];
+    target.focus();
+    switchView(target.dataset.view);
+  });
 
   document.querySelectorAll("[data-rank]").forEach((button) => button.addEventListener("click", async () => {
     state.rankingType = button.dataset.rank;

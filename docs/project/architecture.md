@@ -84,7 +84,7 @@ Tool 附加不可变 `ImageSelection`：方向、绝对容差比例、最小宽�
 
 ## 前端页面
 
-`pages/pluginCenter/` 使用原生 HTML、CSS 和 ES module，提供群排行、成员当前数值编辑、内容安全、安全分组、数据管理和插件配置六个视图；顶部为紧凑品牌/安全摘要/刷新与单行下划线页签，主内容 1200px。明暗主题由宿主 `data-theme` 跟随，独立预览回退系统偏好，不读写浏览器存储；`ui.mjs` 提供自绘下拉与 checkbox＋独立轨道开关，配置页复用它们渲染枚举、模型和多选。会话策略由配置文件持久化；签到业务数据仍由 SQLite 和签到备份管理。成员编辑只更新 `checkin_users`，不回写 `checkin_records` 或 `checkin_group_presence`。
+`pages/pluginCenter/` 使用原生 HTML、CSS 和 ES module，提供群排行、成员当前数值编辑、内容安全、安全分组、数据管理和插件配置六个视图；顶部为紧凑品牌/安全摘要/刷新与单行下划线页签，主内容 1200px。首帧主题按“宿主注入的 `data-theme` → URL `theme` 参数 → 系统偏好”落定，宿主已给出主题后不再跟随系统切换；不读写浏览器存储。页签使用完整 tab 模式：`role=tab`／`aria-controls`／roving tabindex，方向键与 Home／End 自动激活对应 `tabpanel`，点击当前页签保持状态。`ui.mjs` 提供自绘下拉与 checkbox＋独立轨道开关，下拉选项自动换行、宽度不超过父容器与视口，空间不足时向上展开并按可见区域限制高度，配置页复用它们渲染枚举、模型和多选；配置保存条在桌面与手机都保持粘性可达，手机端不再滚出视口。会话策略由配置文件持久化；签到业务数据仍由 SQLite 和签到备份管理。成员编辑只更新 `checkin_users`，不回写 `checkin_records` 或 `checkin_group_presence`。
 
 ## 依赖方向
 

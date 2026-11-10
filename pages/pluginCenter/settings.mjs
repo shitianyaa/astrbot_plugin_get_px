@@ -99,6 +99,15 @@ export function parseNumberDraft(raw, field = {}) {
   if (slider.max !== undefined && value > slider.max) {
     return { valid: false, message: `不能大于 ${slider.max}` };
   }
+  // 与 HTML step 同语义：相对 slider.min 的倍数，允许浮点误差；"any" 不限制。
+  const step = slider.step;
+  if (step !== undefined && step !== null && String(step) !== "any" && Number(step) > 0) {
+    const base = Number.isFinite(Number(slider.min)) ? Number(slider.min) : 0;
+    const steps = (value - base) / Number(step);
+    if (Math.abs(steps - Math.round(steps)) > 1e-9 * Math.max(1, Math.abs(steps))) {
+      return { valid: false, message: `需为 ${base} 起每 ${step} 的倍数` };
+    }
+  }
   return { valid: true, value };
 }
 
@@ -239,11 +248,16 @@ export function createSettingsPage({ bridge, notify, navigate, confirm }) {
         patch[group.key] ? { [group.key]: patch[group.key] } : {},
         clearSecrets.filter((key) => group.fields.some((field) => field.key === key)),
       );
+      // 无效草稿可能停在别的分组：导航徽标要能把它标出来。
+      const groupInvalid = [...invalid.keys()]
+        .filter((key) => group.fields.some((field) => field.key === key)).length;
       const hits = filterSettingsFields(group.fields, query).length;
       const badge = button.querySelector(".config-nav-badge");
       if (badge) {
-        badge.textContent = groupDirty ? `${groupDirty} 改` : `${hits} 项`;
-        badge.dataset.state = groupDirty ? "dirty" : "idle";
+        badge.textContent = groupDirty
+          ? `${groupDirty} 改`
+          : groupInvalid ? `${groupInvalid} 待修正` : `${hits} 项`;
+        badge.dataset.state = groupDirty || groupInvalid ? "dirty" : "idle";
       }
       button.classList.toggle("active", group.key === activeKey);
       button.setAttribute("aria-current", group.key === activeKey ? "true" : "false");
@@ -327,8 +341,10 @@ export function createSettingsPage({ bridge, notify, navigate, confirm }) {
     head.append(element("span", "config-item-label", fieldLabel(field)));
     head.append(element("span", "config-item-key", field.key));
     row.append(head);
-    const copy = element("p", "config-hint", field.hint || "该项由独立页面维护，此处不写入。");
-    row.append(copy);
+    // 说明由 renderFields 统一渲染一次，避免重复 hint。
+    if (!field.hint) {
+      row.append(element("p", "config-hint", "该项由独立页面维护，此处不写入。"));
+    }
     const button = element(
       "button",
       "btn",
@@ -355,7 +371,10 @@ export function createSettingsPage({ bridge, notify, navigate, confirm }) {
   function buildSecret(field) {
     const row = element("div", "config-item");
     const head = element("div", "config-item-head");
-    head.append(element("span", "config-item-label", fieldLabel(field)));
+    const labelId = `setting-label-${field.key}`;
+    const label = element("span", "config-item-label", fieldLabel(field));
+    label.id = labelId;
+    head.append(label);
     head.append(element("span", "config-item-key", field.key));
     row.append(head);
     row.append(element(
@@ -369,7 +388,10 @@ export function createSettingsPage({ bridge, notify, navigate, confirm }) {
     input.spellcheck = false;
     input.name = field.key;
     input.id = `setting-${field.key}`;
+    input.setAttribute("aria-labelledby", labelId);
     input.value = hasOwn(draft, field.key) ? String(draft[field.key] ?? "") : "";
+    // 已勾选清除时密码框从首次渲染起就不可输入，切组/搜索重渲同样保持。
+    input.disabled = clears.has(field.key);
     input.addEventListener("input", () => commit(field.key, input.value));
     row.append(input);
     const clearLabel = element("label", "config-check");
@@ -397,12 +419,16 @@ export function createSettingsPage({ bridge, notify, navigate, confirm }) {
   function buildBool(field) {
     const row = element("div", "config-item");
     const head = element("div", "config-item-head");
-    head.append(element("span", "config-item-label", fieldLabel(field)));
+    const labelId = `setting-label-${field.key}`;
+    const label = element("span", "config-item-label", fieldLabel(field));
+    label.id = labelId;
+    head.append(label);
     head.append(element("span", "config-item-key", field.key));
     row.append(head);
     const control = createSwitch({
       id: `setting-${field.key}`,
       name: field.key,
+      labelledBy: labelId,
       checked: valueOf(field) === true,
       onChange: (checked) => commit(field.key, checked),
     });
@@ -483,6 +509,7 @@ export function createSettingsPage({ bridge, notify, navigate, confirm }) {
     input.type = "number";
     input.id = `setting-${field.key}`;
     input.name = field.key;
+    input.setAttribute("aria-labelledby", labelId);
     const slider = field.slider || {};
     if (slider.min !== undefined) input.min = slider.min;
     if (slider.max !== undefined) input.max = slider.max;
@@ -521,6 +548,7 @@ export function createSettingsPage({ bridge, notify, navigate, confirm }) {
     input.className = "config-input";
     input.id = `setting-${field.key}`;
     input.name = field.key;
+    input.setAttribute("aria-labelledby", labelId);
     if (isText) input.rows = 4;
     else input.type = "text";
     input.value = String(valueOf(field) ?? "");
@@ -564,18 +592,24 @@ export function createSettingsPage({ bridge, notify, navigate, confirm }) {
     for (const field of fields) {
       const row = buildField(field);
       row.dataset.fieldKey = field.key;
-      if (invalid.has(field.key)) {
-        const error = element("p", "config-error");
-        error.dataset.fieldError = "true";
-        error.textContent = invalid.get(field.key).message;
-        row.append(error);
-      } else {
-        const error = element("p", "config-error");
-        error.dataset.fieldError = "true";
-        row.append(error);
+      const error = element("p", "config-error");
+      error.dataset.fieldError = "true";
+      error.id = `setting-error-${field.key}`;
+      error.setAttribute("role", "alert");
+      if (invalid.has(field.key)) error.textContent = invalid.get(field.key).message;
+      row.append(error);
+      const describedBy = [error.id];
+      if (field.hint) {
+        const hint = element("p", "config-hint", field.hint);
+        hint.id = `setting-hint-${field.key}`;
+        row.append(hint);
+        describedBy.push(hint.id);
       }
-      if (field.hint) row.append(element("p", "config-hint", field.hint));
       if (field.warning) row.append(element("p", "config-warning", field.warning));
+      const control = row.querySelector(
+        "input:not([type=hidden]), textarea, .dd-trigger, button",
+      );
+      control?.setAttribute("aria-describedby", describedBy.join(" "));
       fieldsNode.append(row);
     }
     for (const key of invalid.keys()) {
@@ -591,6 +625,7 @@ export function createSettingsPage({ bridge, notify, navigate, confirm }) {
     if (!mobileSlot || mobileSelect) return;
     mobileSelect = createSelect({
       id: "settingsGroupPicker",
+      labelledBy: "settingsGroupPickerLabel",
       value: activeKey,
       options: groups.map((group) => ({ value: group.key, label: group.label })),
       onChange: (next) => selectGroup(next, true),
@@ -744,10 +779,13 @@ export function createSettingsPage({ bridge, notify, navigate, confirm }) {
 
   async function discard() {
     if (busy) return;
-    if (!changedCount()) return;
+    // 无效数字也是未保存的编辑，不能因为不进补丁就静默丢弃。
+    if (!changedCount() && !invalid.size) return;
     const confirmed = await confirm({
       title: "放弃未保存的修改",
-      message: "当前配置有未保存的修改，放弃后恢复为已保存的值。",
+      message: invalid.size
+        ? "当前有未保存的修改和需要修正的数值，放弃后恢复为已保存的值。"
+        : "当前配置有未保存的修改，放弃后恢复为已保存的值。",
       confirmLabel: "放弃修改",
     });
     if (!confirmed) return;
@@ -762,7 +800,7 @@ export function createSettingsPage({ bridge, notify, navigate, confirm }) {
 
   async function reload() {
     if (busy) return;
-    if (changedCount()) {
+    if (changedCount() || invalid.size) {
       const confirmed = await confirm({
         title: "重新载入设置",
         message: "重新载入会丢弃尚未保存的修改，继续吗？",

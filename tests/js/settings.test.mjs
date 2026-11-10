@@ -91,6 +91,29 @@ test('numeric drafts reject empty text, non-integers and out-of-range values', (
   assert.deepEqual(parseNumberDraft('7', field), { valid: true, value: 7 });
 });
 
+test('numeric drafts enforce slider step relative to min with float tolerance', () => {
+  const coins = { type: 'int', slider: { min: 0, max: 200, step: 5 } };
+  assert.equal(parseNumberDraft('22', coins).valid, false);
+  assert.deepEqual(parseNumberDraft('20', coins), { valid: true, value: 20 });
+  assert.deepEqual(parseNumberDraft('25', coins), { valid: true, value: 25 });
+  assert.deepEqual(parseNumberDraft('0', coins), { valid: true, value: 0 });
+
+  const size = { type: 'float', slider: { min: 0, max: 25, step: 0.5 } };
+  assert.deepEqual(parseNumberDraft('10.5', size), { valid: true, value: 10.5 });
+  assert.equal(parseNumberDraft('10.25', size).valid, false);
+  assert.equal(
+    parseNumberDraft('0.30000000000000004', { type: 'float', slider: { min: 0, max: 1, step: 0.1 } }).valid,
+    true,
+  );
+
+  const offset = { type: 'int', slider: { min: 1, max: 30, step: 2 } };
+  assert.deepEqual(parseNumberDraft('7', offset), { valid: true, value: 7 });
+  assert.equal(parseNumberDraft('8', offset).valid, false);
+
+  const free = { type: 'float', slider: { min: 0, max: 1, step: 'any' } };
+  assert.deepEqual(parseNumberDraft('0.123', free), { valid: true, value: 0.123 });
+});
+
 test('list selections keep declared order and append preserved legacy values', () => {
   assert.deepEqual(
     collectListSelection(['全部', '动画', '文学'], ['旧分类'], ['文学', '旧分类', '全部']),

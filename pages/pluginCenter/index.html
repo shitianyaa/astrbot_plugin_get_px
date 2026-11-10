@@ -10,13 +10,20 @@
     <link rel="stylesheet" href="./styles.css" />
     <link rel="stylesheet" href="./safety.css" />
     <script>
-      // 首帧即落主题：宿主通过 URL 的 theme 参数或 bridge 上下文给出明暗，
+      // 首帧即落主题：宿主注入的 data-theme 优先，其次 URL 的 theme 参数，
       // 独立预览回退系统偏好；不读取浏览器存储。
       (function () {
-        var theme = new URLSearchParams(window.location.search).get("theme");
+        var root = document.documentElement;
+        var injected = root.getAttribute("data-theme");
+        var hostKnown = injected === "dark" || injected === "light";
+        var theme = hostKnown
+          ? injected
+          : new URLSearchParams(window.location.search).get("theme");
         var dark = theme === "dark"
           || (theme !== "light" && !!(window.matchMedia && window.matchMedia("(prefers-color-scheme: dark)").matches));
-        document.documentElement.setAttribute("data-theme", dark ? "dark" : "light");
+        root.setAttribute("data-theme", dark ? "dark" : "light");
+        // 宿主已给出主题时不再跟随系统偏好，避免后续系统切换覆盖宿主。
+        if (hostKnown) root.setAttribute("data-theme-source", "host");
       })();
     </script>
   </head>
@@ -46,12 +53,12 @@
       </header>
 
       <nav class="nav-tabs" id="navTabs" role="tablist" aria-label="功能模块导航">
-        <button class="tab active" data-view="ranking" type="button" role="tab" aria-selected="true">群排行</button>
-        <button class="tab" data-view="members" type="button" role="tab" aria-selected="false">成员数值</button>
-        <button class="tab" data-view="safety" type="button" role="tab" aria-selected="false">内容安全</button>
-        <button class="tab" data-view="policies" type="button" role="tab" aria-selected="false">安全分组</button>
-        <button class="tab" data-view="data" type="button" role="tab" aria-selected="false">数据管理</button>
-        <button class="tab" data-view="settings" type="button" role="tab" aria-selected="false">插件配置</button>
+        <button class="tab active" id="tab-ranking" data-view="ranking" type="button" role="tab" aria-selected="true" aria-controls="rankingView" tabindex="0">群排行</button>
+        <button class="tab" id="tab-members" data-view="members" type="button" role="tab" aria-selected="false" aria-controls="membersView" tabindex="-1">成员数值</button>
+        <button class="tab" id="tab-safety" data-view="safety" type="button" role="tab" aria-selected="false" aria-controls="safetyView" tabindex="-1">内容安全</button>
+        <button class="tab" id="tab-policies" data-view="policies" type="button" role="tab" aria-selected="false" aria-controls="policiesView" tabindex="-1">安全分组</button>
+        <button class="tab" id="tab-data" data-view="data" type="button" role="tab" aria-selected="false" aria-controls="dataView" tabindex="-1">数据管理</button>
+        <button class="tab" id="tab-settings" data-view="settings" type="button" role="tab" aria-selected="false" aria-controls="settingsView" tabindex="-1">插件配置</button>
       </nav>
     </div>
 
@@ -62,7 +69,7 @@
       </section>
 
       <!-- 群排行 -->
-      <section id="rankingView" class="view active" aria-labelledby="rankingTitle">
+      <section id="rankingView" class="view active" role="tabpanel" aria-labelledby="tab-ranking">
         <div class="ranking-layout">
           <aside class="panel group-rail">
             <div class="panel-head">
@@ -105,7 +112,7 @@
       </section>
 
       <!-- 成员数值 -->
-      <section id="membersView" class="view" aria-labelledby="membersTitle">
+      <section id="membersView" class="view" role="tabpanel" aria-labelledby="tab-members">
         <div class="view-head">
           <div>
             <h2 id="membersTitle">成员数值</h2>
@@ -140,7 +147,7 @@
       </section>
 
       <!-- 内容安全 -->
-      <section id="safetyView" class="view" aria-labelledby="safetyTitle">
+      <section id="safetyView" class="view" role="tabpanel" aria-labelledby="tab-safety">
         <div class="view-head">
           <div>
             <h2 id="safetyTitle">内容安全</h2>
@@ -200,7 +207,7 @@
       </section>
 
       <!-- 安全分组 -->
-      <section id="policiesView" class="view" aria-labelledby="policiesTitle">
+      <section id="policiesView" class="view" role="tabpanel" aria-labelledby="tab-policies">
         <div class="view-head">
           <div>
             <h2 id="policiesTitle">安全分组</h2>
@@ -262,7 +269,7 @@
       </section>
 
       <!-- 数据管理 -->
-      <section id="dataView" class="view" aria-labelledby="dataTitle">
+      <section id="dataView" class="view" role="tabpanel" aria-labelledby="tab-data">
         <div class="view-head">
           <div>
             <h2 id="dataTitle">数据管理</h2>
@@ -306,7 +313,7 @@
       </section>
 
       <!-- 插件配置 -->
-      <section id="settingsView" class="view" aria-labelledby="settingsTitle">
+      <section id="settingsView" class="view" role="tabpanel" aria-labelledby="tab-settings">
         <div class="view-head">
           <div>
             <h2 id="settingsTitle">插件配置</h2>
@@ -328,6 +335,7 @@
             <label for="settingsSearch" class="sr-only">搜索配置项</label>
             <input id="settingsSearch" class="search" type="search" placeholder="搜索配置项…" autocomplete="off" spellcheck="false" />
             <div id="settingsNav" class="config-nav-list"></div>
+            <span id="settingsGroupPickerLabel" class="sr-only">配置分组</span>
             <div id="settingsGroupSelect" class="config-mobile-select"></div>
           </aside>
           <div class="config-main">

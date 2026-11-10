@@ -14,6 +14,17 @@ REPOSITORY_ROOT = Path(__file__).resolve().parents[2]
 PAGE_DIR = REPOSITORY_ROOT / "pages" / "pluginCenter"
 JS_TEST_DIR = REPOSITORY_ROOT / "tests" / "js"
 
+# 相对引用：模块的静态/动态/副作用 import、HTML 的 src/href、CSS 的 url()/@import。
+# 同时匹配 ../，交由 resource_closure 拒绝逃出页面目录。
+_JS_REFERENCE_PATTERNS = (
+    r"""from\s+['"]((?:\.{1,2}/)[^'"]+)['"]""",
+    r"""import\s*\(\s*['"]((?:\.{1,2}/)[^'"]+)['"]""",
+    r"""import\s+['"]((?:\.{1,2}/)[^'"]+)['"]""",
+)
+_HTML_REFERENCE_PATTERN = r"""(?:src|href)\s*=\s*['"]((?:\.{1,2}/)[^'"]+)['"]"""
+_CSS_URL_PATTERN = r"""url\(\s*['"]?((?:\.{1,2}/)[^'")]+)['"]?\s*\)"""
+_CSS_IMPORT_PATTERN = r"""@import\s+(?:url\(\s*)?['"]((?:\.{1,2}/)[^'"]+)['"]"""
+
 
 def _run_check(command: Sequence[str]) -> None:
     """在仓库根目录执行一项检查，并保留真实退出码。"""
@@ -42,32 +53,46 @@ def _js_tests() -> list[str]:
 
 
 def _local_resources(path: Path) -> set[Path]:
-    """页面或模块直接引用的同目录资源；只认相对路径。"""
+    """页面、样式或模块直接引用的同目录相对资源；忽略 query/hash 与绝对地址。"""
 
     if path.suffix in {".js", ".mjs"}:
-        pattern = r'from "(\./[^"]+)"'
+        patterns = _JS_REFERENCE_PATTERNS
     elif path.suffix == ".html":
-        pattern = r'(?:src|href)="(\./[^"]+)"'
+        patterns = (_HTML_REFERENCE_PATTERN,)
+    elif path.suffix == ".css":
+        patterns = (_CSS_URL_PATTERN, _CSS_IMPORT_PATTERN)
     else:
         return set()
     source = path.read_text(encoding="utf-8")
-    return {(path.parent / match).resolve() for match in re.findall(pattern, source)}
+    references = {ref for pattern in patterns for ref in re.findall(pattern, source)}
+    return {
+        (path.parent / ref.split("?")[0].split("#")[0]).resolve() for ref in references
+    }
+
+
+def resource_closure(entry: Path, root: Path | None = None) -> set[Path]:
+    """从入口递归解析相对资源；缺失或逃出页面目录时直接失败。"""
+
+    boundary = (root or entry.parent).resolve()
+    seen: set[Path] = set()
+    pending = [entry.resolve()]
+    while pending:
+        path = pending.pop()
+        if path in seen:
+            continue
+        if not path.is_relative_to(boundary):
+            raise SystemExit(f"页面静态资源越出页面目录: {path}")
+        if not path.is_file():
+            raise SystemExit(f"页面静态资源缺失: {path}")
+        seen.add(path)
+        pending.extend(_local_resources(path) - seen)
+    return seen
 
 
 def _check_page_resources() -> None:
     """从页面入口递归解析 HTML／CSS／模块引用，缺失时门禁失败。"""
 
-    entry = (PAGE_DIR / "index.html").resolve()
-    seen: set[Path] = set()
-    pending = [entry]
-    while pending:
-        path = pending.pop()
-        if path in seen:
-            continue
-        if not path.is_file():
-            raise SystemExit(f"页面静态资源缺失: {path}")
-        seen.add(path)
-        pending.extend(_local_resources(path) - seen)
+    seen = resource_closure(PAGE_DIR / "index.html", PAGE_DIR)
     print(f"页面静态资源递归检查通过: files={len(seen)}", flush=True)
 
 
