@@ -362,7 +362,12 @@ AI 签到问候会向所选 AstrBot 文本模型发送可用昵称、日期、�
 
 ## 获取 Pixiv Token
 
-Pixiv 仅作为可选回退。使用 [piglig/pixiv-token](https://github.com/piglig/pixiv-token) 获取 `refresh_token`，填入 `pixiv_refresh_token`。该工具基于 Playwright 自动完成 Pixiv OAuth 登录并取回 token，按仓库说明运行即可。
+Pixiv 可作为首选或回退图片源。推荐使用 [wlm3201/Pixiv-Token-Fetcher](https://github.com/wlm3201/Pixiv-Token-Fetcher) 浏览器扩展获取 `refresh_token`：
+
+1. 从项目页面下载扩展安装包。
+2. 在 Chrome 打开 `chrome://extensions`，开启右上角「开发者模式」，拖入扩展安装包完成安装。
+3. 在同一浏览器登录 Pixiv，打开扩展并点击「获取Refresh Token」。
+4. 复制扩展中显示的 **Refresh Token**，填入 AstrBot WebUI 插件配置的 `pixiv_refresh_token` 字段；不要填写 Access Token。
 
 ## 依赖
 
@@ -377,7 +382,7 @@ lunar-python
 
 - 默认图片源由 [Lolicon API](https://api.lolicon.app/) 提供
 - Pixiv 图片源基于 [pixivpy-async](https://github.com/Mikubill/pixivpy-async)
-- Pixiv `refresh_token` 获取方案来自 [piglig/pixiv-token](https://github.com/piglig/pixiv-token)，感谢 [piglig](https://github.com/piglig) 提供基于 Playwright 的 OAuth 自动取码工具
+- Pixiv `refresh_token` 获取工具推荐 [Pixiv-Token-Fetcher](https://github.com/wlm3201/Pixiv-Token-Fetcher)，感谢 [wlm3201](https://github.com/wlm3201) 提供一键获取 Token 的浏览器扩展
 - 作品黑名单缩略图生成基于 [Pillow](https://python-pillow.org/)
 - 签到每日一言由 [Hitokoto API](https://github.com/hitokoto-osc/hitokoto-api) 提供，感谢一言开源社区和公共 API 服务
 - 签到卡片内置字体由 [霞鹜文楷轻便版](https://github.com/lxgw/LxgwWenKai-Lite) 生成，采用 SIL Open Font License 1.1 授权
