@@ -61,20 +61,22 @@ description: 用户明确要插画、随机图或按标签找图时，使用画�
 
 | 字段 | 含义 |
 | --- | --- |
+| `running` | `true` 表示仍在执行，不能宣称执行完成 |
+| `duplicate_call` | 重复调用时为 `true`，只返回同事件已有状态，没有新增取图、发送或消费；正常首次结果不含此字段 |
 | `requested_count` | 用户本次请求的数量 |
 | `effective_count` | 应用插件数量上限与余额限制后的执行数量，不是图库可用总量 |
 | `max_count` | 本次读取的插件单次数量上限，默认 5 |
 | `count_limits` | 数量缩减原因列表：`max_count` 为配置上限，`balance` 为余额限制；可同时存在 |
 | `downloaded_count` | 下载数量，不是送达数量 |
 | `delivery` | `confirmed` 调用正常返回但不证明看见；`accepted` 已受理；`timed_out`／`unknown` 送达待确认；`failed` 构建失败、未发送 |
-| `settlement` | `not_required` 不涉及扣费（免费或未发送）；`completed` 已结算；`failed` 结算失败；`unknown` 扣费待核对 |
+| `settlement` | `not_required` 表示本次未进入扣费流程，不能据此推断是否送达；`completed` 已结算；`failed` 结算失败；`unknown` 扣费待核对 |
 | `interrupted` | `true` 表示执行被取消 |
 | `retry_allowed` | 恒为 `false`，禁止本次自动重试；用户另发新消息明确要图时可发起新请求 |
-| `message` | 拒绝或无法执行的原因，如实转述 |
+| `message` | 拒绝、部分完成或结算异常的说明；结合其他状态解释，不一律视为整次失败 |
 | `notice` | 低余额或数量缩减提醒，简短说一次，不重复 |
 
 - 数量缩减按 `count_limits` 与 `notice` 解释；不能把配置上限或余额限制说成图库不足，也不能据此断言标签失效。不要主动建议换标签补齐数量。
-- 图片已由插件发送：不要再用其他工具发送，也不要自动补取。
+- 根据 `running` 和 `delivery` 判断状态：执行中不宣称完成；没有发送状态不宣称已发送；`confirmed` 也不证明用户已看到。图片由插件负责发送，不再用其他工具发送，也不自动补取。
 - 超时、取消、部分完成或重复调用都不授权重试；追加取图请用户另发一条新消息，框架合并到原事件的消息仍算同一事件。
 - 不承诺免费、退款或补发；不声称看过图片内容，工具不提供视觉分析结果。
 

@@ -314,7 +314,7 @@ Lolicon 请求地址固定为 `https://api.lolicon.app/setu/v2`，旧 `lolicon_a
 
 查看日志中的“图片下载完成”及最终 `quality`；调试日志中的 `reason=size_limit` 表示因超限跳过作品。设置原图后仍模糊时，可检查原作品本身的分辨率，以及客户端是否展示预览图。
 
-下载与补取的等待预算为 `request_timeout × max(3, 请求张数)` 秒；到期会取消进行中的下载或补取，发送已下载图片。详见[配置说明](docs/project/configuration.md)。
+命令和正则触发首次取源不计入下载预算，下载与补取的等待预算为 `request_timeout × max(3, 实际执行张数)` 秒，张数按数量上限限制后的值计算。模型工具首次取源也受框架预算限制；后续下载与补取使用框架选图截止时间和上述下载阶段截止时间中较早者，执行张数还受余额限制。到期取消进行中的下载或补取，发送已有图片。预算边界见[配置说明](docs/project/configuration.md)。
 
 以上配置只针对普通发图。签到卡与日历使用独立的 `checkin_card_quality_tier`，不要用普通发图阈值调整它们的画质。
 

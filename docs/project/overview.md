@@ -17,7 +17,10 @@
 用户入口（发图）：
 
 - `/p [标签] [数量]`：有标签搜索，无标签随机取图
-- 开启 `auto_trigger_enabled` 后使用「来一份图」「来三张初音ミク图」等自然语言触发；不是额外注册的发图指令
+- 模型通过 `get_px_image` 向当前聊天取图，`get_px_context` 只读当前用户余额与限制；随包 [Skill](../../skills/get-px-image/SKILL.md) 提供参数与状态说明，不依赖 MCP。
+- 开启 `auto_trigger_enabled` 后使用「来一份图」「来三张初音ミク图」等固定句式正则触发；该开关不控制模型工具，不是额外注册的发图指令
+
+命令和正则触发保留正常账单，余额不足时终止；模型工具正常取图不发账单，按可负担数量缩减，余额读取失败时拒绝。三者共用取图与消费规则；工具默认逐张直发，仅选择 `auto` 时使用合并阈值，用户明确要求时可选择合并转发。
 
 用户入口（签到）：
 
@@ -67,6 +70,7 @@
 - `pixiv/` 是 Pixiv 作品获取、下载和发送层。
 - `checkin/` 是签到系统业务层。
 - `plugin_api/` 是 Plugin Pages 后端 API 层。
+- `tools/` 提供模型调用入口，`skills/` 提供随包调用说明，共享 `pixiv/` 的执行流程。
 - `_conf_schema.json` 是配置字段真源；README 和 docs 必须跟它同步。
 - 作品去重索引在 SQLite 中，按自然日分区，保留最近 N 天。
 - 签到正式数据在 `checkin.sqlite3`；卡片 JPEG 和背景摘要按日期存放在 `checkin_card_cache/`，不属于 SQLite 缓存。

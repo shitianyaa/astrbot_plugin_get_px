@@ -44,6 +44,7 @@ class SearchResult:
             "retry_allowed": False,
             "guidance": (
                 "图片由插件直接发送，不要再次发送或自动补取。"
+                "running 为 true 时仍在执行；没有 delivery 状态时不得声称已发送。"
                 "数量缩减按 count_limits 和 notice 解释，不猜测图库不足或标签失效，不主动建议换标签补取。"
                 "发送调用返回不等于用户实际收到；不主动报告金额或余额。"
                 + ("送达尚未确认，请勿宣称已收到。" if uncertain else "")

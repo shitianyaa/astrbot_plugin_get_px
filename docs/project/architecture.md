@@ -105,7 +105,7 @@ python -m pytest -q tests
 
 `pixiv/delivery.py` 的 `send_once()` 返回五种状态：消息构建失败为 `FAILED`；调用正常返回为 `CONFIRMED`，但 OneBot file 正常返回且无有效 `message_id`（非零整数或非空白字符串，排除 bool／对象）时为 `ACCEPTED`（已受理，需保留文件）；发送异常链包含超时为 `TIMED_OUT`；其余提交异常为 `UNKNOWN`。超时按 `TimeoutError` 类型或 message/wording 中独立的 timeout/timed out/超时文本判断，先排除路径、URL 和无关回包字段，并保留路径字段后的独立超时诊断（含冒号分隔、无扩展名路径与“上传／读取超时”，不把 timeout.jpg 等文件名当诊断）；文件读取错误也只检查相同诊断文本，不因路径中的 copyfile 重发。包括 OneBot 1200 回包中的 `Timeout: NTEvent … sendMsg`，不能仅凭 1200 判定超时。
 
-`search.py` 对 `CONFIRMED`、`ACCEPTED` 与 `TIMED_OUT` 均记录 normal 使用记录并结算金币；超时不补发，即使最终没有出图也扣费。`FAILED` 与构建期间取消释放未提交图片占用；`UNKNOWN` 与提交期间取消保留 normal_pending 占用，不扣费。OneBot `ACCEPTED`、超时、未知及提交期间取消保留文件读取窗口。构建和发送异常只记日志，不补发异常提示；正常金币结算消息保留。
+`search.py` 对 `CONFIRMED`、`ACCEPTED` 与 `TIMED_OUT` 均记录 normal 使用记录并结算金币；超时不补发，即使最终没有出图也扣费。`FAILED` 与构建期间取消释放未提交图片占用；`UNKNOWN` 与提交期间取消保留 normal_pending 占用，不扣费。OneBot `ACCEPTED`、超时、未知及提交期间取消保留文件读取窗口。构建和发送异常只记日志，不补发异常提示；命令及正则触发保留正常金币结算消息，工具不外发正常账单。
 
 异常日志只提取 `error_type`、`retcode`、`status`、脱敏 `message/wording`，并包含 `send_mode`、可用的作品 ID、`phase`、`delivery_status` 和 `duration_ms`。错误文本先截取前 2048 字符再脱敏，输出最多 512 字符，限制异常回包的正则处理开销与日志体积；地址、本地路径及 Windows UNC 共享路径、凭据和长数字标识会被遮蔽，不输出完整请求与回包。路径按盘符、UNC、file URI、位于词边界的根目录或点目录起点，以及带文件扩展名的相对路径识别；`NodeIKernelMsgService/sendMsg` 等服务名/方法名保留，不单凭标识内部的斜杠判定路径。file/path/filename 字段支持无引号的空格路径，以后续字段或分隔符为界；引号路径按对应引号闭合，兼容转义斜杠和相对路径后的方括号。编码切换、使用记录、去重占位释放失败分别记录，不重发已确认图片。
 
@@ -137,7 +137,7 @@ initialize 获取插件数据目录后，将 `data_dir / "temp"` 注入共享 Im
 
 `ImageDownloader.download_for_send()` 的 `allow_quality_fallback=False` 限定普通发图只尝试所选画质的反代和源地址；超软上限时清理文件并抛错交回选图层，50 MiB 硬上限不变。签到及日历传入 `size_limit_bytes=0` 并保留默认画质回退。持久配置沿用 `auto_downgrade_original_mb` 的键与数值，WebUI 名称改为图片大小上限。
 
-下载阶段以 `time.monotonic()` 建立 `request_timeout * max(3, count)` 秒的共享截止时间，单张下载（含反代轮换）及补取用 `asyncio.wait_for` 传入剩余预算。到期取消进行中的操作，发送已下载图片；首次取源、消息发送及清理不在预算内。外部取消继续传播。
+初始取源与候选过滤完成后以 `time.monotonic()` 建立 `request_timeout * max(3, count)` 秒的下载及补取截止时间，`count` 为应用数量上限和工具余额限制后的实际执行张数，单张下载（含反代轮换）及补取用 `asyncio.wait_for` 传入剩余预算。到期取消进行中的操作，发送已下载图片；命令及正则触发的首次取源、消息发送及清理不在这段预算内；工具首次取源另受框架选图预算限制，后续取两个截止时间中较早者。外部取消继续传播。
 
 大小约束由 `download()` 统一执行：Content-Length 超限时不读取正文，流式字节累计超限立即中止并清理半文件；`download_for_send()` 不重复检查返回大小。`ImageSizeLimitError` 按类型记录为 `size_limit` 并交回选图层，异常文案不参与分类。
 
@@ -149,6 +149,6 @@ initialize 获取插件数据目录后，将 `data_dir / "temp"` 注入共享 Im
 
 工具从事件取得当前用户和会话，不接受目标会话或安全策略参数；校验完整 UMO 后沿用当前群聊／私聊策略。状态返回 `builtin_terms_enabled`，不提供安全分组或宽松／严格模式。`get_px_context` 不建档、不预留金币，免费时 `balance` 和 `affordable_count` 为 null，不读取钱包。
 
-同事件通过 extra 保存唯一 `SearchResult`；执行中、结束、取消后均不再次取图。工具选图等待预算来自框架超时，预留一半（最多 30 秒）给发送、结算及清理，首轮取源也受限；命令沿用原预算。发送后的结算和清理受 shield 保护，重复取消仍等待收尾；正常返回、受理、超时沿用既有收费规则，未知送达不补发。正常工具账单只记日志，余额不足缩减或跨低余额阈值时才返回提醒。
+同事件通过 extra 保存唯一 `SearchResult`；执行中、结束、取消后均不再次取图。工具选图等待预算来自框架超时，预留一半（最多 30 秒）给发送、结算及清理，首轮取源也受限；命令沿用原预算。发送后的结算和清理受 shield 保护，重复取消仍等待收尾；正常返回、受理、超时沿用既有收费规则，未知送达不补发。正常工具账单只记日志，配置上限截断、余额不足缩减或跨低余额阈值时返回提醒。
 
 工具结果通过 `count_limits` 区分配置上限与余额缩减，保留原始请求数量、实际执行数量及本次配置上限；两类限制叠加时合并提醒，正常结算后的低余额提示不覆盖数量缩减原因。结算调用异常保持 `settlement=unknown`，日志只说明扣费状态待核对，不承诺未扣费。

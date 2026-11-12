@@ -301,7 +301,10 @@ async def test_inflight_repeat_and_close_cancel_before_client_cleanup(tmp_path):
     plugin.context.get_llm_tool_manager().func_list.append(foreign)
     task = asyncio.create_task(service.image(context, {"count": 1}))
     await started.wait()
-    assert (await service.image(context, {}))["duplicate_call"]
+    repeated = await service.image(context, {})
+    assert repeated["duplicate_call"] and repeated["running"]
+    assert not repeated["delivery"] and not repeated["downloaded_count"]
+    assert plugin.downloader.download_for_send.await_count == 1
     await service.close()
     with pytest.raises(asyncio.CancelledError):
         await task
@@ -622,3 +625,48 @@ async def test_settlement_exception_after_commit_reports_unknown_without_retry(t
     assert (await plugin.checkin_store.find_profile("10001")).coins == 80
     logged = str(logger.warning.call_args_list)
     assert "sensitive fixture text" not in logged and "不扣费" not in logged
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("tool", [True, False])
+@pytest.mark.parametrize("failure", ["source", "manga", "safety", "download", "index", "rate"])
+async def test_rejected_and_exhausted_requests_never_send_charge_or_repeat(tmp_path, tool, failure):
+    plugin, context, _ = await setup_flow(tmp_path, items=1)
+    if failure == "source":
+        plugin.illusts = []
+    elif failure == "manga":
+        plugin._filter_manga = lambda items: []
+    elif failure == "safety":
+        plugin._filter_blacklisted_illusts = AsyncMock(return_value=[])
+    elif failure == "download":
+        plugin.downloader.download_for_send.side_effect = RuntimeError("fixture")
+    elif failure == "index":
+        plugin.image_index = SimpleNamespace(
+            retention_days=99, set_retention_days=AsyncMock(side_effect=RuntimeError("fixture"))
+        )
+    else:
+        plugin._check_rate_limit = lambda sender: 7
+    plugin._fetch_source_candidates = AsyncMock(wraps=plugin._fetch_source_candidates)
+    plugin.checkin_store.spend_coins = AsyncMock(wraps=plugin.checkin_store.spend_coins)
+    with patch("astrbot_plugin_get_px.pixiv.search.send_once", AsyncMock()) as sender:
+        if tool:
+            service = ImageToolService(plugin)
+            summary = await service.image(context, {})
+            calls = plugin._fetch_source_candidates.await_count
+            downloads = plugin.downloader.download_for_send.await_count
+            repeated = await service.image(context, {})
+            assert repeated["duplicate_call"] and not repeated["running"]
+            assert not summary["delivery"] and not summary["downloaded_count"]
+            assert summary["settlement"] == "not_required" and summary["message"]
+            assert not summary["retry_allowed"]
+            assert plugin._fetch_source_candidates.await_count == calls
+            assert plugin.downloader.download_for_send.await_count == downloads
+        else:
+            messages = [item async for item in plugin._handle_search(context.context.event, "", "1")]
+            assert len(messages) == 1
+    sender.assert_not_awaited()
+    plugin.checkin_store.spend_coins.assert_not_awaited()
+    assert not context.context.event.sent
+    assert (await plugin.checkin_store.find_profile("10001")).coins == 100
+    assert plugin._fetch_source_candidates.await_count == (0 if failure == "rate" else 3 if failure == "download" else 1)
+    assert plugin.downloader.download_for_send.await_count == int(failure == "download")

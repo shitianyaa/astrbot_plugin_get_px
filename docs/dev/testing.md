@@ -14,11 +14,11 @@
 > [!TIP]
 > 这些是测试与检查命令，不是插件的独立运行命令。实际集成验证入口见 [`setup.md`](./setup.md#本地集成验证)。
 
-本地全量测试显式指定 `tests`，避免收集被 Git 忽略的 `REFERENCE/` 等参考工程。当前质量门禁脚本仍调用无目录参数的 pytest；本地存在嵌套参考工程时应使用上表命令，不能把参考插件的导入错误当成本插件测试失败。
+本地全量测试显式指定 `tests`，避免收集被 Git 忽略的 `REFERENCE/` 等参考工程。质量门禁脚本也显式调用 `python -m pytest -v tests`；不能把参考插件的导入错误当成本插件测试失败。
 
 ## PR 快速 CI
 
-PR 快速 CI（`AstrBot Plugin Quality Gate`，`.github/workflows/plugin-quality-gate.yml`）在 Ubuntu + Python 3.12 下安装最新正式版 AstrBot，通过 `scripts/ci/check_plugin_quality_gate.py` 执行 Python 编译检查、JSON schema 检查、前端 JavaScript 语法检查和全量 `python -m pytest -v`；同一个检查脚本也可以在本地执行。生命周期检查脚本只服务于独立的 `AstrBot Plugin Lifecycle` CI。
+PR 快速 CI（`AstrBot Plugin Quality Gate`，`.github/workflows/plugin-quality-gate.yml`）在 Ubuntu + Python 3.12 下安装最新正式版 AstrBot，通过 `scripts/ci/check_plugin_quality_gate.py` 执行 Python 编译检查、JSON schema 检查、前端 JavaScript 语法检查和全量 `python -m pytest -v tests`；同一个检查脚本也可以在本地执行。生命周期检查脚本只服务于独立的 `AstrBot Plugin Lifecycle` CI。
 
 本地等价质量门禁（在已安装项目依赖、`pytest`、`pytest-asyncio` 和 Node.js 的环境中执行）：
 
@@ -28,7 +28,7 @@ python scripts/ci/check_plugin_quality_gate.py
 
 ## PR 生命周期 CI
 
-PR 生命周期 CI（`AstrBot Plugin Lifecycle`，`.github/workflows/plugin-lifecycle.yml`）不运行全量 pytest，也不承担基础静态检查；它只安装官方 AstrBot 和插件依赖，然后通过官方公开 `PluginManager.load()`、`reload()` 和 `uninstall_plugin()` 走完 `load → initialize → terminate → unbind` 路径。harness 只观察本轮新增的 handler、Web API 和后台任务并确认最终清理，不规定插件必须注册哪一类资源。
+PR 生命周期 CI（`AstrBot Plugin Lifecycle`，`.github/workflows/plugin-lifecycle.yml`）不运行全量 pytest，也不承担基础静态检查；它只安装官方 AstrBot 和插件依赖，然后通过官方公开 `PluginManager.load()`、`reload()` 和 `uninstall_plugin()` 走完 `load → initialize → terminate → unbind` 路径。harness 只观察本轮新增的 handler、Web API、原生工具和后台任务并确认最终清理，不规定插件必须注册哪一类资源。
 
 本地等价生命周期检查需要先准备 AstrBot 源码目录：
 
@@ -279,3 +279,5 @@ python -m pytest -q tests/test_checkin_cache.py tests/test_checkin_calendar.py t
 真实聊天还需验证当前模型可见工具、随包 Skill 可发现以及 OneBot 实际收图；单元测试使用网络和发送桩，不替代协议端收图确认。
 
 数量限制回归同时覆盖免费模式配置截断、配置与余额叠加、缩减提醒不被低余额提醒覆盖，以及候选不足不冒充配置限制。结算异常用实际已提交扣款模拟，确认返回 unknown、不泄露异常原文且不重发；比例筛选覆盖窄比例默认容差和显式精确匹配。
+
+工具与命令的失败路径回归覆盖无候选、过滤为空、下载耗尽、索引失败和限频，验证不新增发送、扣费或重复取图；执行中重复调用仍返回已有状态。具体提示文案用临时一致性检查核对，不保留整段中文快照。

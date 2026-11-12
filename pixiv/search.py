@@ -237,7 +237,8 @@ class SearchMixin:
             logger.debug(
                 f"{LOG_PREFIX} 搜索请求触发频率限制: retry_after_seconds={wait}"
             )
-            result.message = f"⏳ 请求太频繁，请 {wait} 秒后再试"
+            result.message = (f"请求触发频率限制，还需等待 {wait} 秒，本次未开始取图。"
+                              if tool else f"⏳ 请求太频繁，请 {wait} 秒后再试")
             return result
 
         # 参数解析
@@ -318,13 +319,15 @@ class SearchMixin:
         )
 
         if not illusts:
-            result.message = "❌ 图片源请求失败或无结果，换个标签试试"
+            result.message = ("图片源请求失败或未返回候选，本次未开始发送。"
+                              if tool else "❌ 图片源请求失败或无结果，换个标签试试")
             return result
 
         if filter_manga:
             illusts = self._filter_manga(illusts)
             if not illusts:
-                result.message = "😶 过滤漫画后没有可用作品，可关闭漫画过滤后重试"
+                result.message = ("没有通过漫画过滤的可用作品，本次未开始发送。"
+                                  if tool else "😶 过滤漫画后没有可用作品，可关闭漫画过滤后重试")
                 return result
 
         try:
@@ -333,7 +336,8 @@ class SearchMixin:
             result.message = "🚫 内容安全服务暂不可用，本次请求已拒绝"
             return result
         if not illusts:
-            result.message = "😶 可用作品都被内容安全策略过滤了，换个标签后再试"
+            result.message = ("没有通过内容安全检查的可用作品，本次未开始发送。"
+                              if tool else "😶 可用作品都被内容安全策略过滤了，换个标签后再试")
             return result
 
         illusts = [item for item in illusts
@@ -347,7 +351,8 @@ class SearchMixin:
             try:
                 await self.image_index.set_retention_days(dedupe_days)
             except Exception:
-                result.message = "图片去重索引更新失败，请稍后重试"
+                result.message = ("图片去重索引更新失败，本次未开始发送。"
+                                  if tool else "图片去重索引更新失败，请稍后重试")
                 return result
 
         pending_illust_ids: set[str] = set()
@@ -371,6 +376,8 @@ class SearchMixin:
         if selection_deadline is not None:
             deadline = min(deadline, selection_deadline)
         failure_message = "本次未找到符合筛选条件的可用图片，未放宽条件。" if selection.active else "😢 所有图片均下载失败，请稍后再试"
+        if tool and not selection.active:
+            failure_message = "本次未获取到可发送的图片。"
 
         async def pick_candidates(items, amount, *, raw_count=0):
             pick_task = asyncio.create_task(self._pick_illusts(
