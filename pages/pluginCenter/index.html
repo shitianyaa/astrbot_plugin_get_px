@@ -56,7 +56,7 @@
               <span id="safetyStatusSummary">全局规则生效 · 未分组默认关闭 R18</span>
             </span>
           </div>
-          <button id="refreshBtn" class="nav-btn btn-primary" type="button">刷新数据</button>
+          <button id="refreshBtn" class="btn" type="button">刷新数据</button>
         </div>
       </header>
 
@@ -73,11 +73,12 @@
     <main class="main" id="mainContent" tabindex="-1">
       <section id="globalError" class="global-error" role="alert" hidden>
         <span id="globalErrorMessage">部分数据加载失败。</span>
-        <button id="retryAllBtn" type="button">重新加载</button>
+        <button class="btn" id="retryAllBtn" type="button">重新加载</button>
       </section>
 
       <!-- 群排行 -->
       <section id="rankingView" class="view active" role="tabpanel" aria-labelledby="tab-ranking">
+        <div class="view-head"><h2>群排行</h2></div>
         <div class="ranking-layout">
           <aside class="panel group-rail">
             <div class="panel-head">
@@ -93,7 +94,7 @@
             <div class="ranking-toolbar">
               <div>
                 <p id="selectedGroupMeta" class="eyebrow">尚未选择群聊</p>
-                <h2 id="selectedGroupName">群签到轨道</h2>
+                <h2 id="selectedGroupName">签到排行</h2>
               </div>
               <div class="segmented" aria-label="榜单时间筛选">
                 <button class="active" data-rank="today" type="button">今日</button>
@@ -105,7 +106,7 @@
 
             <div class="activity-head">
               <div>
-                <span>群活跃轨道</span>
+                <span>签到趋势</span>
                 <small id="trendCaption">最近 7 天</small>
               </div>
               <div class="segmented compact" aria-label="趋势统计时间跨度">
@@ -113,7 +114,7 @@
                 <button data-days="30" type="button">30 天</button>
               </div>
             </div>
-            <div id="activityTrack" class="activity-track" aria-label="签到趋势日期轨道"></div>
+            <div id="activityTrack" class="activity-track" aria-label="每日签到人数"></div>
             <div id="rankingContent" class="ranking-content"></div>
           </div>
         </div>
@@ -144,13 +145,13 @@
           <form id="memberSearchForm" class="member-search-form" role="search">
             <label for="memberSearch" class="sr-only">搜索成员昵称或用户 ID</label>
             <input id="memberSearch" name="checkin_member_search" type="search" maxlength="64" autocomplete="off" spellcheck="false" placeholder="输入昵称或用户 ID…" />
-            <button type="submit">搜索成员</button>
+            <button class="btn" type="submit">搜索成员</button>
             <button id="memberClearBtn" class="btn" type="button">清除</button>
           </form>
           <div id="memberList" class="member-list" aria-live="polite">
             <div class="empty">打开本模块后将加载签到成员</div>
           </div>
-          <button id="memberLoadMore" class="member-load-more" type="button" hidden>加载更多成员</button>
+          <button id="memberLoadMore" class="btn member-load-more" type="button" hidden>加载更多成员</button>
         </section>
       </section>
 
@@ -183,7 +184,7 @@
             <form id="termForm" class="inline-form">
               <label for="termInput" class="sr-only">自定义屏蔽词</label>
               <input id="termInput" type="text" name="custom_safety_term" maxlength="64" autocomplete="off" spellcheck="false" placeholder="例如：某些敏感词汇…" required />
-              <button type="submit">添加屏蔽词</button>
+              <button class="btn" type="submit">添加屏蔽词</button>
               <p id="termError" class="form-error" aria-live="polite"></p>
             </form>
             <div id="customTerms" class="term-list"></div>
@@ -207,7 +208,7 @@
               <label for="blacklistReason">加入原因</label>
               <input id="blacklistReason" type="text" name="blacklist_reason" maxlength="200" autocomplete="off" placeholder="例如：含有不适合的背景…" />
             </div>
-            <button type="submit">加入黑名单</button>
+            <button class="btn" type="submit">加入黑名单</button>
             <p id="blacklistError" class="form-error" aria-live="polite"></p>
           </form>
           <div id="blacklistContent" class="blacklist-list"></div>
@@ -225,10 +226,7 @@
         </div>
         <section class="panel">
           <div class="panel-head">
-            <div>
-              <h3>规则分组</h3>
-              <p class="panel-sub">点击分组卡片编辑分级、会话与附加词</p>
-            </div>
+            <p class="hint">点击分组编辑</p>
             <span id="policyCount" class="count" aria-live="polite">0</span>
           </div>
           <label for="policySearch" class="sr-only">搜索分组名称或会话</label>
@@ -268,9 +266,9 @@
               <p id="safetyGroupError" class="form-error" role="alert"></p>
             </div>
             <div class="dialog-actions">
-              <button id="safetyGroupDelete" class="danger" type="button">删除分组</button>
-              <button id="safetyGroupCancel" type="button">关闭</button>
-              <button type="submit">保存分组</button>
+              <button id="safetyGroupDelete" class="btn btn-danger-quiet" type="button">删除分组</button>
+              <button class="btn" id="safetyGroupCancel" type="button">关闭</button>
+              <button class="btn btn-primary" type="submit">保存分组</button>
             </div>
           </form>
         </dialog>
@@ -287,32 +285,30 @@
 
         <div class="data-grid">
           <section class="panel data-action">
-            <span class="action-index">EXPORT</span>
             <h3>数据导出</h3>
             <p>导出插件数据 JSON。查看旧策略请展开 legacy_safety_archives；旧策略仅供查看，不支持重新导入。包内不含 token 或代理地址。</p>
-            <button id="exportBtn" type="button">下载备份 (.json)</button>
+            <button class="btn" id="exportBtn" type="button">下载备份 (.json)</button>
             <small id="latestBackup" aria-live="polite">最近备份：尚无备份记录</small>
           </section>
 
           <section class="panel data-action">
-            <span class="action-index">RESTORE</span>
             <h3>从备份文件恢复</h3>
             <p>导入 JSON 格式的备份。注意：这会覆盖现有的签到数据。在导入前，系统会自动创建当前数据的回滚备份。</p>
             <label for="importFile" class="sr-only">选择备份文件</label>
-            <input id="importFile" name="checkin_backup" type="file" accept="application/json,.json" />
-            <button id="importBtn" class="danger" type="button" disabled>确认恢复此备份</button>
+            <input id="importFile" name="checkin_backup" type="file" accept="application/json,.json" hidden />
+            <button id="selectBackupBtn" class="btn" type="button">选择备份文件</button>
+            <button id="importBtn" class="btn danger" type="button" disabled>确认恢复此备份</button>
             <small id="importResult" aria-live="polite">尚未选择任何文件 (最大支持 5 MiB)</small>
           </section>
 
           <section class="panel data-action">
-            <span class="action-index">STORAGE</span>
             <h3>临时图片与卡片缓存</h3>
             <p>保存当天签到卡片及背景摘要，并统计下载临时图片。下载图片通常在发送流程结束后删除；送达未知的路径图片保留 10 分钟后自动清理。手动清理会移除卡片缓存和下载残余，跳过最近 10 分钟的下载临时文件。签到记录及用户数据不受影响，卡片缓存清理后会按需重建。</p>
             <div class="cache-stat-line">
               <span id="cacheStorageText">正在统计缓存占用…</span>
             </div>
             <div class="cache-actions-row">
-              <button id="clearCacheBtn" class="danger" type="button">一键清理临时缓存</button>
+              <button id="clearCacheBtn" class="btn danger" type="button">一键清理临时缓存</button>
               <button id="refreshCacheBtn" class="btn" type="button">刷新统计</button>
             </div>
             <small id="cacheStorageDetail" aria-live="polite">卡片缓存：- · 临时下载：-</small>
@@ -348,6 +344,7 @@
             <div id="settingsNav" class="config-nav-list"></div>
             <span id="settingsGroupPickerLabel" class="sr-only">配置分组</span>
             <div id="settingsGroupSelect" class="config-mobile-select"></div>
+            <label class="config-check config-key-toggle"><input id="settingsShowKeys" type="checkbox" />显示配置键</label>
           </aside>
           <div class="config-main" aria-labelledby="settingsGroupTitle">
             <div id="settingsGroups" class="config-fields"></div>
@@ -364,19 +361,17 @@
 
     <dialog id="confirmDialog" class="dialog" aria-labelledby="dialogTitle" aria-describedby="dialogMessage">
       <form method="dialog">
-        <p class="eyebrow">确认操作</p>
         <h2 id="dialogTitle">确认操作</h2>
         <p id="dialogMessage"></p>
         <div class="dialog-actions">
-          <button value="cancel" type="submit">取消</button>
-          <button id="dialogConfirm" class="danger" value="confirm" type="submit">确认执行</button>
+          <button class="btn" value="cancel" type="submit">取消</button>
+          <button id="dialogConfirm" class="btn danger" value="confirm" type="submit">确认执行</button>
         </div>
       </form>
     </dialog>
 
     <dialog id="memberDialog" class="member-dialog" aria-labelledby="memberDialogTitle">
       <form id="memberForm">
-        <p class="eyebrow">成员资料</p>
         <h2 id="memberDialogTitle">调整成员数值</h2>
         <p id="memberDialogIdentity" class="member-dialog-identity"></p>
         <input id="memberUserId" name="user_id" type="hidden" />
@@ -407,8 +402,8 @@
         <p class="member-history-note">这里只修改成员当前资料，不会篡改过去的签到奖励或排行榜记录。</p>
         <p id="memberFormError" class="form-error" aria-live="polite"></p>
         <div class="dialog-actions">
-          <button id="memberCancelBtn" type="button">取消</button>
-          <button id="memberSaveBtn" type="submit">保存修改</button>
+          <button class="btn" id="memberCancelBtn" type="button">取消</button>
+          <button class="btn btn-primary" id="memberSaveBtn" type="submit">保存修改</button>
         </div>
       </form>
     </dialog>

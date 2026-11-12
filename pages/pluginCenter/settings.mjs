@@ -1,4 +1,4 @@
-import { createSelect, createSwitch } from "./ui.mjs";
+import { createSelect, createSwitch, createNumberControl, animateContent, closeOpenSelect } from "./ui.mjs";
 
 const byId = (id) => document.getElementById(id);
 const hasOwn = (object, key) => Object.prototype.hasOwnProperty.call(object, key);
@@ -291,11 +291,13 @@ export function createSettingsPage({ bridge, notify, navigate, confirm }) {
 
   function selectGroup(key, fromUser) {
     if (busy || key === activeKey) return;
+    closeOpenSelect();
     activeKey = key;
     if (fromUser) pinned = true;
     if (mobileSelect && mobileSelect.value !== key) mobileSelect.value = key;
     renderNav();
     renderFields();
+    animateContent(fieldsNode);
     updateChrome();
   }
 
@@ -538,7 +540,9 @@ export function createSettingsPage({ bridge, notify, navigate, confirm }) {
       clearInvalid(field.key);
       commit(field.key, result.value);
     });
-    row.append(input);
+    const control = createNumberControl(input, fieldLabel(field));
+    customControls.push(control);
+    row.append(control);
     return row;
   }
 
@@ -616,7 +620,8 @@ export function createSettingsPage({ bridge, notify, navigate, confirm }) {
       }
       if (field.warning) row.append(element("p", "config-warning", field.warning));
       const control = row.querySelector(".config-options")
-        ?? row.querySelector("input:not([type=hidden]), textarea, .dd-trigger, button");
+        ?? row.querySelector("input:not([type=hidden]), textarea, .dd-trigger")
+        ?? row.querySelector("button");
       control?.setAttribute("aria-describedby", describedBy.join(" "));
       const meta = element("div", "config-item-meta");
       const inputs = element("div", "config-item-control");

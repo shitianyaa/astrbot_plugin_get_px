@@ -711,3 +711,62 @@ def test_group_save_failure_keeps_editable_draft(page):
     assert page.locator("#safetyGroupDialog").is_visible()
     assert page.input_value("#safetyGroupName") == "未提交的草稿"
     assert page.locator("#safetyGroupName").is_enabled()
+
+
+def test_number_buttons_follow_step_limits_and_restore_after_failed_save(page):
+    count = page.locator("#setting-max_count")
+    count_control = count.locator("..")
+    minus, plus = count_control.locator("button").all()
+    plus.click()
+    assert count.input_value() == "4"
+    page.fill("#setting-max_count", "1")
+    assert minus.is_disabled()
+    page.fill("#setting-max_count", "20")
+    assert plus.is_disabled()
+    assert not minus.is_disabled()
+
+    fee = page.locator("#setting-p_coin_cost")
+    fee.fill("0")
+    fee.locator("..").locator("button").last.click()
+    assert fee.input_value() == "5"
+
+    _start_pending_update(page)
+    page.click("#settingsSaveBtn")
+    assert minus.is_disabled()
+    assert plus.is_disabled()
+    page.evaluate("window.__resolveUpdate({success:false,error:'存储不可用'})")
+    page.wait_for_function(
+        "document.querySelector('#settingsStatus').textContent.includes('存储不可用')"
+    )
+    assert not minus.is_disabled()
+    assert plus.is_disabled()
+    assert count.input_value() == "20"
+
+    count.fill("")
+    assert minus.is_disabled()
+    assert plus.is_disabled()
+    assert page.locator("#settingsSaveBtn").is_disabled()
+
+
+def test_member_number_buttons_preserve_decimal_step_and_minimum(page):
+    page.evaluate("""() => {
+      window.__responses['checkin-members'] = { success: true, total: 1, members: [{
+        user_id: '10001', username: '示例成员', coins: 0, affection: 1.23,
+        total_days: 10, streak_days: 2
+      }] };
+    }""")
+    page.click('.nav-tabs [data-view="members"]')
+    page.locator('[data-edit-member="10001"]').click()
+    assert page.get_by_role("spinbutton", name="金币", exact=True).count() == 1
+    assert page.get_by_role("spinbutton", name="好感度", exact=True).count() == 1
+    assert (
+        page.locator("#memberCoins").locator("..").locator("button").first.is_disabled()
+    )
+    affection = page.locator("#memberAffection")
+    affection.locator("..").locator("button").last.click()
+    assert float(affection.input_value()) == 1.24
+    affection.fill("-10")
+    assert affection.locator("..").locator("button").first.is_disabled()
+    page.click("#memberCancelBtn")
+    page.wait_for_function("!document.querySelector('#memberDialog').open")
+    assert page.evaluate("window.__posts.length") == 0

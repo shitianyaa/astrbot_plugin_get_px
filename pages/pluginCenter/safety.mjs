@@ -1,4 +1,4 @@
-import { createSelect } from "./ui.mjs";
+import { createSelect, closeDialog } from "./ui.mjs";
 
 const modeHints = {
   宽松: "仅匹配完整原标签或翻译标签；忽略标题和简介。",
@@ -57,7 +57,7 @@ export function mountSafety({ apiGet, apiPost, escapeHtml, showToast, confirmAct
   function render() {
     mode();
     $("customCount").textContent = `${settings.global_safety_terms.length} 项`;
-    $("customTerms").innerHTML = settings.global_safety_terms.map(term => `<div class="term-item"><strong>${escapeHtml(term)}</strong><button type="button" data-remove-term="${escapeHtml(term)}">删除</button></div>`).join("") || '<div class="empty">没有全局屏蔽关键词。点击上方输入框添加。</div>';
+    $("customTerms").innerHTML = settings.global_safety_terms.map(term => `<div class="term-item"><strong>${escapeHtml(term)}</strong><button class="btn btn-sm btn-quiet btn-danger-quiet" type="button" data-remove-term="${escapeHtml(term)}">删除</button></div>`).join("") || '<div class="empty">没有全局屏蔽关键词。点击上方输入框添加。</div>';
     $("policyCount").textContent = String(settings.safety_groups.length);
     const query = $("policySearch").value.trim().toLocaleLowerCase();
     const groups = settings.safety_groups.filter(group => `${group.name} ${group.sessions.join(" ")}`.toLocaleLowerCase().includes(query));
@@ -86,7 +86,7 @@ export function mountSafety({ apiGet, apiPost, escapeHtml, showToast, confirmAct
   async function close() {
     if (busy) return;
     if (dirty() && !await confirmAction("放弃未保存修改", "关闭将丢弃当前分组草稿，确认继续吗？")) return;
-    dialog.close();
+    await closeDialog(dialog);
   }
   dialog.addEventListener("cancel", event => { event.preventDefault(); close(); });
   dialog.addEventListener("close", () => { draft = baseline = null; trigger?.focus(); });
@@ -141,7 +141,7 @@ export function mountSafety({ apiGet, apiPost, escapeHtml, showToast, confirmAct
         onChange(settings);
         render();
       }
-      dialog.close();
+      await closeDialog(dialog);
       showToast("安全分组已保存");
       // 当前接口返回规范化分组，无需再等一轮 GET；旧响应才补读。
       if (!savedGroup) {
@@ -160,7 +160,7 @@ export function mountSafety({ apiGet, apiPost, escapeHtml, showToast, confirmAct
       settings.safety_groups = settings.safety_groups.filter(group => group.group_id !== groupId);
       onChange(settings);
       render();
-      dialog.close();
+      await closeDialog(dialog);
       showToast("安全分组已删除");
     }
     catch (error) { if (dialog.open) $("safetyGroupError").textContent = error.message; else showToast(error.message, "error"); }

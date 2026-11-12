@@ -9,6 +9,109 @@
 let openSelect = null;
 let selectSeq = 0;
 
+const reduceMotion = () => window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+
+export function animateContent(node) {
+  if (!node || reduceMotion()) return;
+  node.getAnimations().forEach(animation => animation.cancel());
+  node.animate([{ opacity: 0, transform: "translateY(8px)" }, { opacity: 1, transform: "none" }], {
+    duration: 280, easing: "cubic-bezier(.2,0,0,1)",
+  });
+}
+
+export function closeOpenSelect() {
+  openSelect?.close(false, false);
+}
+
+// 原生 close 仍负责返回值与 close 事件；退场期间锁住交互，避免重复提交。
+const closingDialogs = new WeakMap();
+export function closeDialog(dialog, returnValue = "") {
+  if (!dialog.open) return Promise.resolve();
+  if (closingDialogs.has(dialog)) return closingDialogs.get(dialog);
+  closeOpenSelect();
+  dialog.inert = true;
+  dialog.classList.add("is-closing");
+  const animation = dialog.animate([
+    { opacity: 1, transform: "none" },
+    { opacity: 0, transform: "translateY(8px) scale(.98)" },
+  ], { duration: reduceMotion() ? 0 : 160, easing: "ease-in" });
+  const finished = animation.finished.catch(() => {}).then(() => {
+    dialog.close(returnValue);
+    dialog.inert = false;
+    dialog.classList.remove("is-closing");
+    closingDialogs.delete(dialog);
+  });
+  closingDialogs.set(dialog, finished);
+  return finished;
+}
+
+export function initializePresentation() {
+  document.addEventListener("pointerdown", event => {
+    const button = event.target.closest(".btn, .number-step");
+    if (!button || button.disabled || reduceMotion()) return;
+    const rect = button.getBoundingClientRect();
+    const size = Math.max(rect.width, rect.height) * 2;
+    const ripple = element("span", "button-ripple");
+    ripple.setAttribute("aria-hidden", "true");
+    Object.assign(ripple.style, {
+      width: `${size}px`, height: `${size}px`,
+      left: `${event.clientX - rect.left - size / 2}px`,
+      top: `${event.clientY - rect.top - size / 2}px`,
+    });
+    button.append(ripple);
+    ripple.addEventListener("animationend", () => ripple.remove(), { once: true });
+  });
+  document.querySelectorAll("dialog").forEach(dialog => {
+    dialog.addEventListener("cancel", event => {
+      if (event.defaultPrevented) return;
+      event.preventDefault();
+      closeDialog(dialog);
+    });
+    dialog.querySelectorAll('form[method="dialog"]').forEach(form => {
+      form.addEventListener("submit", event => {
+        event.preventDefault();
+        closeDialog(dialog, event.submitter?.value || "");
+      });
+    });
+  });
+}
+
+/** 保留 number 输入的步长与有效性约束，仅替换加减外观。 */
+export function createNumberControl(input, label) {
+  const root = element("div", "number-control");
+  // 控件可能位于包裹式 label 内，输入名称不应包含加减按钮的文本。
+  input.setAttribute("aria-label", label);
+  const buttons = [-1, 1].map(direction => {
+    const button = element("button", "number-step", direction < 0 ? "−" : "+");
+    button.type = "button";
+    button.setAttribute("aria-label", `${direction < 0 ? "减少" : "增加"}${label}`);
+    button.addEventListener("click", () => {
+      if (input.disabled || !Number.isFinite(input.valueAsNumber)) return;
+      if (input.step === "any") {
+        const min = input.min === "" ? -Infinity : Number(input.min);
+        const max = input.max === "" ? Infinity : Number(input.max);
+        input.value = String(Math.max(min, Math.min(max, input.valueAsNumber + direction)));
+      } else {
+        input.stepUp(direction);
+      }
+      input.dispatchEvent(new Event("input", { bubbles: true }));
+    });
+    return button;
+  });
+  root.append(buttons[0], input, buttons[1]);
+  root.refresh = () => {
+    const value = input.valueAsNumber;
+    const unavailable = input.disabled || !Number.isFinite(value);
+    buttons[0].disabled = unavailable || (input.min !== "" && value <= Number(input.min));
+    buttons[1].disabled = unavailable || (input.max !== "" && value >= Number(input.max));
+  };
+  root.setDisabled = next => { input.disabled = next === true; root.refresh(); };
+  input.addEventListener("input", root.refresh);
+  input.addEventListener("change", root.refresh);
+  root.refresh();
+  return root;
+}
+
 /** 规范化下拉选项：字符串值即标签，对象可带 disabled；保留显式空值。 */
 export function normalizeSelectOptions(options) {
   const normalized = [];
@@ -173,10 +276,16 @@ export function createSelect({
     if (openSelect && openSelect !== api) openSelect.close(false);
     renderList();
     list.hidden = false;
+    list.inert = false;
+    list.getAnimations().forEach(animation => animation.cancel());
     expanded = true;
     root.classList.add("open");
     trigger.setAttribute("aria-expanded", "true");
     placeList();
+    list.animate([
+      { opacity: 0, transform: `translateY(${root.classList.contains("dd-up") ? 6 : -8}px) scale(.96)` },
+      { opacity: 1, transform: "none" },
+    ], { duration: reduceMotion() ? 0 : 260, easing: "cubic-bezier(.2,0,0,1)" });
     document.addEventListener("pointerdown", onDocumentPointerDown, true);
     openSelect = api;
     focusSelected();
@@ -197,10 +306,21 @@ export function createSelect({
     list.style.maxHeight = `${Math.max(72, Math.min(240, up ? above : below))}px`;
   }
 
-  function close(restoreFocus = false) {
-    if (!expanded) return;
+  function close(restoreFocus = false, animate = true) {
+    if (!expanded) {
+      if (!animate) { list.getAnimations().forEach(animation => animation.cancel()); list.hidden = true; }
+      return;
+    }
     expanded = false;
-    list.hidden = true;
+    list.inert = true;
+    list.getAnimations().forEach(animation => animation.cancel());
+    if (animate && !reduceMotion()) {
+      const animation = list.animate([
+        { opacity: 1, transform: "none" },
+        { opacity: 0, transform: "translateY(-5px) scale(.97)" },
+      ], { duration: 150, easing: "ease-in" });
+      animation.finished.then(() => { if (!expanded) list.hidden = true; }).catch(() => {});
+    } else list.hidden = true;
     root.classList.remove("open");
     trigger.setAttribute("aria-expanded", "false");
     document.removeEventListener("pointerdown", onDocumentPointerDown, true);
@@ -309,7 +429,7 @@ export function createSelect({
     trigger.disabled = isDisabled;
     root.classList.toggle("is-disabled", isDisabled);
     if (hidden) hidden.disabled = isDisabled;
-    if (isDisabled) close(false);
+    if (isDisabled) close(false, false);
   };
   root.onChange = (handler) => {
     changeHandler = typeof handler === "function" ? handler : null;

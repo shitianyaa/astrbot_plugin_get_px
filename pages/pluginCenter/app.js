@@ -1,6 +1,6 @@
 import * as settingsModule from "./settings.mjs";
 import { mountSafety } from "./safety.mjs";
-import { createSelect } from "./ui.mjs";
+import { createSelect, createNumberControl, closeDialog, closeOpenSelect, animateContent, initializePresentation } from "./ui.mjs";
 const bridge = window.AstrBotPluginPage;
 
 const state = {
@@ -34,6 +34,7 @@ const state = {
 
 let settingsPage = null;
 let memberBoostSelect = null;
+let memberNumberControls = [];
 // 宿主已给出主题（首帧注入或 theme 参数）时不再跟随系统偏好。
 let hostThemeKnown = document.documentElement.getAttribute("data-theme-source") === "host"
   || new URLSearchParams(window.location.search).has("theme");
@@ -322,7 +323,7 @@ function renderGroups() {
     });
   });
   const group = currentGroup();
-  els.selectedGroupName.textContent = group?.group_name || group?.group_id || "群签到轨道";
+  els.selectedGroupName.textContent = group?.group_name || group?.group_id || "签到排行";
   els.selectedGroupMeta.textContent = `${group?.platform || "unknown"} / GROUP ${group?.group_id || "-"}`;
 }
 
@@ -359,7 +360,7 @@ async function loadRanking() {
     els.rankingContent.innerHTML = `
       <div class="empty error">
         <p>读取榜单失败：${escapeHtml(error.message)}</p>
-        <button type="button" id="retryRankingBtn" class="danger">重新加载</button>
+        <button type="button" id="retryRankingBtn" class="btn">重新加载</button>
       </div>`;
     const retryBtn = $("retryRankingBtn");
     if (retryBtn) {
@@ -435,7 +436,7 @@ function renderMembers() {
       <div class="member-metric"><small>好感度</small><strong>${Number(member.affection || 0).toFixed(2)}</strong></div>
       <div class="member-metric"><small>累计签到</small><strong>${formatCount(member.total_days)} 天</strong></div>
       <div class="member-metric"><small>连续签到</small><strong>${formatCount(member.streak_days)} 天</strong></div>
-      <button class="member-edit" type="button" data-edit-member="${escapeHtml(member.user_id)}"
+      <button class="btn btn-sm member-edit" type="button" data-edit-member="${escapeHtml(member.user_id)}"
         aria-label="编辑 ${escapeHtml(member.username || member.user_id)} 的签到数值">编辑</button>
     </article>
   `;
@@ -491,6 +492,7 @@ function openMemberEditor(member, trigger) {
   els.memberAffection.value = Number(member.affection ?? 0).toFixed(2);
   els.memberTotalDays.value = String(member.total_days ?? 0);
   els.memberStreakDays.value = String(member.streak_days ?? 0);
+  memberNumberControls.forEach(control => control.refresh());
   els.memberBoostStatus.textContent = member.boost_status || "无加持";
   els.memberBoostStatus.className = `boost-badge${member.boost_active ? " active" : ""}`;
   if (memberBoostSelect) memberBoostSelect.value = "keep";
@@ -576,7 +578,7 @@ function renderBlacklist() {
           <small>${escapeHtml(item.author || "作者未知")} · ${escapeHtml(item.reason || "未填写加入原因")} · ${escapeHtml(item.added_by || "管理员")}</small>
         </span>
         <span class="blacklist-meta">${escapeHtml(formatDate(item.added_at))}</span>
-        <button type="button" data-remove-illust="${escapeHtml(item.illust_id)}">解除</button>
+        <button class="btn btn-sm btn-quiet btn-danger-quiet" type="button" data-remove-illust="${escapeHtml(item.illust_id)}">解除</button>
       </div>
     `;
   }).join("") || '<div class="empty">作品黑名单为空</div>';
@@ -675,6 +677,7 @@ function tabButtons() {
 }
 
 function switchView(name) {
+  closeOpenSelect();
   const validNames = new Set(["ranking", "members", "safety", "policies", "data", "settings"]);
   if (!validNames.has(name)) name = "ranking";
   for (const button of tabButtons()) {
@@ -689,6 +692,8 @@ function switchView(name) {
     view.hidden = !active;
   });
   document.documentElement.dataset.view = name;
+  animateContent(document.getElementById(`${name}View`));
+  moveTabIndicator();
   history.replaceState(null, "", `#${name}`);
   if (name === "members" && !state.loaded.members) {
     loadMembers({ reset: true }).catch((error) => {
@@ -731,7 +736,7 @@ function applyTheme(isDark) {
     : Boolean(window.matchMedia?.("(prefers-color-scheme: dark)").matches);
   document.documentElement.setAttribute("data-theme", dark ? "dark" : "light");
   document.querySelector('meta[name="theme-color"]')?.setAttribute(
-    "content", dark ? "#171c2b" : "#f5f7fc",
+    "content", dark ? "#2c2736" : "#fcfaff",
   );
 }
 
@@ -769,6 +774,13 @@ function mountMemberBoostSelect() {
 }
 
 function bindEvents() {
+  initializePresentation();
+  memberNumberControls = [...els.memberForm.querySelectorAll('input[type="number"]')].map(input => {
+    const parent = input.parentElement;
+    const control = createNumberControl(input, input.labels[0].textContent.trim());
+    parent.append(control);
+    return control;
+  });
   mountMemberBoostSelect();
   document.querySelectorAll(".nav-tabs [data-view]").forEach((button) =>
     button.addEventListener("click", () => switchView(button.dataset.view)));
@@ -837,7 +849,7 @@ function bindEvents() {
     }
   });
 
-  $("memberCancelBtn").addEventListener("click", () => els.memberDialog.close());
+  $("memberCancelBtn").addEventListener("click", () => closeDialog(els.memberDialog));
   els.memberDialog.addEventListener("close", () => {
     state.selectedMember = null;
     state.memberDialogTrigger?.focus();
@@ -855,7 +867,7 @@ function bindEvents() {
       const index = state.members.findIndex((item) => item.user_id === result.member?.user_id);
       if (index >= 0) state.members[index] = result.member;
       renderMembers();
-      els.memberDialog.close();
+      await closeDialog(els.memberDialog);
       showToast("成员签到数值已更新");
     } catch (error) {
       els.memberFormError.textContent = error.message || "保存失败，请检查输入后重试。";
@@ -900,6 +912,7 @@ function bindEvents() {
     }
   });
 
+  $("selectBackupBtn").addEventListener("click", () => els.importFile.click());
   els.importFile.addEventListener("change", () => {
     const file = els.importFile.files?.[0];
     const validationError = backupFileError(file);
@@ -945,10 +958,27 @@ function bindEvents() {
   els.refreshCacheBtn?.addEventListener("click", loadCacheStorage);
 }
 
+function moveTabIndicator() {
+  const active = document.querySelector('.nav-tabs .tab.active');
+  const indicator = document.querySelector('.tab-indicator');
+  if (!active || !indicator) return;
+  indicator.style.width = `${active.offsetWidth}px`;
+  indicator.style.height = `${active.offsetHeight}px`;
+  indicator.style.transform = `translateX(${active.offsetLeft}px)`;
+}
+
 function followStickyHeights() {
   const root = document.documentElement;
   const shell = document.querySelector(".nav-shell");
   const toolbar = document.querySelector(".config-actionbar");
+  const tabs = document.getElementById("navTabs");
+  const indicator = document.createElement("span");
+  indicator.className = "tab-indicator";
+  indicator.setAttribute("aria-hidden", "true");
+  tabs.prepend(indicator);
+  const tabObserver = new ResizeObserver(moveTabIndicator);
+  tabObserver.observe(tabs);
+  tabs.querySelectorAll('.tab').forEach(tab => tabObserver.observe(tab));
   const observer = new ResizeObserver((entries) => {
     for (const entry of entries) {
       const height = entry.borderBoxSize?.[0]?.blockSize ?? entry.target.getBoundingClientRect().height;

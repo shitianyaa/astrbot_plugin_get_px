@@ -6,26 +6,32 @@
 }
 
 .safety-group-grid {
-  display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(min(100%, 240px), 1fr));
-  gap: 10px;
+  display: flex;
+  flex-direction: column;
   margin-top: 12px;
 }
 
 .safety-group-card {
-  display: flex;
-  flex-direction: column;
-  align-items: flex-start;
-  gap: 6px;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto minmax(0, 1fr);
+  align-items: center;
+  gap: 6px 20px;
+  width: 100%;
   min-width: 0;
-  padding: 14px;
-  border: 1px solid var(--border);
-  border-radius: var(--radius-sm);
-  background: var(--surface-elevated);
+  padding: 16px 12px;
+  border: 0;
+  border-bottom: 1px solid var(--border);
+  border-radius: 0;
+  background: transparent;
   color: var(--text);
   font: inherit;
   text-align: left;
 }
+
+.safety-group-card:last-child { border-bottom: 0; }
+.safety-group-card strong { overflow-wrap: anywhere; }
+.safety-group-card small { grid-column: 1 / -1; }
+.safety-group-card .safety-rating { justify-self: start; }
 
 .safety-group-card:hover {
   border-color: var(--border-strong);
@@ -33,19 +39,19 @@
 }
 
 .safety-group-card strong {
-  font-size: 13.5px;
+  font-size: 14px;
   font-weight: 600;
 }
 
 .safety-group-card span:not(.safety-rating) {
   color: var(--text-subtle);
-  font-size: 11.5px;
+  font-size: 12px;
 }
 
 .safety-group-card small {
   width: 100%;
   color: var(--text-subtle);
-  font: 11px/1.5 var(--font-mono);
+  font: 12px/1.5 var(--font-mono);
   overflow-wrap: anywhere;
 }
 
@@ -55,7 +61,7 @@
   border-radius: 4px;
   background: var(--safe-soft);
   color: var(--safe);
-  font-size: 11px;
+  font-size: 12px;
   font-weight: 600;
 }
 
@@ -80,25 +86,25 @@
 }
 
 .safety-group-header {
-  padding: 16px 20px 12px;
+  padding: 24px 24px 16px;
   border-bottom: 1px solid var(--border);
 }
 
 .safety-group-header h3 {
-  font-size: 15px;
+  font-size: 16px;
   font-weight: 650;
 }
 
 .safety-group-header p {
   margin-top: 2px;
   color: var(--text-subtle);
-  font-size: 11.5px;
+  font-size: 12px;
 }
 
 .safety-group-fields {
   display: grid;
   gap: 12px;
-  padding: 16px 20px;
+  padding: 20px 24px;
 }
 
 .safety-group-field {
@@ -116,7 +122,7 @@
 .safety-group-field label span {
   margin-left: 6px;
   color: var(--text-subtle);
-  font-size: 11px;
+  font-size: 12px;
   font-weight: 400;
 }
 
@@ -125,7 +131,7 @@
 }
 
 .safety-group-dialog .hint {
-  font-size: 11.5px;
+  font-size: 12px;
   line-height: 1.6;
 }
 
@@ -147,7 +153,7 @@
 
 .safety-r18-copy strong {
   display: block;
-  font-size: 12.5px;
+  font-size: 13px;
   font-weight: 600;
 }
 
@@ -155,7 +161,7 @@
   display: block;
   margin-top: 2px;
   color: var(--text-subtle);
-  font-size: 11.5px;
+  font-size: 12px;
   line-height: 1.5;
 }
 
@@ -172,6 +178,8 @@
   outline-offset: 2px;
 }
 
+.safety-group-dialog #safetyGroupDelete { margin-right: auto; }
+
 .safety-group-dialog .dialog-actions {
   position: sticky;
   bottom: 0;
@@ -179,20 +187,9 @@
   flex-wrap: wrap;
   gap: 8px;
   margin: 0;
-  padding: 12px 20px;
+  padding: 12px 24px;
   border-top: 1px solid var(--border);
   background: var(--surface-elevated);
-}
-
-.safety-group-dialog .dialog-actions .danger {
-  margin-right: auto;
-  border-color: transparent;
-  background: transparent;
-  color: var(--danger-solid);
-}
-
-.safety-group-dialog .dialog-actions .danger:hover {
-  background: var(--danger-soft);
 }
 
 .safety-group-dialog :is(input, textarea, button):disabled {
@@ -205,6 +202,9 @@
 }
 
 @media (max-width: 600px) {
+  .safety-group-card { grid-template-columns: minmax(0, 1fr) auto; gap: 8px; padding: 14px 0; }
+  .safety-group-card span:not(.safety-rating) { grid-column: 1 / -1; }
+
   .safety-group-header {
     padding: 14px 16px 10px;
   }
