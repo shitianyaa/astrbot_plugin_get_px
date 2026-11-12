@@ -11,6 +11,10 @@ from astrbot.core.platform.message_session import MessageSession
 from ..pixiv.constants import MAX_IMAGE_COUNT
 from ..pixiv.search_result import SearchResult
 from ..pixiv.selection import ImageSelection, SELECTION_PARAMETERS
+from ..pixiv.query import ArtworkQuery, QUERY_KEYS, MODES, QueryError
+from ..pixiv.catalog import CandidateStream
+from ..pixiv.discovery import DiscoveryService
+from .discovery import QUERY_PROPERTIES, GetPxArtworksTool, GetPxUsersTool
 
 
 MAX_TOOL_TAG_LENGTH = 48
@@ -35,9 +39,12 @@ class ImageToolService:
         self.active = True
         self._calls: set[asyncio.Task] = set()
         self.tools = []
+        self.discovery = DiscoveryService(plugin)
+        self._explicit_claims = set()
 
     def register(self):
-        self.tools = [GetPxImageTool(self), GetPxContextTool(self)]
+        image = GetPxImageTool(self)
+        self.tools = [image, GetPxContextTool(self), GetPxArtworksTool(self, image.parameters["properties"]), GetPxUsersTool(self)]
         self.plugin.context.add_llm_tools(*self.tools)
         # 旧框架 add_llm_tools 的归属解析不完整，显式指向已注册入口模块。
         for tool in self.tools:
@@ -52,6 +59,8 @@ class ImageToolService:
             task.cancel()
         if tasks:
             await asyncio.gather(*tasks, return_exceptions=True)
+        self.discovery.clear()
+        self._explicit_claims.clear()
         manager = self.plugin.context.get_llm_tool_manager()
         manager.func_list[:] = [
             tool
@@ -71,9 +80,14 @@ class ImageToolService:
         return event
 
     async def image(self, context, args):
-        if not set(args).issubset({"tag", "count", "send_mode"} | SELECTION_PARAMETERS):
+        if not set(args).issubset(QUERY_KEYS | {"count", "send_mode"} | SELECTION_PARAMETERS):
             raise ValueError("取图参数不受支持")
+        query = ArtworkQuery.from_args(args)
         tag, count = args.get("tag", ""), args.get("count", 1)
+        if query.mode == "artwork":
+            if "count" in args and (type(args["count"]) is not int or args["count"] != len(query.targets)):
+                raise ValueError("指定作品的count必须等于合并重复目标后的数量")
+            count = len(query.targets)
         send_mode = args.get("send_mode", "single")
         if (
             not isinstance(tag, str)
@@ -108,9 +122,18 @@ class ImageToolService:
         event.set_extra(self.EVENT_KEY, outcome)
         task = asyncio.current_task()
         self._calls.add(task)
+        holds = {(event.unified_msg_origin, target.key) for target in query.targets}
+        acquired = False
         try:
+            if holds & self._explicit_claims:
+                raise QueryError("inflight", "指定作品正在执行，本次没有新增发送或消费。")
+            self._explicit_claims.update(holds)
+            acquired = True
             # 留一半（最多30秒）给发送、结算和清理，实际发送仍遵循已有回执规则。
             deadline = time.monotonic() + timeout - min(30.0, timeout / 2)
+            extra = {}
+            if query.mode != "auto":
+                extra["candidate_stream"] = CandidateStream(self.plugin, event, query, None, selection, delivery=True)
             await self.plugin._execute_search(
                 event,
                 tag.strip(),
@@ -120,10 +143,13 @@ class ImageToolService:
                 selection_deadline=deadline,
                 send_mode=send_mode,
                 selection=selection,
+                **extra,
             )
         except asyncio.CancelledError:
             outcome.interrupted = True
             raise
+        except QueryError as exc:
+            outcome.message = str(exc)
         except Exception as exc:
             logger.warning(
                 f"[GetPx] Tool 取图执行异常: error_type={type(exc).__name__}"
@@ -132,7 +158,32 @@ class ImageToolService:
         finally:
             outcome.running = False
             self._calls.discard(task)
+            if acquired:
+                self._explicit_claims.difference_update(holds)
+            if query.mode == "artwork":
+                by_target = {(item["id"], item["page"]): item for item in outcome.targets}
+                outcome.targets = [by_target.get((str(target.illust_id), target.page), target.summary("not_submitted")) for target in query.targets]
+                for target in outcome.targets:
+                    if target["status"] == "candidate":
+                        target["status"] = "not_submitted"
         return outcome.tool_summary()
+
+    async def query(self, context, kind, args):
+        task = asyncio.current_task()
+        try:
+            event = self._event(context)
+            normalize_session(event.unified_msg_origin)
+            timeout = context.tool_call_timeout
+            if type(timeout) not in (int, float) or not math.isfinite(timeout) or timeout <= 0:
+                raise ValueError("工具等待预算无效")
+            self._calls.add(task)
+            return await self.discovery.query(event, kind, args, timeout)
+        except asyncio.CancelledError:
+            raise
+        except Exception as exc:
+            return self.discovery.error(exc)
+        finally:
+            self._calls.discard(task)
 
     async def get_context(self, context, args):
         if args:
@@ -168,6 +219,12 @@ class ImageToolService:
                 "forward_threshold": self.plugin._forward_threshold(),
                 "allow_r18": not policy.general_only_enabled,
                 "builtin_terms_enabled": policy.builtin_terms_enabled,
+                "capabilities": {
+                    "configured_sources": ["lolicon"] + (["pixiv"] if self.plugin._cfg_str("pixiv_refresh_token", "") else []),
+                    "available_modes": list(MODES) if self.plugin._cfg_str("pixiv_refresh_token", "") else ["auto"],
+                    "pixiv_auth_verified": False,
+                    "public_query_free": True,
+                },
                 "guidance": (
                     "仅为当前快照，不预留金币；发送工具会再次检查。不要主动报告金额或余额，只有用户明确询问时才说明。"
                     if charging
@@ -196,7 +253,7 @@ class GetPxImageTool(FunctionTool):
                         "minimum": 1,
                         "maximum": MAX_IMAGE_COUNT,
                         "default": 1,
-                        "description": "用户要求的数量；省略为1。按明确数量传入，插件按管理员上限和余额限制实际数量，并在结果中说明原因；不要拆分调用绕过限制。",
+                        "description": "普通取图省略为1；artwork省略时按合并重复目标后的数量，若传count须与目标数相等。按用户明确数量传入，插件按管理员上限和余额限制执行并说明原因，不拆分绕过限制。",
                     },
                     "send_mode": {
                         "type": "string",
@@ -242,6 +299,8 @@ class GetPxImageTool(FunctionTool):
             },
         )
         self.service = service
+        self.parameters["properties"].update(QUERY_PROPERTIES)
+        self.description += "支持按作品ID/链接及页码、榜单、作者、关联作品或明确Pixiv搜索直接取图；默认auto保留原行为。普通请求不先展示候选。指定作品数量由targets决定；明确Pixiv列表模式保持上游顺序并按现有去重选取。"
 
     async def call(self, context, **kwargs):
         if not self.active:
@@ -264,7 +323,7 @@ class GetPxContextTool(FunctionTool):
     def __init__(self, service):
         super().__init__(
             name="get_px_context",
-            description="只读当前用户余额与本会话取图限制；不建档、不写配置。无需每次发图前调用。只有用户问余额或限制时才报告数值。",
+            description="只读当前用户余额、本会话取图限制及已配置图源与模式；配置状态未联网验证，不证明token有效。不建档、不写配置，无需每次发图前调用。只有用户问余额或限制时才报告数值。",
             parameters={
                 "type": "object",
                 "properties": {},

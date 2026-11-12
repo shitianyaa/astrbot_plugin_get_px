@@ -39,7 +39,7 @@
 - **下载规范**: `downloader.download()` 为异步方法，需传 `url`、`timeout`，返回 `(path, size)` 元组，调用方必须显式解包。
 - **配置读取**: 统一通过 `main.py` 封装方法读取，严禁散落调用 `self.context.get_config(...)`；schema 仅保留六个正式分组，配置升级基线为已完成迁移的 v3.8.0，兼容边界见 `docs/project/configuration.md`。
 - **数据库迁移**: SQLite schema 变更必须在 `checkin/schema.py` 提供版本迁移与备份机制。
-- **模型取图**: 复用共享取图、发送、结算；同事件只执行一次，未知送达不补发，停用先等待在途结算与清理。Skill 不是安全边界。
+- **模型取图**: 复用共享候选、发送、结算；同事件可查询后发送，但发送只执行一次。公开查询不扣费、不占去重；指定作品只忽略完成历史，保留在途占用。未知送达不补发；停用等待结算与清理并清空内存游标。Skill 不是安全边界。
 - **主题自包含**: 签到卡主题生成必须内联 CSS/base64 字体，严禁外部网络 URL。
 - **日志规范**: logger 统一通过 `from astrbot.api import logger` 导入，禁止使用 Python 内置 `logging` 或以其作为导入失败的回退；独立测试如需替代日志器，在测试侧注入 mock。日志使用“中文事件描述 + `snake_case=value` 字段”，禁止吞掉异常。
 

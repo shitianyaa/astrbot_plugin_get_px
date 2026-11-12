@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import time
+from dataclasses import replace
 
 from astrbot.api import logger
 from astrbot.api.all import Image, Plain
@@ -215,6 +216,7 @@ class SearchMixin:
         tool: bool = False, result: SearchResult | None = None,
         selection_deadline: float | None = None, send_mode: str = "auto",
         selection: ImageSelection | None = None,
+        candidate_stream=None,
     ) -> SearchResult:
         """执行一次取图；Tool 可附加本次筛选，复用命令的消费规则。"""
         selection = selection if tool and selection is not None else ImageSelection()
@@ -299,7 +301,22 @@ class SearchMixin:
         filter_manga = self._cfg_bool("filter_manga", True)
 
         # 获取作品列表：按首选图片源顺序取图与回退。
-        fetch = self._fetch_source_candidates(event, tag, count=SEARCH_BATCH_SIZE, policy=policy)
+        if candidate_stream is not None:
+            candidate_stream.policy = policy
+            if candidate_stream.query.mode == "artwork":
+                omitted = candidate_stream.query.targets[count:]
+                candidate_stream.query = replace(candidate_stream.query, targets=candidate_stream.query.targets[:count])
+                result.targets = candidate_stream.target_results
+                result.targets.extend(target.summary("count_limited") for target in omitted)
+
+        async def fetch_batch():
+            if candidate_stream is None:
+                return await self._fetch_source_candidates(event, tag, count=SEARCH_BATCH_SIZE, policy=policy)
+            before = candidate_stream.raw_count
+            items = await candidate_stream.next_batch()
+            return items, candidate_stream.raw_count - before, candidate_stream.source_key
+
+        fetch = fetch_batch()
         if selection_deadline is None:
             illusts, raw_count, source_key = await fetch
         else:
@@ -318,14 +335,14 @@ class SearchMixin:
             f"candidate_count={raw_count}"
         )
 
-        if not illusts:
+        if not illusts and candidate_stream is None:
             result.message = ("图片源请求失败或未返回候选，本次未开始发送。"
                               if tool else "❌ 图片源请求失败或无结果，换个标签试试")
             return result
 
         if filter_manga:
             illusts = self._filter_manga(illusts)
-            if not illusts:
+            if not illusts and candidate_stream is None:
                 result.message = ("没有通过漫画过滤的可用作品，本次未开始发送。"
                                   if tool else "😶 过滤漫画后没有可用作品，可关闭漫画过滤后重试")
                 return result
@@ -335,13 +352,13 @@ class SearchMixin:
         except RuntimeError:
             result.message = "🚫 内容安全服务暂不可用，本次请求已拒绝"
             return result
-        if not illusts:
+        if not illusts and candidate_stream is None:
             result.message = ("没有通过内容安全检查的可用作品，本次未开始发送。"
                               if tool else "😶 可用作品都被内容安全策略过滤了，换个标签后再试")
             return result
 
         illusts = [item for item in illusts
-                   if selection.matches_dimensions(item.get("width"), item.get("height"))]
+                   if candidate_stream is not None or selection.matches_dimensions(item.get("width"), item.get("height"))]
         pick_count = min(count, len(illusts))
         dedupe_days = self._cfg_int("dedupe_days", 1, 0, 7)
         if (
@@ -367,6 +384,7 @@ class SearchMixin:
         downloaded: list[tuple[dict, str, str, int]] = []
         temp_paths: list[str] = []
         image_sources: dict[str, str] = {}
+        pending_suffix = ":explicit_pending" if candidate_stream is not None and candidate_stream.query.mode == "artwork" else ""
         attempted_ids: set[str] = set()
         batch_attempts = 1
         download_attempts = 0
@@ -380,9 +398,11 @@ class SearchMixin:
             failure_message = "本次未获取到可发送的图片。"
 
         async def pick_candidates(items, amount, *, raw_count=0):
+            extra = ({"ordered": True, "allow_repeat": candidate_stream.query.mode == "artwork"}
+                     if candidate_stream is not None else {})
             pick_task = asyncio.create_task(self._pick_illusts(
                 event, items, amount, source_key=source_key,
-                dedupe_enabled=dedupe_days > 0, raw_count=raw_count,
+                dedupe_enabled=dedupe_days > 0, raw_count=raw_count, **extra,
             ))
             cancelled = False
             while True:
@@ -403,12 +423,20 @@ class SearchMixin:
                 raise asyncio.CancelledError
             return picked
 
+        def target_status(item_id, status):
+            for target in result.targets:
+                key = target["id"] if target["page"] == 1 else f"{target['id']}:{target['page'] - 1}"
+                if key == item_id:
+                    target["status"] = status
+
         async def deliver_images(content, images, *, context: str) -> None:
             """按实际提交阶段维护计费、去重占用和文件读取窗口。"""
             ids = {str(illust["id"]) for illust, *_ in images if illust.get("id")}
 
             def retain_unknown():
                 unknown_illust_ids.update(ids)
+                for item_id in ids:
+                    target_status(item_id, "unknown")
                 if file_transport:
                     retained_paths.update(path for _, path, *_ in images)
 
@@ -422,6 +450,8 @@ class SearchMixin:
                 result.record_delivery(DeliveryStatus.UNKNOWN, len(images))
                 raise
             result.record_delivery(status, len(images))
+            for item_id in ids:
+                target_status(item_id, status.value)
             if status is DeliveryStatus.UNKNOWN:
                 retain_unknown()
             if status in (DeliveryStatus.CONFIRMED, DeliveryStatus.ACCEPTED, DeliveryStatus.TIMED_OUT):
@@ -453,25 +483,26 @@ class SearchMixin:
                             remaining, min(count - len(downloaded), len(remaining))
                         )
                     if not queue:
-                        if batch_attempts >= SEARCH_BATCH_ATTEMPTS:
+                        if batch_attempts >= SEARCH_BATCH_ATTEMPTS or (candidate_stream is not None and candidate_stream.exhausted):
                             break
                         try:
-                            if self.image_index is not None:
+                            if self.image_index is not None and candidate_stream is None:
                                 await self.image_index.advance_page_offset(
                                     self._event_scope(event), source_key, raw_count
                                 )
-                            illusts, raw_count, source_key = await asyncio.wait_for(
-                                self._fetch_source_candidates(
+                            fetch = (fetch_batch() if candidate_stream is not None else self._fetch_source_candidates(
                                     event, tag, count=SEARCH_BATCH_SIZE,
                                     offset=transient_offset if self.image_index is None else 0,
                                     policy=policy,
-                                ),
+                                ))
+                            illusts, raw_count, source_key = await asyncio.wait_for(
+                                fetch,
                                 timeout=max(0, deadline - time.monotonic()),
                             )
                             if filter_manga:
                                 illusts = self._filter_manga(illusts)
                             illusts = await self._filter_blacklisted_illusts(illusts, policy)
-                            illusts = [item for item in illusts if selection.matches_dimensions(
+                            illusts = [item for item in illusts if candidate_stream is not None or selection.matches_dimensions(
                                 item.get("width"), item.get("height"))]
                         except Exception as exc:
                             logger.warning(
@@ -504,6 +535,7 @@ class SearchMixin:
                     )
                     temp_paths.append(path)
                     if not selection.matches_file(path):
+                        target_status(item_id, "filtered")
                         logger.debug(
                             f"{LOG_PREFIX} 下载候选跳过: illust_id={illust_id} "
                             f"download_attempt={idx}/{SEARCH_DOWNLOAD_ATTEMPTS} reason=dimensions"
@@ -517,12 +549,14 @@ class SearchMixin:
                     result.downloaded_count = len(downloaded)
                     download_ready = True
                 except asyncio.TimeoutError:
+                    target_status(item_id, "download_failed")
                     logger.debug(
                         f"{LOG_PREFIX} 下载候选跳过: illust_id={illust_id} "
                         f"candidate={idx}/{SEARCH_DOWNLOAD_ATTEMPTS} reason=timeout "
                         f"timeout_seconds={timeout_sec}"
                     )
                 except Exception as e:
+                    target_status(item_id, "download_failed")
                     logger.debug(
                         f"{LOG_PREFIX} 下载候选跳过: illust_id={illust_id} "
                         f"candidate={idx}/{SEARCH_DOWNLOAD_ATTEMPTS} reason=download_error "
@@ -536,7 +570,7 @@ class SearchMixin:
                         try:
                             await self.image_index.release_usage(
                                 scope=self._event_scope(event),
-                                source_key=image_sources[item_id],
+                                source_key=image_sources[item_id] + pending_suffix,
                                 illust_id=item_id, feature="normal_pending",
                             )
                             pending_illust_ids.discard(item_id)
@@ -618,6 +652,7 @@ class SearchMixin:
                 sent_illust_ids=sent_illust_ids, temp_paths=temp_paths,
                 retained_paths=retained_paths, pending_illust_ids=pending_illust_ids,
                 unknown_illust_ids=unknown_illust_ids, image_sources=image_sources,
+                pending_suffix=pending_suffix,
             ))
             cancelled = False
             while True:
@@ -631,12 +666,16 @@ class SearchMixin:
                         raise
             if cancelled:
                 raise asyncio.CancelledError
+            for target in result.targets:
+                if target["status"] == "candidate":
+                    target["status"] = "not_submitted"
         return result
 
     async def _finish_search(
         self, event, outcome, *, wallet, charging, unit_cost, sender_id, tool,
         sent_illust_ids, temp_paths, retained_paths, pending_illust_ids,
         unknown_illust_ids, image_sources,
+        pending_suffix="",
     ):
         try:
             if charging and sent_illust_ids:
@@ -702,11 +741,14 @@ class SearchMixin:
                 else:
                     cleanup(p)
             if pending_illust_ids and self.image_index is not None:
-                for illust_id in pending_illust_ids - sent_illust_ids - unknown_illust_ids:
+                releasable = pending_illust_ids - unknown_illust_ids
+                if not pending_suffix:
+                    releasable -= sent_illust_ids
+                for illust_id in releasable:
                     try:
                         await self.image_index.release_usage(
                             scope=self._event_scope(event),
-                            source_key=image_sources[illust_id],
+                            source_key=image_sources[illust_id] + pending_suffix,
                             illust_id=illust_id,
                             feature="normal_pending",
                         )

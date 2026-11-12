@@ -196,6 +196,8 @@ async def test_free_context_and_image_do_not_depend_on_wallet(
         {"max_size_mib": 1e-12},
         {"r18": True},
         {"target": "other"},
+        {"mode": "artwork", "targets": [{"artwork": "1"}], "count": True},
+        {"mode": "artwork", "targets": [{"artwork": "1"}, {"artwork": "2"}], "count": 1},
     ],
 )
 async def test_tool_rejects_invalid_parameters_before_consumption(tmp_path, args):

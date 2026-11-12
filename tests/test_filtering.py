@@ -4,6 +4,7 @@ import unittest
 import tempfile
 import pytest
 from pathlib import Path
+from types import SimpleNamespace
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 
@@ -77,6 +78,58 @@ def test_content_safety_policy_copies_mutable_inputs():
 def test_content_safety_policy_keeps_punctuation_variants_in_snapshot():
     policy = ContentSafetyPolicy(custom_terms=("r18g", "r-18g"))
     assert policy.custom_terms == ("r-18g", "r18g")
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("ordered", [False, True])
+@pytest.mark.parametrize("dedupe_enabled", [False, True])
+async def test_candidate_selection_preserves_random_or_upstream_order(
+    tmp_path, monkeypatch, ordered, dedupe_enabled
+):
+    mixin = object.__new__(FiltersMixin)
+    mixin.image_index = ImageIndexStore(tmp_path)
+    mixin._event_scope = lambda event: "scope"
+    event = SimpleNamespace(get_sender_id=lambda: "user")
+    monkeypatch.setattr(
+        "astrbot_plugin_get_px.pixiv.filters.random.sample",
+        lambda items, count: list(reversed(items))[:count],
+    )
+    try:
+        await mixin.image_index.record_usage(
+            scope="scope", source_key="source", illust_id="1", feature="normal"
+        )
+        picked = await mixin._pick_illusts(
+            event, [{"id": str(i)} for i in range(1, 5)], 2,
+            source_key="source", ordered=ordered, dedupe_enabled=dedupe_enabled,
+        )
+        expected = (["2", "3"] if dedupe_enabled else ["1", "2"]) if ordered else ["4", "3"]
+        assert [item["id"] for item in picked] == expected
+    finally:
+        mixin.image_index.close()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("ordered", [False, True])
+async def test_only_ordinary_selection_advances_command_cursor_when_all_used(
+    tmp_path, ordered
+):
+    mixin = object.__new__(FiltersMixin)
+    mixin.image_index = ImageIndexStore(tmp_path)
+    mixin._event_scope = lambda event: "scope"
+    event = SimpleNamespace(get_sender_id=lambda: "user")
+    try:
+        await mixin.image_index.record_usage(
+            scope="scope", source_key="source", illust_id="1", feature="normal"
+        )
+        assert await mixin._pick_illusts(
+            event, [{"id": "1"}], 1, source_key="source", raw_count=30,
+            ordered=ordered,
+        ) == []
+        assert await mixin.image_index.get_page_offset("scope", "source") == (
+            0 if ordered else 30
+        )
+    finally:
+        mixin.image_index.close()
 
 
 class FilteringTest(unittest.TestCase):

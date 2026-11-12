@@ -20,6 +20,7 @@ class SearchResult:
     notice: str = ""
     interrupted: bool = False
     running: bool = True
+    targets: list[dict] = field(default_factory=list)
 
     def record_delivery(self, status: DeliveryStatus, count: int) -> None:
         self.delivery[status.value] = self.delivery.get(status.value, 0) + count
@@ -29,7 +30,7 @@ class SearchResult:
             self.delivery.get(state, 0)
             for state in ("accepted", "timed_out", "unknown")
         )
-        return {
+        summary = {
             "running": self.running,
             "requested_count": self.requested_count,
             "effective_count": self.count,
@@ -50,3 +51,6 @@ class SearchResult:
                 + ("送达尚未确认，请勿宣称已收到。" if uncertain else "")
             ),
         }
+        if self.targets:
+            summary["targets"] = [dict(target) for target in self.targets]
+        return summary

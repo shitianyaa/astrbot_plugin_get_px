@@ -10,7 +10,7 @@
 | `preferred_image_source` | `enum` | `Lolicon` | 下拉选择 `Lolicon` / `Pixiv`；首选请求失败或无结果时尝试另一源 |
 | `lolicon_exclude_ai` | `bool` | `true` | 仅向 Lolicon API 传递 excludeAI=true/false；R18 与普通混合由当前会话强制普通分级决定 |
 | `lolicon_image_proxy_origins` | `text` | 空 | 每行一个 http(s) origin，最多 5 个按序尝试；仅改写允许列表内 Pixiv 图片主机 |
-| `max_count` | `int` | `5` | 命令、正则触发和模型工具的单次数量上限，范围 1–20；模型工具省略 count 时取 1 张，默认值不覆盖已保存的配置 |
+| `max_count` | `int` | `5` | 命令、正则触发和模型工具的单次数量上限，范围 1–20；普通模型取图省略 count 时取 1 张，指定作品按目标数执行，默认值不覆盖已保存的配置 |
 | `p_coin_cost` | `int` | `20` | 命令、正则触发和模型工具共用的每张金币，范围 0–200；0 免费；正常返回与发送超时均扣费，下载／构建失败及其他发送异常不扣费 |
 | `image_quality` | `enum` | `original` | `original`/`large`/`medium`；固定所选画质，超限／不可用时换作品 |
 | `auto_downgrade_original_mb` | `float` | `10.0` | 图片大小上限（MiB），适用于所选画质，范围 0–25；0 关闭软上限；保留旧键并沿用已有数值 |
@@ -119,8 +119,10 @@ v3.8.7 的配置升级基线为已成功完成迁移的 v3.8.0，配置只保留
 
 ## 模型取图参数
 
-v3.8.8 无新增持久配置。原生工具沿用 `max_count`、`p_coin_cost`、`checkin_enabled`、图源、画质、大小上限和现有群聊／私聊安全策略。`tag`、`count`、`send_mode`、`orientation`、`aspect_ratio`、`ratio_tolerance`、`min_width`、`min_height`、`max_size_mib` 仅作用于本次工具调用，完整约束见 [随包 Skill](../../skills/get-px-image/SKILL.md)。默认 `single`；`auto` 才使用 `forward_threshold`，`forward` 仍受 OneBot 平台能力限制。
+v3.8.8 无新增持久配置。原生工具沿用 `max_count`、`p_coin_cost`、`checkin_enabled`、图源、画质、大小上限和现有群聊／私聊安全策略。模式、目标、数量、发送及筛选参数仅作用于本次工具调用，完整约束见 [随包 Skill](../../skills/get-px-image/SKILL.md)。默认 `single`；`auto` 才使用 `forward_threshold`，`forward` 仍受 OneBot 平台能力限制。
 
 模型工具数量结果中，`requested_count` 是请求数量，`effective_count` 是应用配置及余额限制后的执行数量，`max_count` 是本次读取的上限，`count_limits` 列出 `max_count`／`balance`（可同时存在）。缩减原因通过 `notice` 说明；实际候选不足另由 `message` 说明，均不代表标签失效。搜索日志分别记录原始请求数、实际执行数与配置上限。
 
 `auto_trigger_enabled` 只控制固定句式正则触发，不控制模型工具注册。模型工具默认逐张直发，仅 `send_mode=auto` 读取合并阈值。比例容差省略时使用 `min(0.1, aspect_ratio/2)`，显式传入仍须非负且小于目标比例，0 表示精确比例。
+
+公开作品与作者查询免费，不读钱包、不下载、不占去重，独立使用现有限频秒数；同事件允许查询后发送。默认模式沿用两源顺序，其余明确模式只使用 Pixiv，不因失败回退到 Lolicon。推荐基于配置账号，未联网验证的配置状态不证明 token 有效。查询游标仅保留在内存，不新增持久配置或数据库表；续查、失效和单页目标规则见随包 Skill。

@@ -204,9 +204,11 @@ class FiltersMixin:
         source_key: str,
         dedupe_enabled: bool = True,
         raw_count: int = 0,
+        ordered: bool = False,
+        allow_repeat: bool = False,
     ) -> list[dict]:
         if not dedupe_enabled or self.image_index is None:
-            return random.sample(illusts, pick_count)
+            return illusts[:pick_count] if ordered else random.sample(illusts, pick_count)
 
         scope = self._event_scope(event)
         try:
@@ -218,12 +220,12 @@ class FiltersMixin:
             )
             return []
 
-        ordered = ordered_by_unused(illusts, used_ids)
-        fresh = [i for i in ordered if str(i.get("id") or "") not in used_ids]
-        repeated = [i for i in ordered if str(i.get("id") or "") in used_ids]
+        by_usage = ordered_by_unused(illusts, used_ids)
+        fresh = [i for i in by_usage if str(i.get("id") or "") not in used_ids]
+        repeated = [i for i in by_usage if str(i.get("id") or "") in used_ids]
 
         # 若整页全被用过，推进分页游标供下次翻页
-        if not fresh and raw_count > 0:
+        if not fresh and raw_count > 0 and not ordered:
             try:
                 await self.image_index.advance_page_offset(scope, source_key, raw_count)
             except Exception as e:
@@ -232,8 +234,9 @@ class FiltersMixin:
                     f"error_type={type(e).__name__}"
                 )
 
-        candidates = random.sample(fresh, len(fresh)) + random.sample(
-            repeated, len(repeated)
+        candidates = (
+            list(illusts) if ordered else
+            random.sample(fresh, len(fresh)) + random.sample(repeated, len(repeated))
         )
         chosen: list[dict] = []
         user_id = str(event.get_sender_id() or "")
@@ -246,7 +249,7 @@ class FiltersMixin:
             try:
                 claimed = await self.image_index.claim_usage(
                     scope=scope,
-                    source_key=source_key,
+                    source_key=source_key + (":explicit_pending" if allow_repeat else ""),
                     illust_id=illust_id,
                     feature="normal_pending",
                     user_id=user_id,
