@@ -106,6 +106,26 @@ SETTINGS = {
                 },
             ],
         },
+        {
+            "key": "runtime",
+            "label": "运行参数",
+            "fields": [
+                {
+                    "key": "webui_font_source",
+                    "label": "界面字体线路",
+                    "type": "string",
+                    "hint": "保存后切换字体",
+                    "slider": None,
+                    "default": "mirror",
+                    "value": "none",
+                    "options": [
+                        {"value": "mirror", "label": "国内线路（小米）"},
+                        {"value": "official", "label": "国外线路（jsDelivr）"},
+                        {"value": "none", "label": "系统字体（不下载）"},
+                    ],
+                }
+            ],
+        },
     ],
 }
 
@@ -770,3 +790,170 @@ def test_member_number_buttons_preserve_decimal_step_and_minimum(page):
     page.click("#memberCancelBtn")
     page.wait_for_function("!document.querySelector('#memberDialog').open")
     assert page.evaluate("window.__posts.length") == 0
+
+
+def _font_routes(page, *, fail_first=False):
+    # 测试只借用随包字体作为可解析的WOFF2夹具，不验证MiSans字形。
+    font = (
+        PAGE_DIR.parents[1]
+        / "templates/checkin_themes/default/fonts/LXGWWenKaiLite-GB2312.woff2"
+    ).read_bytes()
+    attempts = []
+
+    def css(route):
+        attempts.append(route.request.url)
+        if fail_first and len(attempts) == 1:
+            route.abort()
+            return
+        family = "MiSans VF" if "official" in route.request.url else "MiSans"
+        route.fulfill(
+            content_type="text/css",
+            headers={"Access-Control-Allow-Origin": "*"},
+            body=f'@font-face{{font-family:"{family}";font-weight:100 900;src:url("https://font.test/fixture.woff2") format("woff2");}}',
+        )
+
+    page.route("https://font.test/*.css", css)
+    page.route(
+        "https://font.test/fixture.woff2",
+        lambda route: route.fulfill(
+            body=font,
+            content_type="font/woff2",
+            headers={"Access-Control-Allow-Origin": "*"},
+        ),
+    )
+    page.evaluate("""() => {
+      window.__fontConfigs = {
+        mirror: {success:true,font_source:'mirror',font_url:'https://font.test/mirror.css',font_family:'MiSans',font_label:'国内线路（小米）'},
+        official: {success:true,font_source:'official',font_url:'https://font.test/official.css',font_family:'MiSans VF',font_label:'国外线路（jsDelivr）'},
+        none: {success:true,font_source:'none',font_url:'',font_family:'',font_label:'系统字体'}
+      };
+      window.__postHandlers['settings/update'] = body => {
+        const source=body.groups.runtime?.webui_font_source;
+        if(source)window.__responses.config=window.__fontConfigs[source];
+        return Promise.resolve({success:true});
+      };
+      window.__previewMarker=42;
+    }""")
+    return attempts
+
+
+def _save_font(page, source):
+    page.click('#settingsNav [data-group="runtime"]')
+    page.click("#setting-webui_font_source .dd-trigger")
+    page.locator(
+        f'#setting-webui_font_source .dd-option[data-value="{source}"]'
+    ).click()
+    page.click("#settingsSaveBtn")
+    page.wait_for_function(
+        "document.querySelector('#settingsStatus').textContent.includes('设置已保存')"
+    )
+
+
+def test_font_route_switches_live_and_system_disables_external_font(page):
+    attempts = _font_routes(page)
+    _save_font(page, "mirror")
+    page.wait_for_function(
+        "document.querySelector('#fontStatus').dataset.state==='ready'"
+    )
+    assert (
+        page.locator("body")
+        .evaluate("e=>getComputedStyle(e).fontFamily")
+        .startswith("MiSans")
+    )
+    assert (
+        page.locator("#settingsTitle")
+        .evaluate("e=>getComputedStyle(e).fontFamily")
+        .startswith("MiSans")
+    )
+    _save_font(page, "official")
+    page.wait_for_function(
+        "document.querySelector('#fontStatus').dataset.state==='ready'"
+    )
+    assert "MiSans VF" in page.locator("body").evaluate(
+        "e=>getComputedStyle(e).fontFamily"
+    )
+    _save_font(page, "none")
+    page.wait_for_function(
+        "document.querySelector('#fontStatus').dataset.state==='system'"
+    )
+    assert len(attempts) == 2
+    assert (
+        not page.locator("body")
+        .evaluate("e=>getComputedStyle(e).fontFamily")
+        .startswith("MiSans")
+    )
+    assert page.evaluate("window.__previewMarker") == 42
+    assert page.locator('link[href^="https://font.test/"]').count() == 0
+
+
+@pytest.mark.parametrize("failed_resource", ["stylesheet", "woff2"])
+def test_font_failure_keeps_settings_saved_and_retry_has_no_new_post(
+    page, failed_resource
+):
+    attempts = _font_routes(page, fail_first=failed_resource == "stylesheet")
+
+    def fail_font(route):
+        route.abort()
+
+    if failed_resource == "woff2":
+        page.route("https://font.test/fixture.woff2", fail_font)
+    _save_font(page, "mirror")
+    page.wait_for_function(
+        "document.querySelector('#fontStatus').dataset.state==='error'"
+    )
+    assert page.locator("#settingsSaveBtn").is_disabled()
+    assert page.get_attribute("#setting-webui_font_source input", "value") == "mirror"
+    assert page.locator("#fontRetryBtn").is_visible()
+    assert page.locator('link[href^="https://font.test/"]').count() == 0
+    if failed_resource == "woff2":
+        page.unroute("https://font.test/fixture.woff2", fail_font)
+    page.click("#fontRetryBtn")
+    page.wait_for_function(
+        "document.querySelector('#fontStatus').dataset.state==='ready'"
+    )
+    assert len(attempts) == 2
+    assert page.evaluate("window.__posts.length") == 1
+
+
+def test_font_timeout_falls_back_without_blocking_saved_settings(page):
+    _font_routes(page)
+    page.clock.install()
+    page.evaluate("() => { document.fonts.load=()=>new Promise(()=>{}); }")
+    _save_font(page, "mirror")
+    page.wait_for_selector(
+        'link[href="https://font.test/mirror.css"]', state="attached"
+    )
+    page.clock.fast_forward(12001)
+    page.wait_for_function(
+        "document.querySelector('#fontStatus').dataset.state==='error'"
+    )
+    assert page.locator("#fontRetryBtn").is_visible()
+    assert page.locator("#settingsSaveBtn").is_disabled()
+    assert page.evaluate("window.__posts.length") == 1
+    assert page.locator('link[href^="https://font.test/"]').count() == 0
+    assert "MiSans" not in page.locator("body").evaluate(
+        "e=>getComputedStyle(e).fontFamily"
+    )
+
+
+def test_old_font_completion_cannot_override_new_system_selection(page):
+    _font_routes(page)
+    page.evaluate("""() => {
+      window.__fontWaiters=[];
+      document.fonts.load=()=>new Promise(resolve=>window.__fontWaiters.push(resolve));
+    }""")
+    _save_font(page, "mirror")
+    page.wait_for_function("window.__fontWaiters.length===4")
+    _save_font(page, "none")
+    page.wait_for_function(
+        "document.querySelector('#fontStatus').dataset.state==='system'"
+    )
+    page.evaluate("window.__fontWaiters.forEach(resolve=>resolve([{status:'loaded'}]))")
+    page.wait_for_timeout(100)
+    assert page.get_attribute("#fontStatus", "data-state") == "system"
+    assert (
+        page.locator("body")
+        .evaluate("e=>getComputedStyle(e).fontFamily")
+        .find("MiSans")
+        == -1
+    )

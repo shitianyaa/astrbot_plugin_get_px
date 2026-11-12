@@ -1,5 +1,6 @@
 import * as settingsModule from "./settings.mjs";
 import { mountSafety } from "./safety.mjs";
+import { mountFontControls } from "./fonts.mjs";
 import { createSelect, createNumberControl, closeDialog, closeOpenSelect, animateContent, initializePresentation } from "./ui.mjs";
 const bridge = window.AstrBotPluginPage;
 
@@ -33,6 +34,7 @@ const state = {
 };
 
 let settingsPage = null;
+let fontControls = null;
 let memberBoostSelect = null;
 let memberNumberControls = [];
 // 宿主已给出主题（首帧注入或 theme 参数）时不再跟随系统偏好。
@@ -161,17 +163,6 @@ async function apiGet(endpoint, params = {}) {
 
 async function apiPost(endpoint, body = {}) {
   return apiResult(await bridge.apiPost(endpoint, body));
-}
-
-async function loadFont() {
-  try {
-    const config = await apiGet("config");
-    if (!config.font_url) return;
-    const link = document.createElement("link");
-    link.rel = "stylesheet";
-    link.href = config.font_url;
-    document.head.append(link);
-  } catch {  }
 }
 
 // Batch load thumbnails for blacklist
@@ -1002,16 +993,20 @@ async function start() {
   await bridge.ready();
   followHostTheme();
   bindEvents();
+  fontControls = mountFontControls({ apiGet });
   settingsPage = settingsModule.createSettingsPage({
     bridge,
     notify: showToast,
     navigate: switchView,
     confirm: ({ title, message, confirmLabel }) =>
       confirmAction(title, message, confirmLabel),
+    onSaved: patch => {
+      if (patch.runtime?.webui_font_source !== undefined) fontControls.load();
+    },
   });
   const initialView = location.hash.slice(1);
   switchView(initialView || "ranking");
-  loadFont();
+  fontControls.load();
   await reloadAll();
 }
 

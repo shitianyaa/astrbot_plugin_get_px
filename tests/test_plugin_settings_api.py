@@ -4,6 +4,7 @@ from copy import deepcopy
 import json
 from pathlib import Path
 from types import SimpleNamespace
+from urllib.parse import urlparse
 
 import pytest
 from astrbot.api import AstrBotConfig
@@ -12,6 +13,59 @@ from quart import Quart
 from plugin_api import settings as settings_module
 from plugin_api.api import PluginWebApi
 from plugin_api.settings import SAFETY_KEYS, save_settings, settings_snapshot
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("source", "host", "family"),
+    [
+        ("mirror", "cdn-font.hyperos.mi.com", "MiSans"),
+        ("official", "cdn.jsdelivr.net", "MiSans VF"),
+        ("none", "", ""),
+        ("unknown", "", ""),
+    ],
+)
+async def test_font_config_uses_selected_route_or_system_without_saving(
+    source, host, family
+):
+    target = plugin(Config())
+    target._cfg_str = lambda key, default="": source
+    api = PluginWebApi(
+        target, plugin_name="x", log_prefix="[x]", internal_error_message="internal"
+    )
+    app = Quart(__name__)
+    app.add_url_rule("/config", view_func=api.config, methods=["GET"])
+    response = await app.test_client().get("/config")
+    config = await response.get_json()
+    assert config["font_source"] == source
+    assert urlparse(config["font_url"]).hostname == (host or None)
+    assert config["font_family"] == family
+    assert config["font_label"]
+    assert target.config.saves == 0
+    if source == "official":
+        assert "misans@5.0.0/" in config["font_url"]
+
+
+def test_font_route_labels_keep_existing_saved_values():
+    target = plugin(Config(runtime={"webui_font_source": "official"}))
+    field = next(
+        field
+        for group in settings_snapshot(target)["groups"]
+        for field in group["fields"]
+        if field["key"] == "webui_font_source"
+    )
+    assert field["value"] == "official"
+    assert [option["value"] for option in field["options"]] == [
+        "mirror",
+        "official",
+        "none",
+    ]
+    assert all(
+        option["label"] and option["label"] != option["value"]
+        for option in field["options"]
+    )
+    save_settings(target, {"runtime": {"webui_font_source": "none"}})
+    assert target.config["runtime"]["webui_font_source"] == "none"
 
 
 class Config(dict):

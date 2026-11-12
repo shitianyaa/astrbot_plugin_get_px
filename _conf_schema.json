@@ -398,7 +398,7 @@
         "hint": "同一用户两次发图请求的最小间隔，0 禁用。"
       },
       "webui_font_source": {
-        "description": "WebUI 字体来源",
+        "description": "界面字体线路",
         "type": "string",
         "default": "mirror",
         "options": [
@@ -406,7 +406,7 @@
           "official",
           "none"
         ],
-        "hint": "管理中心字体来源：mirror 国内镜像／official 官方／none 不加载。"
+        "hint": "MiSans 字体：mirror 国内线路（小米）／official 国外线路（jsDelivr）／none 系统字体。保存后直接切换，由浏览器加载和缓存。"
       }
     }
   }

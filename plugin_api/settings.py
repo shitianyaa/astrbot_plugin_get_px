@@ -15,6 +15,19 @@ SCHEMA_PATH = Path(__file__).resolve().parents[1] / "_conf_schema.json"
 LOG_PREFIX = "[GetPx]"
 SECRET_KEYS = frozenset({"pixiv_refresh_token"})
 PROVIDER_SPECIAL = "select_provider"
+FONT_SOURCES = {
+    "mirror": {
+        "label": "国内线路（小米）",
+        "url": "https://cdn-font.hyperos.mi.com/font/css?family=MiSans:400,500,600,700:Chinese_Simplify,Latin&display=swap",
+        "family": "MiSans",
+    },
+    "official": {
+        "label": "国外线路（jsDelivr）",
+        "url": "https://cdn.jsdelivr.net/npm/misans@5.0.0/lib/Normal/MiSansVF.min.css",
+        "family": "MiSans VF",
+    },
+    "none": {"label": "系统字体（不下载）", "url": "", "family": ""},
+}
 # 全局安全规则与会话安全分组由 SessionSafetyService 独占读写；
 # 通用设置页只展示跳转入口，禁止通过通用接口写入，避免覆盖安全列表引用。
 SAFETY_KEYS = frozenset(
@@ -171,6 +184,11 @@ def settings_snapshot(plugin: Any) -> dict[str, Any]:
                         descriptor["value"] = value
                 else:
                     descriptor["value"] = value
+            if key == "webui_font_source":
+                descriptor["options"] = [
+                    {"value": value, "label": source["label"]}
+                    for value, source in FONT_SOURCES.items()
+                ]
             fields.append(descriptor)
         groups.append(
             {

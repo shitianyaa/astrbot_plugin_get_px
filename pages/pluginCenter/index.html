@@ -337,6 +337,10 @@
           </div>
         </div>
 
+        <div class="font-status-row">
+          <span id="fontStatus" role="status" aria-live="polite">正在读取字体线路…</span>
+          <button id="fontRetryBtn" class="btn btn-sm btn-quiet" type="button" hidden>重试加载字体</button>
+        </div>
         <form id="configSettingsForm" class="config-layout" novalidate>
           <aside class="config-nav" aria-label="配置分组">
             <label for="settingsSearch" class="sr-only">搜索配置项</label>
@@ -352,7 +356,7 @@
         </form>
         <details class="config-effect-note">
           <summary>保存后何时生效？</summary>
-          <p>大多数选项在下次请求生效。Pixiv 令牌、图片反代、Lolicon 排除 AI、万象画卷联动与下载超时需重载插件后完整生效；字体来源需重新载入本页。去重天数在发图与模型取图入口同步，签到与日历需重载后保证一致。全局安全规则与安全分组仍由各自页面维护。</p>
+          <p>大多数选项在下次请求生效。Pixiv 令牌、图片反代、Lolicon 排除 AI、万象画卷联动与下载超时需重载插件后完整生效；字体线路保存后直接切换。去重天数在发图与模型取图入口同步，签到与日历需重载后保证一致。全局安全规则与安全分组仍由各自页面维护。</p>
         </details>
       </section>
     </main>

@@ -39,19 +39,19 @@
 }
 
 .safety-group-card strong {
-  font-size: 14px;
+  font-size: var(--text-body);
   font-weight: 600;
 }
 
 .safety-group-card span:not(.safety-rating) {
   color: var(--text-subtle);
-  font-size: 12px;
+  font-size: var(--text-small);
 }
 
 .safety-group-card small {
   width: 100%;
   color: var(--text-subtle);
-  font: 12px/1.5 var(--font-mono);
+  font: var(--text-small)/1.5 var(--font-sans);
   overflow-wrap: anywhere;
 }
 
@@ -61,7 +61,7 @@
   border-radius: 4px;
   background: var(--safe-soft);
   color: var(--safe);
-  font-size: 12px;
+  font-size: var(--text-small);
   font-weight: 600;
 }
 
@@ -91,14 +91,14 @@
 }
 
 .safety-group-header h3 {
-  font-size: 16px;
-  font-weight: 650;
+  font-size: var(--text-section);
+  font-weight: var(--weight-display);
 }
 
 .safety-group-header p {
   margin-top: 2px;
   color: var(--text-subtle);
-  font-size: 12px;
+  font-size: var(--text-small);
 }
 
 .safety-group-fields {
@@ -115,14 +115,14 @@
 
 .safety-group-field label {
   color: var(--text-muted);
-  font-size: 12px;
+  font-size: var(--text-body);
   font-weight: 600;
 }
 
 .safety-group-field label span {
   margin-left: 6px;
   color: var(--text-subtle);
-  font-size: 12px;
+  font-size: var(--text-small);
   font-weight: 400;
 }
 
@@ -131,7 +131,7 @@
 }
 
 .safety-group-dialog .hint {
-  font-size: 12px;
+  font-size: var(--text-small);
   line-height: 1.6;
 }
 
@@ -153,7 +153,7 @@
 
 .safety-r18-copy strong {
   display: block;
-  font-size: 13px;
+  font-size: var(--text-body);
   font-weight: 600;
 }
 
@@ -161,7 +161,7 @@
   display: block;
   margin-top: 2px;
   color: var(--text-subtle);
-  font-size: 12px;
+  font-size: var(--text-small);
   line-height: 1.5;
 }
 
