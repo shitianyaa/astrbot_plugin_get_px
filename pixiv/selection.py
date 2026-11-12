@@ -49,12 +49,16 @@ class ImageSelection:
             raise ValueError("比例容差需要同时指定宽高比")
         if (
             "aspect_ratio" in args
-            and args.get("ratio_tolerance", 0.1) >= args["aspect_ratio"]
+            and "ratio_tolerance" in args
+            and args["ratio_tolerance"] >= args["aspect_ratio"]
         ):
             raise ValueError("比例容差必须小于目标宽高比")
         if "max_size_mib" in args and args["max_size_mib"] < 1 / (1024 * 1024):
             raise ValueError("文件大小上限不能小于一个字节")
-        return cls(**{key: args[key] for key in SELECTION_PARAMETERS if key in args})
+        values = {key: args[key] for key in SELECTION_PARAMETERS if key in args}
+        if "aspect_ratio" in args and "ratio_tolerance" not in args:
+            values["ratio_tolerance"] = min(0.1, args["aspect_ratio"] / 2)
+        return cls(**values)
 
     @property
     def dimensions_required(self) -> bool:

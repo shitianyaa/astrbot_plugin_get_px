@@ -182,7 +182,7 @@ class GetPxImageTool(FunctionTool):
     def __init__(self, service):
         super().__init__(
             name="get_px_image",
-            description="仅在用户明确要图片时向当前聊天取图。标签只取用户所需角色名或关键词，可换成确定的单一语言名称，不擅自加作品名、括号说明、画风或其他条件。模糊复数通常3张、可选2，明确数量优先。默认逐张直发，仅用户明确要求合并转发时选择forward，不因数量多而自行合并。可按用户要求筛选方向、比例、最小像素宽高与文件大小，不擅自添加筛选。找不够不放宽条件；只读尺寸，不识别图片。遵循插件安全与费用配置，不自动重试或补发。正常费用不向聊天报告。",
+            description="仅在用户明确要图片时向当前聊天取图。标签只取用户所需角色名或关键词，可换成确定的单一语言名称，不擅自加作品名、括号说明、画风或其他条件。模糊复数通常3张、可选2，明确数量优先。默认逐张直发，仅用户明确要求合并转发时选择forward，不因数量多而自行合并。可按用户要求筛选方向、比例、最小像素宽高与文件大小，不擅自添加筛选。数量按用户要求传入，插件限制数量时按返回原因解释，不猜测图库不足或标签失效，不主动建议换标签补取。找不够不放宽条件；只读尺寸，不识别图片。遵循插件安全与费用配置，不自动重试或补发。正常费用不向聊天报告。",
             parameters={
                 "type": "object",
                 "properties": {
@@ -196,6 +196,7 @@ class GetPxImageTool(FunctionTool):
                         "minimum": 1,
                         "maximum": MAX_IMAGE_COUNT,
                         "default": 1,
+                        "description": "用户要求的数量；省略为1。按明确数量传入，插件按管理员上限和余额限制实际数量，并在结果中说明原因；不要拆分调用绕过限制。",
                     },
                     "send_mode": {
                         "type": "string",
@@ -212,13 +213,12 @@ class GetPxImageTool(FunctionTool):
                     "aspect_ratio": {
                         "type": "number",
                         "exclusiveMinimum": 0,
-                        "description": "目标宽/高，例如16:9传1.7777778、3:4传0.75。默认绝对容差0.1；省略不限制比例。",
+                        "description": "目标宽/高，例如16:9传1.7777778、3:4传0.75。省略容差时取0.1与目标比例一半中的较小值；省略不限制比例。",
                     },
                     "ratio_tolerance": {
                         "type": "number",
                         "minimum": 0,
-                        "default": 0.1,
-                        "description": "宽高比的绝对容差，需同时指定aspect_ratio且小于目标比例；0为精确比例，不是百分比。",
+                        "description": "宽高比的绝对容差，需同时指定aspect_ratio且小于目标比例；省略为min(0.1,目标比例/2)，0为精确比例，不是百分比。",
                     },
                     "min_width": {
                         "type": "integer",

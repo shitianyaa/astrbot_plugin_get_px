@@ -277,3 +277,5 @@ python -m pytest -q tests/test_checkin_cache.py tests/test_checkin_calendar.py t
 `python -m pytest -q tests/test_image_tools.py tests/test_image_selection_constraints.py tests/test_p_coin_cost.py tests/test_main_error_handling.py tests/test_plugin_lifecycle.py` 覆盖参数拒绝、现有安全策略、余额读取／缩减／免费路径、直发与合并、真实文件筛选、同事件幂等、送达未知、重复取消结算与工具卸载。生命周期 harness 通过官方管理器观察原生工具注册、重载和解绑，质量门禁包含 tools 编译检查。
 
 真实聊天还需验证当前模型可见工具、随包 Skill 可发现以及 OneBot 实际收图；单元测试使用网络和发送桩，不替代协议端收图确认。
+
+数量限制回归同时覆盖免费模式配置截断、配置与余额叠加、缩减提醒不被低余额提醒覆盖，以及候选不足不冒充配置限制。结算异常用实际已提交扣款模拟，确认返回 unknown、不泄露异常原文且不重发；比例筛选覆盖窄比例默认容差和显式精确匹配。

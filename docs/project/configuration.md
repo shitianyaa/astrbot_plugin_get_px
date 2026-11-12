@@ -10,12 +10,12 @@
 | `preferred_image_source` | `enum` | `Lolicon` | 下拉选择 `Lolicon` / `Pixiv`；首选请求失败或无结果时尝试另一源 |
 | `lolicon_exclude_ai` | `bool` | `true` | 仅向 Lolicon API 传递 excludeAI=true/false；R18 与普通混合由当前会话强制普通分级决定 |
 | `lolicon_image_proxy_origins` | `text` | 空 | 每行一个 http(s) origin，最多 5 个按序尝试；仅改写允许列表内 Pixiv 图片主机 |
-| `max_count` | `int` | `5` | 单次指令最多发送张数，范围 1–20 |
-| `p_coin_cost` | `int` | `20` | `/p` 每张金币，范围 0–200；0 免费；正常返回与发送超时均扣费，下载／构建失败及其他发送异常不扣费 |
+| `max_count` | `int` | `5` | 命令、正则触发和模型工具的单次数量上限，范围 1–20；模型工具省略 count 时取 1 张，默认值不覆盖已保存的配置 |
+| `p_coin_cost` | `int` | `20` | 命令、正则触发和模型工具共用的每张金币，范围 0–200；0 免费；正常返回与发送超时均扣费，下载／构建失败及其他发送异常不扣费 |
 | `image_quality` | `enum` | `original` | `original`/`large`/`medium`；固定所选画质，超限／不可用时换作品 |
 | `auto_downgrade_original_mb` | `float` | `10.0` | 图片大小上限（MiB），适用于所选画质，范围 0–25；0 关闭软上限；保留旧键并沿用已有数值 |
-| `forward_threshold` | `int` | `1` | 下载张数严格大于此值时合并转发（仅 aiocqhttp）；0 始终合并，范围 0–20 |
-| `auto_trigger_enabled` | `bool` | `false` | 群内自然语言（「来份/张图」）自动触发发图 |
+| `forward_threshold` | `int` | `1` | 命令及正则触发使用；模型工具仅 send_mode=auto 时使用。下载张数严格大于此值时合并转发（仅 aiocqhttp）；0 始终合并，范围 0–20 |
+| `auto_trigger_enabled` | `bool` | `false` | 固定句式（「来份/张图」）正则自动发图，不控制模型工具 |
 
 `preferred_image_source` 保存并重载后生效，普通发图、签到背景与日历背景共用请求顺序。Lolicon 有标签时搜索、无标签时随机；Pixiv 有标签时搜索、无标签时推荐。无 Pixiv token 时直接使用 Lolicon；两源均失败或无结果时按各入口现有失败路径处理。单张候选被过滤、去重或下载失败不直接触发换源；普通发图耗尽本批可用候选后按相同优先级补取，请求失败或空结果时仍可回退另一源；有效缓存及已保存背景继续复用，不因切换优先级强制重选。无效选项记录日志并使用默认 Lolicon 优先。
 
@@ -120,3 +120,7 @@ v3.8.7 的配置升级基线为已成功完成迁移的 v3.8.0，配置只保留
 ## 模型取图参数
 
 v3.8.8 无新增持久配置。原生工具沿用 `max_count`、`p_coin_cost`、`checkin_enabled`、图源、画质、大小上限和现有群聊／私聊安全策略。`tag`、`count`、`send_mode`、`orientation`、`aspect_ratio`、`ratio_tolerance`、`min_width`、`min_height`、`max_size_mib` 仅作用于本次工具调用，完整约束见 [随包 Skill](../../skills/get-px-image/SKILL.md)。默认 `single`；`auto` 才使用 `forward_threshold`，`forward` 仍受 OneBot 平台能力限制。
+
+模型工具数量结果中，`requested_count` 是请求数量，`effective_count` 是应用配置及余额限制后的执行数量，`max_count` 是本次读取的上限，`count_limits` 列出 `max_count`／`balance`（可同时存在）。缩减原因通过 `notice` 说明；实际候选不足另由 `message` 说明，均不代表标签失效。搜索日志分别记录原始请求数、实际执行数与配置上限。
+
+`auto_trigger_enabled` 只控制固定句式正则触发，不控制模型工具注册。模型工具默认逐张直发，仅 `send_mode=auto` 读取合并阈值。比例容差省略时使用 `min(0.1, aspect_ratio/2)`，显式传入仍须非负且小于目标比例，0 表示精确比例。

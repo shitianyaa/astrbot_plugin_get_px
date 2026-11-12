@@ -78,6 +78,7 @@ async def test_tool_shrinks_to_affordable_and_never_emits_normal_bill(tmp_path):
         repeated = await service.image(context, {"count": 2})
     assert summary["effective_count"] == 2 and summary["delivery"] == {"accepted": 2}
     assert summary["settlement"] == "completed" and summary["notice"]
+    assert summary["count_limits"] == ["balance"]
     assert "balance" not in summary and "cost" not in summary
     assert not context.context.event.sent and repeated["duplicate_call"]
     assert not repeated["notice"]
@@ -480,6 +481,8 @@ async def test_current_group_rules_and_count_limit_are_authoritative(tmp_path):
         summary = await service.image(context, {"count": 5})
     assert summary["requested_count"] == 5 and summary["effective_count"] == 1
     assert summary["delivery"] == {"confirmed": 1}
+    assert summary["max_count"] == 1 and summary["count_limits"] == ["max_count"]
+    assert summary["notice"]
 
 
 @pytest.mark.asyncio
@@ -553,3 +556,69 @@ async def test_initial_fetch_respects_selection_budget_without_retry(tmp_path):
     plugin._fetch_source_candidates.assert_awaited_once()
     plugin.downloader.download_for_send.assert_not_awaited()
     assert (await plugin.checkin_store.find_profile("10001")).coins == 100
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "requested,limit,coins,cost,effective,reasons",
+    [(2, 1, 0, 0, 1, ["max_count"]),
+     (5, 3, 45, 20, 2, ["max_count", "balance"]),
+     (2, 1, 60, 20, 1, ["max_count"]),
+     (3, 5, 200, 20, 3, [])],
+)
+async def test_count_limits_explain_clamping_without_losing_notices(
+    tmp_path, requested, limit, coins, cost, effective, reasons
+):
+    plugin, context, _ = await setup_flow(tmp_path, coins=coins, items=3)
+    plugin.config.update(max_count=limit, p_coin_cost=cost)
+    service = ImageToolService(plugin)
+    with patch("astrbot_plugin_get_px.pixiv.search.send_once",
+               AsyncMock(return_value=DeliveryStatus.CONFIRMED)):
+        summary = await service.image(context, {"count": requested})
+        duplicate = await service.image(context, {"count": requested})
+    assert summary["requested_count"] == requested
+    assert summary["effective_count"] == summary["downloaded_count"] == effective
+    assert summary["max_count"] == limit and summary["count_limits"] == reasons
+    assert bool(summary["notice"]) == bool(reasons)
+    assert not summary["message"]
+    assert duplicate["count_limits"] == reasons and not duplicate["notice"]
+    if "max_count" in reasons:
+        assert "上限" in summary["notice"]
+    if "balance" in reasons:
+        assert "金币" in summary["notice"]
+
+
+@pytest.mark.asyncio
+async def test_candidates_shortfall_does_not_claim_a_count_limit(tmp_path):
+    plugin, context, _ = await setup_flow(tmp_path, items=1)
+    with patch("astrbot_plugin_get_px.pixiv.search.send_once",
+               AsyncMock(return_value=DeliveryStatus.CONFIRMED)):
+        summary = await ImageToolService(plugin).image(context, {"count": 2})
+    assert summary["effective_count"] == 2 and summary["downloaded_count"] == 1
+    assert not summary["count_limits"] and not summary["notice"]
+    assert summary["message"]
+
+
+@pytest.mark.asyncio
+async def test_settlement_exception_after_commit_reports_unknown_without_retry(tmp_path):
+    plugin, context, _ = await setup_flow(tmp_path, coins=100, items=1)
+    spend = plugin.checkin_store.spend_coins
+
+    async def uncertain_spend(**kwargs):
+        await spend(**kwargs)
+        raise RuntimeError("sensitive fixture text")
+
+    plugin.checkin_store.spend_coins = uncertain_spend
+    service = ImageToolService(plugin)
+    with patch("astrbot_plugin_get_px.pixiv.search.send_once",
+               AsyncMock(return_value=DeliveryStatus.CONFIRMED)) as sender, patch(
+                   "astrbot_plugin_get_px.pixiv.search.logger"
+               ) as logger:
+        summary = await service.image(context, {})
+        repeated = await service.image(context, {})
+    assert summary["settlement"] == "unknown" and summary["message"]
+    assert not summary["retry_allowed"] and repeated["duplicate_call"]
+    assert sender.await_count == 1
+    assert (await plugin.checkin_store.find_profile("10001")).coins == 80
+    logged = str(logger.warning.call_args_list)
+    assert "sensitive fixture text" not in logged and "不扣费" not in logged

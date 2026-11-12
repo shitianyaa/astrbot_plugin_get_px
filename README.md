@@ -156,15 +156,16 @@
 随包 [get-px-image Skill](skills/get-px-image/SKILL.md) 提供调用说明；AstrBot 需要支持插件 Skill 自动发现。旧版无法读取 Skill 时仍可使用原生工具及其参数描述。
 
 - 默认逐张直发；用户明确要求时可用 `send_mode=forward` 合并转发（仅 OneBot），`auto` 沿用配置阈值。
-- `tag` 最多 48 字符，只传短标签或确定的单一语言角色名，不自动扩写。`count` 默认 1，受管理员数量上限限制。
+- `tag` 最多 48 字符，只传短标签或确定的单一语言角色名，不自动扩写。`count` 省略为 1，明确数量按用户要求传入；管理员数量上限默认 5，实际执行受配置与余额限制。
 - 可按本次要求指定方向、宽高比及容差、最小像素宽高和 `max_size_mib`；元数据粗筛后核对实际文件尺寸，大小上限只能收紧，不换画质、不放宽筛选。
 - 沿用当前图源、限频、去重、安全策略和收费规则。收费时余额只够部分张数会缩减，余额读取失败拒绝；免费时不查询钱包。
 - 正常取图不发送账单；余额不足、数量缩减及跨低余额阈值时给出提醒。`/p` 仍保留原有账单。
+- 数量缩减时工具返回 `requested_count`、`effective_count`、`max_count`、`count_limits` 和原因提醒，区分配置上限、余额限制与实际候选不足，不根据少取推断标签失效。
 - 同一消息事件只执行一次，追加取图需另发消息。工具仅返回执行事实，不返回图片路径或 URL；下载数量不等于送达数量，送达未知不补发。
 
 ## 自然语言触发
 
-开启 `auto_trigger_enabled` 后可不带命令前缀触发：
+`auto_trigger_enabled` 只控制固定句式的正则触发，不控制模型原生工具；关闭后模型仍可调用工具。开启后可不带命令前缀触发：
 
 | 触发语 | 效果 |
 | --- | --- |
@@ -238,7 +239,7 @@ base64 是图片编码，与 AstrBot 4.27.3 的 OneBot 默认发图编码相同�
 | `checkin_card_quality_tier` | 默认 `省流量`，日常推荐 `清晰`；签到卡三档为 960×540／1248×702／1728×972，日历三档为 1600×900／2080×1170／2880×1620 |
 | `dedupe_days` | 默认 `1`，只去重北京时间当天；`2–7` 扩大自然日窗口，`0` 关闭；不同会话、标签和图源仍隔离 |
 | `lolicon_image_proxy_origins` | 图片地址无法访问时再配置；每行一个 http(s) origin |
-| `auto_trigger_enabled` | 需要「来张图」时再开 |
+| `auto_trigger_enabled` | 固定句式正则触发开关，模型工具不受此开关控制 |
 
 <details>
 <summary>完整配置项</summary>
@@ -252,16 +253,16 @@ WebUI 配置页按以下 6 组折叠展示，分组细节与维护规则见 [doc
 | `lolicon_exclude_ai` | 请求 Lolicon 时排除 AI 作品；R18/普通混合由当前会话强制普通分级决定 | `true` |
 | `lolicon_image_proxy_origins` | 可选 Lolicon 图片反代 origin，多行按顺序轮换；不代理 API 或 Pixiv 登录 | 空 |
 | `filter_manga` | 过滤 Pixiv 结果中的漫画作品 | `true` |
-| `max_count` | 单次最大发送数量，范围 1-20 | `5` |
-| `p_coin_cost` | 普通发图每张金币，范围 `0–200`；`0` 免费；正常返回与发送超时均结算，其他发送异常不扣费 | `20` |
+| `max_count` | 命令、正则触发和模型工具共用的单次数量上限，范围 1-20；沿用已保存的配置 | `5` |
+| `p_coin_cost` | 命令、正则触发和模型工具共用的每张金币，范围 `0–200`；`0` 免费；正常返回与发送超时均结算，其他发送异常不扣费 | `20` |
 | `dedupe_days` | 最近 `0–7` 个北京时间自然日去重；同群共享，不同会话、标签和图源隔离；`0` 关闭并清空使用记录 | `1` |
 | `group_content_safety_policies` | 群聊内容安全策略列表：强制普通分级、内置安全词开关与独立屏蔽词/作品 ID 黑名单，按群 ID 生效；配置页或管理中心均可维护 | `[]` |
 | `private_content_safety_policies` | 私聊内容安全策略列表：字段同群聊策略，按用户 ID 独立生效；配置页或管理中心均可维护 | `[]` |
 | `request_timeout` | 单张图片下载超时，单位秒 | `30` |
 | `image_quality` | 图片质量：`original`、`large`、`medium` | `original` |
 | `auto_downgrade_original_mb` | 普通发图超过该大小时换作品，单位 MiB；沿用旧键与已有数值；`0` 关闭软上限 | `10.0` |
-| `forward_threshold` | 仅 aiocqhttp：成功下载图片数严格大于此值时合并转发；`0` 始终合并转发，`1` 表示超过 1 张才合并转发；其他平台自动逐条发送 | `1` |
-| `auto_trigger_enabled` | 自然语言自动触发 | `false` |
+| `forward_threshold` | 命令和正则触发使用；模型工具仅 `send_mode=auto` 使用。仅 aiocqhttp：成功下载图片数严格大于此值时合并转发；`0` 始终合并转发，`1` 表示超过 1 张才合并转发；其他平台自动逐条发送 | `1` |
+| `auto_trigger_enabled` | 固定句式正则自动触发，不控制模型工具 | `false` |
 | `checkin_enabled` | 签到开关 | `true` |
 | `checkin_bot_name` | 签到卡片中的 bot 角色名 | `neko` |
 | `checkin_background_mode` | 签到背景模式：`pixiv_daily` 或 `custom`；自定义背景不可用时继续尝试在线图片源 | `pixiv_daily` |

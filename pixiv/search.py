@@ -224,6 +224,8 @@ class SearchMixin:
         charge_requested = unit_cost > 0 and self._cfg_bool("checkin_enabled", True)
         wallet = getattr(self, "checkin_store", None)
         charging = charge_requested and wallet is not None
+        max_count = self._cfg_int("max_count", 5, 1, MAX_IMAGE_COUNT)
+        result.max_count = max_count
         forward_threshold = self._forward_threshold()
         if tool and send_mode == "single":
             forward_threshold = MAX_IMAGE_COUNT
@@ -239,7 +241,6 @@ class SearchMixin:
             return result
 
         # 参数解析
-        max_count = self._cfg_int("max_count", 5, 1, MAX_IMAGE_COUNT)
         try:
             requested_count = max(1, int(count_str)) if count_str else 1
         except (TypeError, ValueError):
@@ -248,7 +249,9 @@ class SearchMixin:
 
         result.requested_count = requested_count
         result.count = count
-        reduced = False
+        if tool and count < requested_count:
+            result.count_limits.append("max_count")
+            result.notice = f"本次请求 {requested_count} 张，插件单次上限为 {max_count} 张。"
         if tool and (not sender_id or (charge_requested and wallet is None)):
             result.message = "发图服务暂不可用，本次未执行。"
             return result
@@ -267,8 +270,8 @@ class SearchMixin:
                 if affordable < count:
                     count = affordable
                     result.count = count
-                    reduced = True
-                    result.notice = f"现在的金币只够取 {count} 张，这次先取这些。"
+                    result.count_limits.append("balance")
+                    result.notice += f"现在的金币只够取 {count} 张，这次先取这些。"
             else:
                 balance_error = await self._p_balance_error(sender_id, count, unit_cost=unit_cost)
                 if balance_error:
@@ -310,7 +313,7 @@ class SearchMixin:
             f"{LOG_PREFIX} 搜索候选获取完成: "
             f"tag_configured={'yes' if tag else 'no'} "
             f"source={_search_source_label(source_key)} "
-            f"requested_count={count} quality={_search_quality_label(quality)} "
+            f"requested_count={requested_count} effective_count={count} max_count={max_count} quality={_search_quality_label(quality)} "
             f"candidate_count={raw_count}"
         )
 
@@ -604,7 +607,7 @@ class SearchMixin:
         finally:
             cleanup_task = asyncio.create_task(self._finish_search(
                 event, result, wallet=wallet, charging=charging, unit_cost=unit_cost,
-                sender_id=sender_id, tool=tool, reduced=reduced,
+                sender_id=sender_id, tool=tool,
                 sent_illust_ids=sent_illust_ids, temp_paths=temp_paths,
                 retained_paths=retained_paths, pending_illust_ids=pending_illust_ids,
                 unknown_illust_ids=unknown_illust_ids, image_sources=image_sources,
@@ -624,7 +627,7 @@ class SearchMixin:
         return result
 
     async def _finish_search(
-        self, event, outcome, *, wallet, charging, unit_cost, sender_id, tool, reduced,
+        self, event, outcome, *, wallet, charging, unit_cost, sender_id, tool,
         sent_illust_ids, temp_paths, retained_paths, pending_illust_ids,
         unknown_illust_ids, image_sources,
     ):
@@ -659,7 +662,7 @@ class SearchMixin:
                         # spend_coins 返回事务内的扣款后余额；反推同事务的扣款前余额。
                         after = result.profile.coins // unit_cost
                         before = (result.profile.coins + total_cost) // unit_cost
-                        if tool and not reduced and before > 2 and after <= 2:
+                        if tool and not outcome.notice and before > 2 and after <= 2:
                             outcome.notice = "剩下的金币快不够取图了，记得签到补充一下。"
                         logger.info(
                             f"{LOG_PREFIX} /p 金币结算: "
@@ -682,7 +685,7 @@ class SearchMixin:
                     if tool:
                         outcome.message = "金币结算状态暂时无法确认，请联系管理员核对；不要重复取图。"
                     logger.warning(
-                        f"{LOG_PREFIX} /p 金币结算失败，本次不扣费: "
+                        f"{LOG_PREFIX} /p 金币结算调用异常，扣费状态待核对: "
                         f"error_type={type(exc).__name__}"
                     )
         finally:

@@ -144,3 +144,12 @@ async def test_valid_dimensions_never_override_content_safety_or_service_failure
     sender.assert_not_awaited()
     plugin.downloader.download_for_send.assert_not_awaited()
     assert (await plugin.checkin_store.find_profile("10001")).coins == 100
+
+
+@pytest.mark.parametrize("ratio,tolerance", [(0.1, 0.05), (0.05, 0.025), (0.75, 0.1)])
+def test_default_ratio_tolerance_accepts_narrow_ratios(ratio, tolerance):
+    selection = ImageSelection.from_args({"aspect_ratio": ratio})
+    assert selection.ratio_tolerance == tolerance
+    assert selection.matches_dimensions(50, int(50 / ratio))
+    assert not selection.matches_dimensions(100, 100)
+    assert ImageSelection.from_args({"aspect_ratio": ratio, "ratio_tolerance": 0}).ratio_tolerance == 0
