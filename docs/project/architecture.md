@@ -27,6 +27,8 @@ checkin/
 │  └─ holiday.py         联网节假日数据更新与查询
 pixiv/
 │  ├─ search.py          可选 Lolicon/Pixiv 优先级与双向请求回退流程
+│  ├─ search_result.py   命令与工具共享的执行结果
+│  ├─ selection.py       本次方向、比例、像素与大小约束
 │  ├─ delivery.py        消息发送错误处理
 │  ├─ filters.py         普通分级、漫画和安全策略过滤
 │  ├─ safety.py          内置安全词与文本规范化
@@ -138,3 +140,13 @@ initialize 获取插件数据目录后，将 `data_dir / "temp"` 注入共享 Im
 下载阶段以 `time.monotonic()` 建立 `request_timeout * max(3, count)` 秒的共享截止时间，单张下载（含反代轮换）及补取用 `asyncio.wait_for` 传入剩余预算。到期取消进行中的操作，发送已下载图片；首次取源、消息发送及清理不在预算内。外部取消继续传播。
 
 大小约束由 `download()` 统一执行：Content-Length 超限时不读取正文，流式字节累计超限立即中止并清理半文件；`download_for_send()` 不重复检查返回大小。`ImageSizeLimitError` 按类型记录为 `size_limit` 并交回选图层，异常文案不参与分类。
+
+## 模型取图
+
+`tools/images.py` 注册 `get_px_image` 与 `get_px_context`，`skills/get-px-image/SKILL.md` 提供随包调用说明。`main.py` 在初始化后注册工具，卸载时先停用工具、取消并等待在途调用完成结算与清理，再关闭领域资源；生命周期检查覆盖工具解绑。
+
+`SearchMixin._execute_search()` 是命令与工具的共享执行入口，`_handle_search()` 只向命令展示结果消息。`SearchResult` 记录下载、各送达状态、结算和中断事实，不暴露路径、URL 或正常账单。`ImageSelection` 只在工具请求中生效，先筛候选尺寸，再核对下载文件头，大小限制与管理员限制取较小值。主线已有有限补取和数字 offset 机制保持原样，没有候选列表或主动翻页工具。
+
+工具从事件取得当前用户和会话，不接受目标会话或安全策略参数；校验完整 UMO 后沿用当前群聊／私聊策略。状态返回 `builtin_terms_enabled`，不提供安全分组或宽松／严格模式。`get_px_context` 不建档、不预留金币，免费时 `balance` 和 `affordable_count` 为 null，不读取钱包。
+
+同事件通过 extra 保存唯一 `SearchResult`；执行中、结束、取消后均不再次取图。工具选图等待预算来自框架超时，预留一半（最多 30 秒）给发送、结算及清理，首轮取源也受限；命令沿用原预算。发送后的结算和清理受 shield 保护，重复取消仍等待收尾；正常返回、受理、超时沿用既有收费规则，未知送达不补发。正常工具账单只记日志，余额不足缩减或跨低余额阈值时才返回提醒。

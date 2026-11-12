@@ -116,3 +116,7 @@ v3.8.7 的配置升级基线为已成功完成迁移的 v3.8.0，配置只保留
 - `image_quality` 不影响签到背景，签到卡/日历背景画质由 `checkin_card_quality_tier` 独立控制。
 - `pixiv_refresh_token` 留空时跳过 Pixiv，仅请求 Lolicon；失败或无结果时不再有可用回退源。
 - schema 顶层仅定义六个正式分组，不再复制隐藏兼容键。策略服务只读写 `content_dedupe` 的正式模板；分组中的空列表不得恢复已停用的顶层策略。
+
+## 模型取图参数
+
+v3.8.8 无新增持久配置。原生工具沿用 `max_count`、`p_coin_cost`、`checkin_enabled`、图源、画质、大小上限和现有群聊／私聊安全策略。`tag`、`count`、`send_mode`、`orientation`、`aspect_ratio`、`ratio_tolerance`、`min_width`、`min_height`、`max_size_mib` 仅作用于本次工具调用，完整约束见 [随包 Skill](../../skills/get-px-image/SKILL.md)。默认 `single`；`auto` 才使用 `forward_threshold`，`forward` 仍受 OneBot 平台能力限制。

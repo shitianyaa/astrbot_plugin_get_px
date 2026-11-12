@@ -4,7 +4,7 @@
 
 | 场景 | 工作目录 | 命令 |
 | --- | --- | --- |
-| Python 语法检查 | 插件目录 | `python -m compileall -q main.py checkin pixiv plugin_api scripts/ci tests` |
+| Python 语法检查 | 插件目录 | `python -m compileall -q main.py checkin pixiv tools plugin_api scripts/ci tests` |
 | JSON schema 检查 | 插件目录 | `python -m json.tool _conf_schema.json` |
 | JavaScript 语法检查 | 插件目录 | `node --check pages/pluginCenter/app.js` |
 | pytest 全部测试 | 插件目录 | `python -m pytest -v tests` |
@@ -153,7 +153,7 @@ node --check pages/pluginCenter/app.js
 
 ```bash
 # 1. 语法检查
-python -m compileall -q main.py checkin pixiv plugin_api scripts/ci tests
+python -m compileall -q main.py checkin pixiv tools plugin_api scripts/ci tests
 python -m json.tool _conf_schema.json > /dev/null
 node --check pages/pluginCenter/app.js
 
@@ -271,3 +271,9 @@ python -m pytest -q tests/test_checkin_cache.py tests/test_checkin_calendar.py t
 软上限回归验证声明长度超限不读取正文、未知长度超限后停止迭代并清理半文件；时间预算回归用短时测试替身验证下载与候选补取超时取消网络操作，发送并结算已有图片。
 
 多图时间预算回归用模拟时钟验证 1／5／20 张及 5／30 秒超时配置不会被固定 90 秒截断；超限拒绝测试走真实下载器并验证清理及错误类型分类。
+
+## 模型取图验证
+
+`python -m pytest -q tests/test_image_tools.py tests/test_image_selection_constraints.py tests/test_p_coin_cost.py tests/test_main_error_handling.py tests/test_plugin_lifecycle.py` 覆盖参数拒绝、现有安全策略、余额读取／缩减／免费路径、直发与合并、真实文件筛选、同事件幂等、送达未知、重复取消结算与工具卸载。生命周期 harness 通过官方管理器观察原生工具注册、重载和解绑，质量门禁包含 tools 编译检查。
+
+真实聊天还需验证当前模型可见工具、随包 Skill 可发现以及 OneBot 实际收图；单元测试使用网络和发送桩，不替代协议端收图确认。

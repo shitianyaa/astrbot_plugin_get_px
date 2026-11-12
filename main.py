@@ -45,6 +45,7 @@ from astrbot.core.star.filter.command import GreedyStr
 from astrbot.core.star.star_tools import StarTools
 from .checkin import CheckinStore, UnversionedCheckinDatabaseError
 from .group_safety import GroupSafetyService
+from .tools.images import ImageToolService
 from .checkin.application import CheckinApplicationMixin
 from .checkin.artwork import CheckinArtworkMixin
 from .checkin.cache import CheckinCardCache
@@ -67,7 +68,7 @@ from .plugin_api import PluginWebApi
 
 LOG_PREFIX = "[GetPx]"
 PLUGIN_NAME = "astrbot_plugin_get_px"
-PLUGIN_VERSION = "v3.8.7"
+PLUGIN_VERSION = "v3.8.8"
 WEB_INTERNAL_ERROR_MESSAGE = "服务内部错误，请稍后重试"
 
 AUTO_TRIGGER_PATTERN = r"^/?(来\s*(.*?)(份|个|张|点))(.*?)(福利|色|瑟|涩|塞)?图$"
@@ -130,6 +131,7 @@ class GetPxPlugin(
         self.holiday_calendar: HolidayCalendar | None = None
         self._holiday_refresh_task: asyncio.Task | None = None
         self._termination_task: asyncio.Task[None] | None = None
+        self.image_tools: ImageToolService | None = None
         self._checkin_flow_locks: weakref.WeakValueDictionary[str, asyncio.Lock] = (
             weakref.WeakValueDictionary()
         )
@@ -205,6 +207,8 @@ class GetPxPlugin(
             self._refresh_holiday_calendar()
         )
         self.plugin_web_api.register()
+        self.image_tools = ImageToolService(self)
+        self.image_tools.register()
         logger.info(f"{LOG_PREFIX} 插件已加载: version={PLUGIN_VERSION}")
 
     async def _refresh_holiday_calendar(self) -> None:
@@ -294,6 +298,10 @@ class GetPxPlugin(
 
     async def _terminate_resources(self) -> None:
         """执行一次插件资源清理。"""
+        image_tools = getattr(self, "image_tools", None)
+        if image_tools is not None:
+            await image_tools.close()
+            self.image_tools = None
         plugin_web_api = getattr(self, "plugin_web_api", None)
         if plugin_web_api is not None:
             plugin_web_api.unregister()

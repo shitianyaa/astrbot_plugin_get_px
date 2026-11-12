@@ -7,7 +7,7 @@
 一个面向 AstrBot 的安全发图与签到插件：Lolicon/Pixiv 图片源优先级可选，请求失败或无结果时自动回退，并在 WebUI 管理群排行、成员数值、内容安全和签到数据。
 
 ![AstrBot](https://img.shields.io/badge/AstrBot-plugin-5865f2?style=flat-square)
-![Version](https://img.shields.io/badge/version-3.8.7-22c55e?style=flat-square)
+![Version](https://img.shields.io/badge/version-3.8.8-22c55e?style=flat-square)
 ![Python](https://img.shields.io/badge/Python-3.10%2B-3776ab?style=flat-square)
 ![Platform](https://img.shields.io/badge/platform-OneBot%20%2F%20aiocqhttp-f97316?style=flat-square)
 ![License](https://img.shields.io/badge/license-MIT-3b82f6?style=flat-square)
@@ -27,6 +27,7 @@
 - [功能一览](#功能一览)
 - [快速开始](#快速开始)
 - [常用指令](#常用指令)
+- [模型原生取图](#模型原生取图)
 - [自然语言触发](#自然语言触发)
 - [WebUI](#webui-插件管理中心)
 - [每日签到](#每日签到)
@@ -92,6 +93,8 @@
 
 标准版本不提供用于 Pixiv 登录、API 请求或图片下载的 HTTP/SOCKS 出站代理；这类网络代理请使用 [`proxy` 分支](https://github.com/shitianyaa/astrbot_plugin_get_px/tree/proxy)。如果只是 Lolicon 返回的图片地址不可用，可在 `lolicon_image_proxy_origins` 中按行填写图片反代 origin，插件只改写 Lolicon 图片 URL，不代理 API 或 Pixiv 登录。
 
+**v3.8.8 升级说明：** 新增模型原生取图工具和随包 Skill，沿用现有群聊／私聊安全策略，无新增持久配置或数据库迁移。详见 [v3.8.8 更新日志](CHANGELOG.md#v388-2026-11-11)。
+
 **v3.8.7 升级说明：** OneBot 发图默认使用本地路径，仅在明确文件读取失败时回退到 base64 编码重试一次，无需设置 `onebot_image_transport`。普通发图调用正常返回或发送超时均结算，超时不重发，即使最终未出图也扣费；签到与付费刷新卡片超时保留背景、缓存和占用。配置以已完成迁移的 v3.8.0 为升级基线，不再保留旧扁平兼容键；升级前请备份并阅读下方注意事项。详见 [OneBot 图片发送](#onebot-图片发送) 和 [v3.8.7 更新日志](CHANGELOG.md#v387-2026-11-07)。
 
 > [!WARNING]
@@ -145,6 +148,19 @@
 
 > 指令名如与其他插件冲突，可在 AstrBot Dashboard 的指令管理（`alter_cmd`）中调整对应指令的权限或停用状态。
 > 文档使用默认前缀 `/`；实际可替换为 AstrBot `wake_prefix` 中配置的 `.`、`。` 等前缀。
+
+## 模型原生取图
+
+模型可调用 `get_px_image` 直接向当前聊天发送图片，调用 `get_px_context` 只读当前用户余额与取图限制。两者不依赖 MCP，也不需要开启下面的正则自动触发。
+
+随包 [get-px-image Skill](skills/get-px-image/SKILL.md) 提供调用说明；AstrBot 需要支持插件 Skill 自动发现。旧版无法读取 Skill 时仍可使用原生工具及其参数描述。
+
+- 默认逐张直发；用户明确要求时可用 `send_mode=forward` 合并转发（仅 OneBot），`auto` 沿用配置阈值。
+- `tag` 最多 48 字符，只传短标签或确定的单一语言角色名，不自动扩写。`count` 默认 1，受管理员数量上限限制。
+- 可按本次要求指定方向、宽高比及容差、最小像素宽高和 `max_size_mib`；元数据粗筛后核对实际文件尺寸，大小上限只能收紧，不换画质、不放宽筛选。
+- 沿用当前图源、限频、去重、安全策略和收费规则。收费时余额只够部分张数会缩减，余额读取失败拒绝；免费时不查询钱包。
+- 正常取图不发送账单；余额不足、数量缩减及跨低余额阈值时给出提醒。`/p` 仍保留原有账单。
+- 同一消息事件只执行一次，追加取图需另发消息。工具仅返回执行事实，不返回图片路径或 URL；下载数量不等于送达数量，送达未知不补发。
 
 ## 自然语言触发
 

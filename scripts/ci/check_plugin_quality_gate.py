@@ -32,13 +32,14 @@ def main() -> int:
             "main.py",
             "checkin",
             "pixiv",
+            "tools",
             "plugin_api",
             "scripts/ci",
             "tests",
         ),
         (python, "-m", "json.tool", "_conf_schema.json"),
         ("node", "--check", "pages/pluginCenter/app.js"),
-        (python, "-m", "pytest", "-v"),
+        (python, "-m", "pytest", "-v", "tests"),
     )
     for command in checks:
         _run_check(command)

@@ -14,6 +14,7 @@
   - `main.py`: 插件生命周期、指令装饰器、配置读取和领域对象装配
   - `checkin/`: 签到业务（数据模型、规则、存储、商店、卡片渲染）
   - `pixiv/`: 作品获取（搜索、下载、安全过滤、多日去重索引）
+  - `tools/` & `skills/`: 模型原生取图入口与随包使用说明
   - `plugin_api/` & `pages/`: Plugin Pages 后端 API 与前端管理界面（原生 HTML/CSS/JS）
   - `tests/` & `docs/`: 自动化测试、项目文档
   - `Progress/`: 本地开发进度记录（仅本地使用，不入库）
@@ -38,6 +39,7 @@
 - **下载规范**: `downloader.download()` 为异步方法，需传 `url`、`timeout`，返回 `(path, size)` 元组，调用方必须显式解包。
 - **配置读取**: 统一通过 `main.py` 封装方法读取，严禁散落调用 `self.context.get_config(...)`；schema 仅保留六个正式分组，配置升级基线为已完成迁移的 v3.8.0，兼容边界见 `docs/project/configuration.md`。
 - **数据库迁移**: SQLite schema 变更必须在 `checkin/schema.py` 提供版本迁移与备份机制。
+- **模型取图**: 复用共享取图、发送、结算；同事件只执行一次，未知送达不补发，停用先等待在途结算与清理。Skill 不是安全边界。
 - **主题自包含**: 签到卡主题生成必须内联 CSS/base64 字体，严禁外部网络 URL。
 - **日志规范**: logger 统一通过 `from astrbot.api import logger` 导入，禁止使用 Python 内置 `logging` 或以其作为导入失败的回退；独立测试如需替代日志器，在测试侧注入 mock。日志使用“中文事件描述 + `snake_case=value` 字段”，禁止吞掉异常。
 
@@ -51,7 +53,7 @@
 
 ```bash
 python -m json.tool _conf_schema.json
-python -m compileall -q main.py checkin pixiv plugin_api tests
+python -m compileall -q main.py checkin pixiv tools plugin_api tests
 node --check pages/pluginCenter/app.js
 python -m pytest -v tests
 ```
