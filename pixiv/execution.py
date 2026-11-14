@@ -525,7 +525,7 @@ class SearchExecution:
         for item in picked:
             item_id = str(item.get("id") or "")
             self.image_sources[item_id] = self.source_key
-            if self.dedupe_days > 0 and self.plugin.image_index is not None and item_id:
+            if self.plugin.image_index is not None and item_id:
                 self.pending_illust_ids.add(item_id)
         if cancelled:
             raise asyncio.CancelledError

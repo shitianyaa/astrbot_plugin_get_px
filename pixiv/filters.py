@@ -207,12 +207,15 @@ class FiltersMixin:
         ordered: bool = False,
         allow_repeat: bool = False,
     ) -> list[dict]:
-        if not dedupe_enabled or self.image_index is None:
+        if self.image_index is None:
             return illusts[:pick_count] if ordered else random.sample(illusts, pick_count)
 
         scope = self._event_scope(event)
         try:
-            used_ids = await self.image_index.get_used_illust_ids(scope, source_key)
+            used_ids = (
+                await self.image_index.get_used_illust_ids(scope, source_key)
+                if dedupe_enabled else set()
+            )
         except Exception as e:
             logger.warning(
                 f"{LOG_PREFIX} 读取发图去重索引失败: "
@@ -225,7 +228,7 @@ class FiltersMixin:
         repeated = [i for i in by_usage if str(i.get("id") or "") in used_ids]
 
         # 若整页全被用过，推进分页游标供下次翻页
-        if not fresh and raw_count > 0 and not ordered:
+        if dedupe_enabled and not fresh and raw_count > 0 and not ordered:
             try:
                 await self.image_index.advance_page_offset(scope, source_key, raw_count)
             except Exception as e:
@@ -253,6 +256,7 @@ class FiltersMixin:
                     illust_id=illust_id,
                     feature="normal_pending",
                     user_id=user_id,
+                    ignore_history=not dedupe_enabled,
                 )
             except Exception:
                 return chosen

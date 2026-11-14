@@ -79,6 +79,7 @@ description: 用户明确要插画、作品、榜单、作者或关联作品时�
 - `status` 的 `ok` 表示有结果，`empty` 表示本批无候选，`filtered` 表示本批候选未通过过滤；拒绝或异常可能为 `invalid_request`、`authentication_required`、`upstream_error`、`query_unavailable`、`rate_limited`、`budget_exhausted`、`cursor_invalid`。均结合 `message` 解释，不自动重试。
 - `pagination.returned` 是本次结果数；`has_more` 只表示还有缓冲候选或上游续页，不保证下一批有合格作品，不推断总量。
 - 有 `next_cursor` 时，将其作为下一次调用的 `cursor`，只传这一个参数，不修改查询条件。游标绑定工具种类、会话、用户、账号配置与当前安全规则；有效10分钟，最多保留128个，可能因淘汰、重载或规则变化而失效。重复有效游标返回同一页，失效不自动重新查询。
+- 同一查询链跨批过滤已展示的作品／作者，指定作品按 ID 与页码区分；累计最多展示1000条。达到上限时 `pagination.limit_reached=true` 且没有下一页，按返回说明结束续查，不自动新建查询绕过。
 - 每次最多扫描3个上游批次，并受请求与框架超时约束；可能返回空结果但仍有续页。用户要求继续看时再续查，不为凑够数量无限翻页。
 - Lolicon 返回 `sampling=random`，没有真实分页游标，再次查询可能重复。无 token 时仍可使用 `auto` 查询或取图，其余模式不可用。
 - 同事件相同查询复用结果，不同查询可以串联；公开查询独立限频，不占用本事件唯一发图机会。查询后调用取图仍会重新检查安全、余额与数量。

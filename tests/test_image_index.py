@@ -63,6 +63,13 @@ class ImageIndexStoreTest(unittest.IsolatedAsyncioTestCase):
 
                 self.assertEqual(results.count(True), 1)
                 self.assertEqual(results.count(False), 19)
+                await store.record_usage(
+                    scope="group:1", source_key="pixiv:recommended", illust_id="101", feature="normal"
+                )
+                await store.set_retention_days(0)
+                store.close()
+                store = FrozenImageIndexStore(tmp)
+                await store.set_retention_days(0)
                 self.assertEqual(
                     await store.get_used_illust_ids("group:1", "pixiv:recommended"), {"100"}
                 )
@@ -86,6 +93,10 @@ class ImageIndexStoreTest(unittest.IsolatedAsyncioTestCase):
                         user_id="user:next",
                     )
                 )
+                await store.record_usage(
+                    scope="group:1", source_key="pixiv:recommended", illust_id="100", feature="normal"
+                )
+                self.assertEqual(await store.get_used_illust_ids("group:1", "pixiv:recommended"), set())
             finally:
                 store.close()
 

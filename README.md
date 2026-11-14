@@ -160,7 +160,7 @@ AstrBot 图片与签到插件，支持 Lolicon / Pixiv 搜图、模型取图、�
 | `auto_downgrade_original_mb` | 图片大小上限，默认 `10` MiB；超限换作品，`0` 关闭软上限 |
 | `forward_threshold` | 仅 aiocqhttp：`0` 始终合并，默认 `1` 表示超过 1 张时合并；模型工具仅自动发送模式使用此值 |
 | `checkin_card_quality_tier` | 签到卡和日历画质：省流量／清晰／极致，默认省流量 |
-| `dedupe_days` | 默认只去重北京时间当天，可设 `0–7`；`0` 关闭，不同会话、标签和图源独立 |
+| `dedupe_days` | 默认只去重北京时间当天，可设 `0–7`；`0` 关闭历史去重，仍保留当天在途和送达未知占用；不同会话、标签和图源独立 |
 | `lolicon_image_proxy_origins` | Lolicon 图片地址无法访问时填写，每行一个 origin |
 
 修改后保存并重载。完整配置见[配置说明](docs/project/configuration.md)。

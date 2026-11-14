@@ -20,6 +20,7 @@ from .stats import ArtworkStatsClient, STATS_TIMEOUT
 
 CURSOR_TTL = 600.0
 CURSOR_LIMIT = 128
+QUERY_RECORD_LIMIT = 1000
 
 
 @dataclass
@@ -299,11 +300,10 @@ class DiscoveryService:
             stream.target_results = list(stream.target_results)
         buffer, seen, records = list(state.buffer), set(state.seen), []
         batches = 0
-        while len(records) < state.limit:
+        while len(records) < state.limit and len(seen) < QUERY_RECORD_LIMIT:
             if not buffer:
                 if stream.exhausted or batches >= 3:
                     break
-                seen.clear()
                 buffer.extend(await stream.next_batch())
                 batches += 1
                 if not buffer:
@@ -316,8 +316,11 @@ class DiscoveryService:
             records.append(
                 user_record(item) if state.kind == "users" else artwork_record(item)
             )
-        more = bool(buffer) or not stream.exhausted
+        capped = len(seen) >= QUERY_RECORD_LIMIT
+        more = (bool(buffer) or not stream.exhausted) and not capped
         pagination = {"returned": len(records), "has_more": more}
+        if capped:
+            pagination["limit_reached"] = True
         if more:
             pagination["next_cursor"] = self._store(
                 CursorState(
@@ -340,6 +343,8 @@ class DiscoveryService:
             "retry_allowed": False,
             "guidance": "这里只返回元数据，没有发送图片、扣费或识别画面；候选不代表已送达，不推断图库总量。",
         }
+        if capped:
+            result["message"] = f"本次查询已展示 {QUERY_RECORD_LIMIT} 条，续查已结束。"
         if state.include_stats:
             result["stats_requested"] = True
         if stream.sampled:

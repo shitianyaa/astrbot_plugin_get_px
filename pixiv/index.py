@@ -325,6 +325,7 @@ class ImageIndexStore:
         illust_id: str,
         feature: str,
         user_id: str = "",
+        ignore_history: bool = False,
     ) -> bool:
         illust_id = str(illust_id or "")
         if not illust_id:
@@ -342,6 +343,7 @@ class ImageIndexStore:
                     feature,
                     user_id,
                     now,
+                    ignore_history,
                 )
         except Exception as exc:
             logger.warning(
@@ -451,13 +453,16 @@ class ImageIndexStore:
 
     def _retention_cutoff_key(self, date_key: str) -> str:
         current_date = datetime.fromisoformat(date_key).date()
-        return (current_date - timedelta(days=self._retention_days - 1)).isoformat()
+        return (current_date - timedelta(days=max(1, self._retention_days) - 1)).isoformat()
 
     def _cleanup_old_days_sync(self, date_key: str) -> int:
         conn = self._get_conn()
         try:
             if self._retention_days == 0:
-                cursor = conn.execute("DELETE FROM image_usage")
+                cursor = conn.execute(
+                    "DELETE FROM image_usage WHERE feature NOT IN ('normal_pending', 'checkin_pending') OR date_key < ?",
+                    (self._retention_cutoff_key(date_key),),
+                )
             else:
                 cutoff_key = self._retention_cutoff_key(date_key)
                 cursor = conn.execute(
@@ -544,16 +549,16 @@ class ImageIndexStore:
     def _get_used_illust_ids_sync(
         self, date_key: str, scope: str, source_key: str
     ) -> set[str]:
-        if self._retention_days == 0:
-            return set()
         cutoff_key = self._retention_cutoff_key(date_key)
         conn = self._get_conn()
         rows = conn.execute(
             """
             SELECT illust_id FROM image_usage
-            WHERE date_key BETWEEN ? AND ? AND scope = ? AND source_key = ?
+            WHERE date_key BETWEEN ? AND ? AND scope = ?
+                AND ((source_key = ? AND (? OR feature IN ('normal_pending', 'checkin_pending')))
+                    OR (source_key = ? AND feature IN ('normal_pending', 'checkin_pending')))
             """,
-            (cutoff_key, date_key, scope, source_key),
+            (cutoff_key, date_key, scope, source_key, self._retention_days > 0, source_key + ":inflight"),
         ).fetchall()
         return {str(row["illust_id"]) for row in rows}
 
@@ -809,23 +814,30 @@ class ImageIndexStore:
         sent_at: str,
     ) -> None:
         self._maybe_cleanup_old_days_sync(date_key)
-        if self._retention_days == 0:
-            return
         conn = self._get_conn()
         try:
+            if self._retention_days > 0:
+                conn.execute(
+                    """
+                    INSERT INTO image_usage (
+                        date_key, scope, source_key, illust_id, feature, user_id, sent_at
+                    )
+                    VALUES (?, ?, ?, ?, ?, ?, ?)
+                    ON CONFLICT(date_key, scope, source_key, illust_id)
+                    DO UPDATE SET
+                        feature = excluded.feature,
+                        user_id = excluded.user_id,
+                        sent_at = excluded.sent_at
+                    """,
+                    (date_key, scope, source_key, illust_id, feature, user_id, sent_at),
+                )
+            # 确认使用后释放同一业务的在途占用；关闭历史去重也执行。
             conn.execute(
                 """
-                INSERT INTO image_usage (
-                    date_key, scope, source_key, illust_id, feature, user_id, sent_at
-                )
-                VALUES (?, ?, ?, ?, ?, ?, ?)
-                ON CONFLICT(date_key, scope, source_key, illust_id)
-                DO UPDATE SET
-                    feature = excluded.feature,
-                    user_id = excluded.user_id,
-                    sent_at = excluded.sent_at
+                DELETE FROM image_usage
+                WHERE scope = ? AND source_key IN (?, ?) AND illust_id = ? AND feature = ?
                 """,
-                (date_key, scope, source_key, illust_id, feature, user_id, sent_at),
+                (scope, source_key, source_key + ":inflight", illust_id, feature + "_pending"),
             )
             conn.commit()
         except Exception:
@@ -841,10 +853,9 @@ class ImageIndexStore:
         feature: str,
         user_id: str,
         sent_at: str,
+        ignore_history: bool = False,
     ) -> bool:
         self._maybe_cleanup_old_days_sync(date_key)
-        if self._retention_days == 0:
-            return True
         cutoff_key = self._retention_cutoff_key(date_key)
         conn = self._get_conn()
         try:
@@ -852,11 +863,13 @@ class ImageIndexStore:
             row = conn.execute(
                 """
                 SELECT 1 FROM image_usage
-                WHERE date_key BETWEEN ? AND ? AND scope = ? AND source_key = ?
-                    AND illust_id = ?
+                WHERE date_key BETWEEN ? AND ? AND scope = ? AND illust_id = ?
+                    AND ((source_key = ? AND (? OR feature IN ('normal_pending', 'checkin_pending')))
+                        OR (source_key = ? AND feature IN ('normal_pending', 'checkin_pending')))
                 LIMIT 1
                 """,
-                (cutoff_key, date_key, scope, source_key, illust_id),
+                (cutoff_key, date_key, scope, illust_id, source_key,
+                 self._retention_days > 0 and not ignore_history, source_key + ":inflight"),
             ).fetchone()
             if row is not None:
                 conn.rollback()
@@ -868,7 +881,7 @@ class ImageIndexStore:
                 )
                 VALUES (?, ?, ?, ?, ?, ?, ?)
                 """,
-                (date_key, scope, source_key, illust_id, feature, user_id, sent_at),
+                (date_key, scope, source_key + ":inflight", illust_id, feature, user_id, sent_at),
             )
             conn.commit()
             return True
@@ -885,8 +898,6 @@ class ImageIndexStore:
         feature: str,
     ) -> None:
         self._maybe_cleanup_old_days_sync(date_key)
-        if self._retention_days == 0:
-            return
         cutoff_key = self._retention_cutoff_key(date_key)
         conn = self._get_conn()
         try:
@@ -895,13 +906,13 @@ class ImageIndexStore:
                 DELETE FROM image_usage
                 WHERE rowid IN (
                     SELECT rowid FROM image_usage
-                    WHERE date_key BETWEEN ? AND ? AND scope = ? AND source_key = ?
+                    WHERE date_key BETWEEN ? AND ? AND scope = ? AND source_key IN (?, ?)
                         AND illust_id = ? AND feature = ?
                     ORDER BY date_key DESC
                     LIMIT 1
                 )
                 """,
-                (cutoff_key, date_key, scope, source_key, illust_id, feature),
+                (cutoff_key, date_key, scope, source_key, source_key + ":inflight", illust_id, feature),
             )
             conn.commit()
         except Exception:

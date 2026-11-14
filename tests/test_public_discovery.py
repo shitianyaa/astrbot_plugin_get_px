@@ -77,6 +77,10 @@ def next_cursor(result):
 async def test_queries_preserve_buffer_and_do_not_send_charge_or_claim(tmp_path):
     plugin, context, _, service = await flow(tmp_path)
     plugin.image_index = ImageIndexStore(tmp_path)
+    plugin.client.query_page.side_effect = [
+        PixivPage([_illust(i) for i in range(1, 7)], {"offset": 6}),
+        PixivPage([_illust(i) for i in range(6, 11)]),
+    ]
     before = (await plugin.checkin_store.find_profile("10001")).coins
     first = await service.query(context, "artworks", {"mode": "ranking", "limit": 3})
     assert [r["id"] for r in first["records"]] == ["1", "2", "3"]
@@ -85,10 +89,11 @@ async def test_queries_preserve_buffer_and_do_not_send_charge_or_claim(tmp_path)
     repeated = await service.query(context, "artworks", {"cursor": next_cursor(first)})
     assert repeated == second
     third = await service.query(context, "artworks", {"cursor": next_cursor(second)})
+    assert [r["id"] for r in third["records"]] == ["7", "8", "9"]
     fourth = await service.query(context, "artworks", {"cursor": next_cursor(third)})
     assert [r["id"] for r in fourth["records"]] == ["10"]
     assert not fourth["pagination"]["has_more"]
-    assert plugin.client.query_page.await_count == 1
+    assert plugin.client.query_page.await_count == 2
     assert (
         not context.context.event.sent
         and not plugin.downloader.download_for_send.called
@@ -161,7 +166,7 @@ async def test_cursor_rechecks_context_policy_account_expiry_and_kind(tmp_path):
 
 
 @pytest.mark.asyncio
-async def test_cursor_memory_is_bounded_and_unload_clears_all_tools(tmp_path):
+async def test_cursor_memory_is_bounded_and_unload_clears_all_tools(tmp_path, monkeypatch):
     _, context, _, service = await flow(tmp_path)
     service.register()
     assert {tool.name for tool in service.tools} == {
@@ -170,7 +175,11 @@ async def test_cursor_memory_is_bounded_and_unload_clears_all_tools(tmp_path):
         "get_px_artworks",
         "get_px_users",
     }
-    await service.query(context, "artworks", {"mode": "ranking", "limit": 1})
+    first = await service.query(context, "artworks", {"mode": "ranking", "limit": 2})
+    monkeypatch.setattr("astrbot_plugin_get_px.pixiv.discovery.QUERY_RECORD_LIMIT", 3)
+    capped = await service.query(context, "artworks", {"cursor": next_cursor(first)})
+    assert [r["id"] for r in capped["records"]] == ["3"]
+    assert capped["pagination"] == {"returned": 1, "has_more": False, "limit_reached": True}
     template = next(iter(service.discovery.cursors.values()))
     for _ in range(CURSOR_LIMIT + 1):
         service.discovery._store(replace(template))
@@ -352,7 +361,7 @@ async def test_query_budget_cancel_and_concurrent_repeat_have_no_send(tmp_path):
 async def test_explicit_delivery_settlement_and_pending_cleanup(tmp_path, status):
     plugin, context, _, service = await flow(tmp_path)
     plugin.image_index = ImageIndexStore(tmp_path)
-    plugin._dedupe_days_cfg = 1
+    plugin.config["dedupe_days"] = 0
     with patch(
         "astrbot_plugin_get_px.pixiv.execution.send_once", AsyncMock(return_value=status)
     ):
@@ -366,6 +375,12 @@ async def test_explicit_delivery_settlement_and_pending_cleanup(tmp_path, status
         plugin._event_scope(context.context.event), "pixiv:artwork:explicit_pending"
     )
     assert bool(pending) is (status is DeliveryStatus.UNKNOWN)
+    if status is DeliveryStatus.UNKNOWN:
+        context.context.event = Event()
+        with patch("astrbot_plugin_get_px.pixiv.execution.send_once", AsyncMock()) as sender:
+            blocked = await service.image(context, {"mode": "artwork", "targets": [{"artwork": "1"}]})
+        sender.assert_not_awaited()
+        assert blocked["downloaded_count"] == 0
     plugin.image_index.close()
 
 
