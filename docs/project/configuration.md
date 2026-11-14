@@ -26,7 +26,7 @@
 
 Lolicon 请求地址固定为 `https://api.lolicon.app/setu/v2`。旧 `lolicon_api_url` 从 schema 删除，由 AstrBot 加载时裁剪；简单 dict 中的残留值也不参与请求，旧自定义地址和留空停用不再生效。图片反代 origin 配置仍只代理图片，不代理 API。
 
-OneBot 发图默认使用本地 `file:///` 路径；仅在明确文件读取失败（包括协议端“路径不存在”）时，将同一条消息回退到 base64 编码重试一次，超时不回退、不重发。base64 是图片编码，与 AstrBot 4.27.3 的 OneBot 默认发图编码相同；回退仍直接调用 OneBot，不额外尝试 AstrBot 框架发送。file 发送正常返回但没有有效 `message_id` 时仍扣费，并保留图片 10 分钟供协议端读取，不重发。旧 `onebot_image_transport`（顶层及 `pixiv_source` 内）由 AstrBot 在加载时按 schema 裁剪；插件不依赖旧键，也不能恢复框架已裁剪的值。发送异常仅记日志，详见 [OneBot 图片发送](../../README.md#onebot-图片发送)。
+OneBot 发图默认使用本地 `file:///` 路径；仅在明确文件读取失败（包括协议端“路径不存在”）时，将同一条消息回退到 base64 编码重试一次，超时不回退、不重发。base64 是图片编码，与 AstrBot 4.27.3 的 OneBot 默认发图编码相同；回退仍直接调用 OneBot，不额外尝试 AstrBot 框架发送。file 发送正常返回但没有有效 `message_id` 时仍扣费，并保留图片 10 分钟供协议端读取，不重发。旧 `onebot_image_transport`（顶层及 `pixiv_source` 内）由 AstrBot 在加载时按 schema 裁剪；插件不依赖旧键，也不能恢复框架已裁剪的值。发送异常仅记日志，详见 [发送流程](architecture.md#onebot-图片发送)。
 
 ## 2. 图片筛选与去重（`content_dedupe`）
 
@@ -124,7 +124,8 @@ v3.8.8 无新增持久配置。原生工具沿用 `max_count`、`p_coin_cost`、
 
 模型工具数量结果中，`requested_count` 是请求数量，`effective_count` 是应用配置及余额限制后的执行数量，`max_count` 是本次读取的上限，`count_limits` 列出 `max_count`／`balance`（可同时存在）。缩减原因通过 `notice` 说明；实际候选不足另由 `message` 说明，均不代表标签失效。搜索日志分别记录原始请求数、实际执行数与配置上限。
 
-
 模型工具默认逐张直发，仅 `send_mode=auto` 读取合并阈值。比例容差省略时使用 `min(0.1, aspect_ratio/2)`，显式传入仍须非负且小于目标比例，0 表示精确比例。
 
 公开作品与作者查询免费，不读钱包、不下载、不占去重，独立使用现有限频秒数；同事件允许查询后发送。默认模式沿用两源顺序，其余明确模式只使用 Pixiv，不因失败回退到 Lolicon。推荐基于配置账号，未联网验证的配置状态不证明 token 有效。查询游标仅保留在内存，不新增持久配置或数据库表；续查、失效和单页目标规则见随包 Skill。
+
+作品查询可传 `include_stats=true` 按需补查点赞、收藏和浏览量，默认 false，不是持久配置。只补查本批安全过滤后的候选，最多20个作品、并发3个，共用至多3秒的剩余查询预算；失败返回候选与已有统计，缺失计数为 null。普通发图、签到与日历不增加热度请求。游标继承原选项，续查只传 cursor。

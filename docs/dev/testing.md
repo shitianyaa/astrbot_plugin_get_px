@@ -289,3 +289,9 @@ python -m pytest -q tests/test_checkin_cache.py tests/test_checkin_calendar.py t
 扩展取图还覆盖关联种子与结果尺寸分离、Lolicon具体页码和未知总页数、非首张的实际文件尺寸校验，以及指定详情过滤状态。
 
 `tests/test_filtering.py` 使用真实 SQLite 索引覆盖随机选图与上游顺序的独立开关、开启／关闭去重，以及整页已用时仅普通模式推进命令游标；明确 Pixiv 模式不得推进命令游标。
+
+## 公开作品热度
+
+运行 `python -m pytest -q tests/test_artwork_stats.py tests/test_public_discovery.py tests/test_image_tools.py`。新增长期用例仅保留三个业务场景：按需查询及游标继承后指定作品发送，补查超时仍保留候选和已知统计，卸载取消补查并关闭会话。HTTP 字段映射和异常组合采用一次性验证，不另留实现细节测试。离线回归不代表公开端点持续可用或真实模型遵守 Skill。
+
+工具入口、共享参数及执行编排分别位于 tools/images.py、tools/discovery.py、tools/definitions.py 和 tools/service.py；发图执行位于 pixiv/execution.py。现有测试的发送与时钟替身注入执行模块，工具服务直接从 tools/service.py 导入，不保留旧路径别名。结构整理复用现有领域回归，不新增拆分专用用例。

@@ -12,8 +12,8 @@ from unittest.mock import AsyncMock, Mock, patch
 import pytest
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
+from astrbot_plugin_get_px.tools.service import ImageToolService
 from astrbot_plugin_get_px.tools.images import (
-    ImageToolService,
     GetPxImageTool,
     GetPxContextTool,
 )
@@ -71,7 +71,7 @@ async def test_tool_shrinks_to_affordable_and_never_emits_normal_bill(tmp_path):
     plugin, context, paths = await setup_flow(tmp_path, coins=45)
     service = ImageToolService(plugin)
     with patch(
-        "astrbot_plugin_get_px.pixiv.search.send_once",
+        "astrbot_plugin_get_px.pixiv.execution.send_once",
         AsyncMock(return_value=DeliveryStatus.ACCEPTED),
     ):
         summary = await service.image(context, {"count": 3})
@@ -96,7 +96,7 @@ async def test_low_balance_notice_uses_transaction_balance_and_frozen_price(tmp_
         plugin.config["p_coin_cost"] = 99
         return DeliveryStatus.CONFIRMED
 
-    with patch("astrbot_plugin_get_px.pixiv.search.send_once", side_effect=deliver):
+    with patch("astrbot_plugin_get_px.pixiv.execution.send_once", side_effect=deliver):
         summary = await ImageToolService(plugin).image(context, {"count": 3})
     assert (await plugin.checkin_store.find_profile("10001")).coins == 40
     assert summary["notice"] and summary["settlement"] == "completed"
@@ -147,7 +147,7 @@ async def test_free_context_and_image_do_not_depend_on_wallet(
     assert snapshot["max_count"] == 5 and snapshot["allow_r18"] is False
     assert not service._calls
     with patch(
-        "astrbot_plugin_get_px.pixiv.search.send_once",
+        "astrbot_plugin_get_px.pixiv.execution.send_once",
         AsyncMock(return_value=DeliveryStatus.CONFIRMED),
     ) as sender:
         summary = await service.image(context, {"count": 3})
@@ -215,7 +215,7 @@ async def test_tool_passes_short_names_without_expanding_or_truncating(tmp_path,
     plugin, context, _ = await setup_flow(tmp_path, items=1)
     plugin._fetch_source_candidates = AsyncMock(wraps=plugin._fetch_source_candidates)
     with patch(
-        "astrbot_plugin_get_px.pixiv.search.send_once",
+        "astrbot_plugin_get_px.pixiv.execution.send_once",
         AsyncMock(return_value=DeliveryStatus.CONFIRMED),
     ):
         summary = await ImageToolService(plugin).image(context, {"tag": tag})
@@ -331,7 +331,7 @@ async def test_actual_framework_executor_returns_text_and_does_not_resend(tmp_pa
     service = ImageToolService(plugin)
     wrapper = ContextWrapper(context=context.context, tool_call_timeout=120)
     with patch(
-        "astrbot_plugin_get_px.pixiv.search.send_once",
+        "astrbot_plugin_get_px.pixiv.execution.send_once",
         AsyncMock(return_value=DeliveryStatus.CONFIRMED),
     ) as sender:
         outputs = [
@@ -366,7 +366,7 @@ async def test_uncertain_or_failed_delivery_keeps_existing_charge_rules(
 ):
     plugin, context, _ = await setup_flow(tmp_path, coins=100, items=1)
     with patch(
-        "astrbot_plugin_get_px.pixiv.search.send_once", AsyncMock(return_value=status)
+        "astrbot_plugin_get_px.pixiv.execution.send_once", AsyncMock(return_value=status)
     ) as sender:
         service = ImageToolService(plugin)
         summary = await service.image(context, {"send_mode": send_mode})
@@ -392,7 +392,7 @@ async def test_settlement_shortfall_is_reported_without_amounts_or_resending(tmp
         return DeliveryStatus.CONFIRMED
 
     with patch(
-        "astrbot_plugin_get_px.pixiv.search.send_once", side_effect=deliver
+        "astrbot_plugin_get_px.pixiv.execution.send_once", side_effect=deliver
     ) as sender:
         summary = await ImageToolService(plugin).image(context, {})
     assert summary["settlement"] == "failed" and summary["message"]
@@ -413,7 +413,7 @@ async def test_timeout_during_submit_remains_unknown_and_repeat_does_not_send(tm
         await asyncio.Event().wait()
 
     with patch(
-        "astrbot_plugin_get_px.pixiv.search.send_once", side_effect=deliver
+        "astrbot_plugin_get_px.pixiv.execution.send_once", side_effect=deliver
     ) as sender:
         with pytest.raises(Exception, match="execution timeout"):
             _ = [
@@ -444,7 +444,7 @@ async def test_repeated_cancellation_waits_for_started_settlement(tmp_path):
     plugin.checkin_store.spend_coins = slow_spend
     service = ImageToolService(plugin)
     with patch(
-        "astrbot_plugin_get_px.pixiv.search.send_once",
+        "astrbot_plugin_get_px.pixiv.execution.send_once",
         AsyncMock(return_value=DeliveryStatus.CONFIRMED),
     ):
         task = asyncio.create_task(service.image(context, {}))
@@ -481,7 +481,7 @@ async def test_current_group_rules_and_count_limit_are_authoritative(tmp_path):
     context.context.event.get_group_id = lambda: "other"
     assert not (await service.get_context(context, {}))["allow_r18"]
     plugin.config["max_count"] = 1
-    with patch("astrbot_plugin_get_px.pixiv.search.send_once",
+    with patch("astrbot_plugin_get_px.pixiv.execution.send_once",
                AsyncMock(return_value=DeliveryStatus.CONFIRMED)):
         summary = await service.image(context, {"count": 5})
     assert summary["requested_count"] == 5 and summary["effective_count"] == 1
@@ -577,7 +577,7 @@ async def test_count_limits_explain_clamping_without_losing_notices(
     plugin, context, _ = await setup_flow(tmp_path, coins=coins, items=3)
     plugin.config.update(max_count=limit, p_coin_cost=cost)
     service = ImageToolService(plugin)
-    with patch("astrbot_plugin_get_px.pixiv.search.send_once",
+    with patch("astrbot_plugin_get_px.pixiv.execution.send_once",
                AsyncMock(return_value=DeliveryStatus.CONFIRMED)):
         summary = await service.image(context, {"count": requested})
         duplicate = await service.image(context, {"count": requested})
@@ -596,7 +596,7 @@ async def test_count_limits_explain_clamping_without_losing_notices(
 @pytest.mark.asyncio
 async def test_candidates_shortfall_does_not_claim_a_count_limit(tmp_path):
     plugin, context, _ = await setup_flow(tmp_path, items=1)
-    with patch("astrbot_plugin_get_px.pixiv.search.send_once",
+    with patch("astrbot_plugin_get_px.pixiv.execution.send_once",
                AsyncMock(return_value=DeliveryStatus.CONFIRMED)):
         summary = await ImageToolService(plugin).image(context, {"count": 2})
     assert summary["effective_count"] == 2 and summary["downloaded_count"] == 1
@@ -615,7 +615,7 @@ async def test_settlement_exception_after_commit_reports_unknown_without_retry(t
 
     plugin.checkin_store.spend_coins = uncertain_spend
     service = ImageToolService(plugin)
-    with patch("astrbot_plugin_get_px.pixiv.search.send_once",
+    with patch("astrbot_plugin_get_px.pixiv.execution.send_once",
                AsyncMock(return_value=DeliveryStatus.CONFIRMED)) as sender, patch(
                    "astrbot_plugin_get_px.pixiv.search.logger"
                ) as logger:
@@ -650,7 +650,7 @@ async def test_rejected_and_exhausted_requests_never_send_charge_or_repeat(tmp_p
         plugin._check_rate_limit = lambda sender: 7
     plugin._fetch_source_candidates = AsyncMock(wraps=plugin._fetch_source_candidates)
     plugin.checkin_store.spend_coins = AsyncMock(wraps=plugin.checkin_store.spend_coins)
-    with patch("astrbot_plugin_get_px.pixiv.search.send_once", AsyncMock()) as sender:
+    with patch("astrbot_plugin_get_px.pixiv.execution.send_once", AsyncMock()) as sender:
         if tool:
             service = ImageToolService(plugin)
             summary = await service.image(context, {})

@@ -18,7 +18,7 @@ from astrbot_plugin_get_px.pixiv.filters import FiltersMixin
 from astrbot_plugin_get_px.pixiv.index import ImageIndexStore
 from astrbot_plugin_get_px.pixiv.query import QueryError
 from astrbot_plugin_get_px.pixiv.delivery import DeliveryStatus
-from astrbot_plugin_get_px.tools.images import ImageToolService
+from astrbot_plugin_get_px.tools.service import ImageToolService
 
 
 async def flow(tmp_path, items=10):
@@ -211,7 +211,7 @@ async def test_author_lookup_can_chain_into_ordered_send_without_query_side_effe
     assert users["records"][0]["id"] == "12"
     assert "is_followed" not in json.dumps(users)
     with patch(
-        "astrbot_plugin_get_px.pixiv.search.send_once",
+        "astrbot_plugin_get_px.pixiv.execution.send_once",
         AsyncMock(return_value=DeliveryStatus.CONFIRMED),
     ):
         summary = await service.image(
@@ -244,7 +244,7 @@ async def test_explicit_pages_deduplicate_targets_keep_order_and_report_skips(tm
         {"artwork": "42", "page": 3},
     ]
     with patch(
-        "astrbot_plugin_get_px.pixiv.search.send_once",
+        "astrbot_plugin_get_px.pixiv.execution.send_once",
         AsyncMock(return_value=DeliveryStatus.ACCEPTED),
     ):
         result = await service.image(context, {"mode": "artwork", "targets": targets})
@@ -279,7 +279,7 @@ async def test_explicit_repeat_allows_completed_history_but_not_pending_claim(tm
         feature="normal",
     )
     with patch(
-        "astrbot_plugin_get_px.pixiv.search.send_once",
+        "astrbot_plugin_get_px.pixiv.execution.send_once",
         AsyncMock(return_value=DeliveryStatus.CONFIRMED),
     ):
         result = await service.image(
@@ -354,7 +354,7 @@ async def test_explicit_delivery_settlement_and_pending_cleanup(tmp_path, status
     plugin.image_index = ImageIndexStore(tmp_path)
     plugin._dedupe_days_cfg = 1
     with patch(
-        "astrbot_plugin_get_px.pixiv.search.send_once", AsyncMock(return_value=status)
+        "astrbot_plugin_get_px.pixiv.execution.send_once", AsyncMock(return_value=status)
     ):
         result = await service.image(
             context, {"mode": "artwork", "targets": [{"artwork": "1"}]}
@@ -601,7 +601,7 @@ async def test_explicit_nonfirst_page_checks_actual_file_not_first_page_dimensio
     assert filtered_query["targets"][0]["status"] == "filtered"
     Image.new("RGB", file_dimensions).save(paths[0])
     with patch(
-        "astrbot_plugin_get_px.pixiv.search.send_once",
+        "astrbot_plugin_get_px.pixiv.execution.send_once",
         AsyncMock(return_value=DeliveryStatus.CONFIRMED),
     ):
         result = await service.image(

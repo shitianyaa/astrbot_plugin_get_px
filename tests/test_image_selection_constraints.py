@@ -14,7 +14,7 @@ from astrbot_plugin_get_px.pixiv.delivery import DeliveryStatus
 from astrbot_plugin_get_px.pixiv.filters import FiltersMixin
 from astrbot_plugin_get_px.pixiv.index import ImageIndexStore
 from astrbot_plugin_get_px.pixiv.selection import ImageSelection
-from astrbot_plugin_get_px.tools.images import ImageToolService
+from astrbot_plugin_get_px.tools.service import ImageToolService
 from test_image_tools import Event, setup_flow
 from test_p_coin_cost import _illust
 
@@ -56,7 +56,7 @@ async def test_tool_size_limit_can_only_tighten_and_does_not_write_config(
     plugin.config["auto_downgrade_original_mb"] = admin
     before = dict(plugin.config)
     args = {} if requested is None else {"max_size_mib": requested}
-    with patch("astrbot_plugin_get_px.pixiv.search.send_once", AsyncMock(return_value=DeliveryStatus.CONFIRMED)):
+    with patch("astrbot_plugin_get_px.pixiv.execution.send_once", AsyncMock(return_value=DeliveryStatus.CONFIRMED)):
         summary = await ImageToolService(plugin).image(context, args)
     assert summary["delivery"] == {"confirmed": 1}
     assert plugin.downloader.download_for_send.await_args.kwargs["size_limit_bytes"] == effective * 1024 * 1024
@@ -84,7 +84,7 @@ async def test_metadata_filter_precedes_claim_and_real_file_filter_releases_usag
     args = {"orientation": "portrait", "aspect_ratio": 0.75, "ratio_tolerance": 0, "min_width": 100, "min_height": 150}
     try:
         with patch("astrbot_plugin_get_px.pixiv.filters.random.sample", side_effect=lambda seq, n: list(seq)[:n]), patch(
-            "astrbot_plugin_get_px.pixiv.search.send_once", AsyncMock(return_value=DeliveryStatus.CONFIRMED)
+            "astrbot_plugin_get_px.pixiv.execution.send_once", AsyncMock(return_value=DeliveryStatus.CONFIRMED)
         ) as sender:
             summary = await ImageToolService(plugin).image(context, args)
         assert summary["downloaded_count"] == 1 and summary["delivery"] == {"confirmed": 1}
@@ -116,7 +116,7 @@ async def test_filtered_batches_replenish_without_relaxing_or_repeating(tmp_path
     plugin.downloader.download_for_send.return_value = (str(path), "original", path.stat().st_size)
     plugin.downloader.download_for_send.side_effect = None
     service = ImageToolService(plugin)
-    with patch("astrbot_plugin_get_px.pixiv.search.send_once", AsyncMock(return_value=DeliveryStatus.CONFIRMED)) as sender:
+    with patch("astrbot_plugin_get_px.pixiv.execution.send_once", AsyncMock(return_value=DeliveryStatus.CONFIRMED)) as sender:
         summary = await service.image(context, {"tag": "test", "count": 2, "orientation": "portrait"})
         repeated = await service.image(context, {"orientation": "landscape"})
     assert repeated["duplicate_call"]
@@ -134,7 +134,7 @@ async def test_valid_dimensions_never_override_content_safety_or_service_failure
     Image.new("RGB", (120, 160)).save(paths[0])
     plugin._filter_blacklisted_illusts = MethodType(FiltersMixin._filter_blacklisted_illusts, plugin)
     service = ImageToolService(plugin)
-    with patch("astrbot_plugin_get_px.pixiv.search.send_once", AsyncMock()) as sender:
+    with patch("astrbot_plugin_get_px.pixiv.execution.send_once", AsyncMock()) as sender:
         summary = await service.image(context, {"orientation": "portrait"})
         assert not summary["downloaded_count"]
         context.context.event = Event()

@@ -709,7 +709,7 @@ async def test_total_budget_scales_with_requested_count(count, timeout):
         clock[0] += timeout * 0.9
         return "unused.jpg", "original", 1024
     harness.downloader.download_for_send.side_effect = download
-    with patch("astrbot_plugin_get_px.pixiv.search.time", SimpleNamespace(monotonic=lambda: clock[0])):
+    with patch("astrbot_plugin_get_px.pixiv.execution.time", SimpleNamespace(monotonic=lambda: clock[0])):
         await _run_search(harness, _FlowEvent(), str(count))
     assert harness.downloader.download_for_send.await_count == count
     harness.checkin_store.spend_coins.assert_awaited_once_with(user_id="10001", cost=20 * count)

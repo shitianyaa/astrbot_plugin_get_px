@@ -40,7 +40,7 @@ from astrbot.core.star.filter.command import GreedyStr
 from astrbot.core.star.star_tools import StarTools
 from .checkin import CheckinStore, UnversionedCheckinDatabaseError
 from .group_safety import GroupSafetyService
-from .tools.images import ImageToolService
+from .tools.service import ImageToolService
 from .checkin.application import CheckinApplicationMixin
 from .checkin.artwork import CheckinArtworkMixin
 from .checkin.cache import CheckinCardCache

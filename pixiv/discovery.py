@@ -16,6 +16,7 @@ from astrbot.api import logger
 from .catalog import CandidateStream, artwork_record, user_record
 from .query import ArtworkQuery, QUERY_KEYS, QueryError, positive_id
 from .selection import ImageSelection, SELECTION_PARAMETERS
+from .stats import ArtworkStatsClient, STATS_TIMEOUT
 
 CURSOR_TTL = 600.0
 CURSOR_LIMIT = 128
@@ -64,6 +65,7 @@ class CursorState:
     expires: float = 0.0
     result: dict | None = None
     lock: asyncio.Lock = field(default_factory=asyncio.Lock)
+    include_stats: bool = False
 
 
 class DiscoveryService:
@@ -74,6 +76,7 @@ class DiscoveryService:
         self.plugin = plugin
         self.cursors: OrderedDict[str, CursorState] = OrderedDict()
         self.last_request: dict[str, float] = {}
+        self.stats_client = ArtworkStatsClient()
 
     def clear(self):
         self.cursors.clear()
@@ -148,9 +151,12 @@ class DiscoveryService:
                 budget = min(
                     timeout, self.plugin._cfg_float("request_timeout", 30.0, 5.0, 120.0)
                 )
+                deadline = time.monotonic() + budget
                 result = await asyncio.wait_for(
                     self._execute(event, kind, args, policy, binding), budget
                 )
+                if result.get("stats_requested"):
+                    await self._enrich_stats(result["records"], deadline)
             except asyncio.CancelledError:
                 future.cancel()
                 raise
@@ -162,6 +168,24 @@ class DiscoveryService:
             raise
         except Exception as exc:
             return self.error(exc)
+
+    async def _enrich_stats(self, records, deadline):
+        for record in records:
+            for key in ("total_likes", "total_bookmarks", "total_view"):
+                value = record.get(key)
+                if type(value) is not int or value < 0:
+                    record[key] = None
+        remaining = min(STATS_TIMEOUT, deadline - time.monotonic())
+        if not records or remaining <= 0:
+            return
+        try:
+            await asyncio.wait_for(self.stats_client.enrich(records), remaining)
+        except asyncio.TimeoutError:
+            logger.info("[GetPx] 作品热度补查预算耗尽: stats_status=partial")
+        except Exception as exc:
+            logger.warning(
+                f"[GetPx] 作品热度补查未完成: error_type={type(exc).__name__}"
+            )
 
     @staticmethod
     def error(exc):
@@ -197,12 +221,15 @@ class DiscoveryService:
         limit = args.get("limit", 5)
         if type(limit) is not int or not 1 <= limit <= 20:
             raise QueryError("invalid_request", "查询数量需为1至20。")
+        include_stats = args.get("include_stats", False)
         if kind == "artworks":
+            if type(include_stats) is not bool:
+                raise QueryError("invalid_request", "include_stats 必须为布尔值。")
             if (
                 set(args)
                 - QUERY_KEYS
                 - (SELECTION_PARAMETERS - {"max_size_mib"})
-                - {"limit"}
+                - {"limit", "include_stats"}
             ):
                 raise QueryError("invalid_request", "作品查询参数不受支持。")
             stream = CandidateStream(
@@ -248,7 +275,7 @@ class DiscoveryService:
             if await self.plugin._blocked_query_term(word, policy):
                 raise QueryError("filtered", "作者关键词不符合当前内容安全要求。")
             stream = UserStream(self.plugin, event, word.strip(), policy)
-        return await self._page(CursorState(binding, kind, stream, limit))
+        return await self._page(CursorState(binding, kind, stream, limit, include_stats=include_stats))
 
     def _cursor(self, kind, args, binding):
         if set(args) != {"cursor"} or not isinstance(args["cursor"], str):
@@ -294,7 +321,8 @@ class DiscoveryService:
         if more:
             pagination["next_cursor"] = self._store(
                 CursorState(
-                    state.binding, state.kind, stream, state.limit, buffer, seen
+                    state.binding, state.kind, stream, state.limit, buffer, seen,
+                    include_stats=state.include_stats,
                 )
             )
         status = (
@@ -312,6 +340,8 @@ class DiscoveryService:
             "retry_allowed": False,
             "guidance": "这里只返回元数据，没有发送图片、扣费或识别画面；候选不代表已送达，不推断图库总量。",
         }
+        if state.include_stats:
+            result["stats_requested"] = True
         if stream.sampled:
             result["sampling"] = "random"
             result["guidance"] += "这是随机取样，没有真实下一页，再查可能重复。"
