@@ -27,7 +27,7 @@ finally:
 
 SCHEMA = json.loads((ROOT / "_conf_schema.json").read_text(encoding="utf-8"))
 FIXTURE = ROOT / "tests/fixtures/config_v3_8_0_grouped.json"
-RETIRED = {"dedupe_ttl_hours", "dedupe_days_migrated", "_grouped_config_migrated", "lolicon_api_url"}
+RETIRED = {"dedupe_ttl_hours", "dedupe_days_migrated", "_grouped_config_migrated", "lolicon_api_url", "auto_trigger_enabled"}
 
 
 def test_schema_contains_only_formal_groups_and_required_policy_marker():

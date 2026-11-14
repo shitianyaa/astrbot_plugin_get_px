@@ -1018,24 +1018,6 @@ class MainErrorHandlingTest(unittest.IsolatedAsyncioTestCase):
         self.assertIn("会话策略数据库收敛失败", error_text)
         self.assertIn("error_type=RuntimeError", error_text)
 
-    async def test_auto_trigger_stops_event_before_search(self):
-        plugin = object.__new__(GetPxPlugin)
-        plugin.config = {"auto_trigger_enabled": True}
-        plugin.client = object()
-        plugin._ensure_client_or_error = lambda _event: True
-
-        async def handle_search(_event, *, tag, count_str):
-            self.assertEqual(tag, "初音ミク")
-            self.assertEqual(count_str, "3")
-            yield "ok"
-
-        plugin._handle_search = handle_search
-        event = _FakeEvent()
-        event.get_message_str = lambda: "来三张初音ミク图"
-
-        self.assertEqual(await _collect(plugin.auto_trigger(event)), ["ok"])
-        self.assertTrue(event.stopped)
-
     def test_friendly_send_error_is_callable_through_plugin_instance(self):
         plugin = object.__new__(GetPxPlugin)
 

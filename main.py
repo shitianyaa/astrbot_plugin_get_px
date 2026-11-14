@@ -1,13 +1,9 @@
 """AstrBot 插件 — 安全插画发图与签到
 
-通过标签搜索插画并发送图片，支持 Lolicon/Pixiv 图片源优先级与自动回退、内容安全过滤、多页作品、自然语言自动触发和签到。
+通过标签搜索插画并发送图片，支持 Lolicon/Pixiv 图片源优先级与自动回退、内容安全过滤、多页作品、模型原生取图和签到。
 
 搜索指令：
     /p [标签] [数量]           搜索并发送图片
-
-自动触发（需在配置中开启）：
-    来一份图                   发送 1 张随机图片
-    来三张初音ミク图             搜索标签「初音ミク」发送 3 张
 
 签到指令：
     /签到                      每日签到
@@ -33,7 +29,6 @@
 
 import asyncio
 from pathlib import Path
-import re
 import time
 import weakref
 
@@ -71,26 +66,11 @@ PLUGIN_NAME = "astrbot_plugin_get_px"
 PLUGIN_VERSION = "v3.8.8"
 WEB_INTERNAL_ERROR_MESSAGE = "服务内部错误，请稍后重试"
 
-AUTO_TRIGGER_PATTERN = r"^/?(来\s*(.*?)(份|个|张|点))(.*?)(福利|色|瑟|涩|塞)?图$"
 CHECKIN_REGEX_PATTERN = r"^(?!/)签到$"
 CHECKIN_HELP_IMAGE = (
     Path(__file__).resolve().parent / "assets" / "checkin_help_v4.1.png"
 )
 
-
-CHINESE_NUMBER_MAP = {
-    "一": "1",
-    "二": "2",
-    "两": "2",
-    "三": "3",
-    "四": "4",
-    "五": "5",
-    "六": "6",
-    "七": "7",
-    "八": "8",
-    "九": "9",
-    "十": "10",
-}
 
 # ──────────────────────────────────────────────────────────────────────
 # 插件主类
@@ -637,46 +617,6 @@ class GetPxPlugin(
         yield event.plain_result(
             await self._handle_checkin_event_admin(event, "删除", event_id, "", "")
         )
-
-    @filter.regex(AUTO_TRIGGER_PATTERN)
-    async def auto_trigger(self, event: AstrMessageEvent):
-        """自然语言自动触发发图。"""
-        if not self._cfg_bool("auto_trigger_enabled", False):
-            return
-        if not self._ensure_client_or_error(event):
-            return
-
-        message = event.get_message_str().strip()
-        match = re.match(AUTO_TRIGGER_PATTERN, message)
-        if not match:
-            return
-
-        event.stop_event()
-
-        count_part = match.group(2).strip() if match.group(2) else ""
-        tag_part = (match.group(4) or "").strip()
-
-        # 解析数量：中文数字、阿拉伯数字
-        count_str = ""
-        raw = count_part if count_part else "1"
-        if raw.isdigit():
-            count_str = raw
-        else:
-            for cn_digit, arabic in CHINESE_NUMBER_MAP.items():
-                if raw == cn_digit:
-                    count_str = arabic
-                    break
-            if not count_str:
-                count_str = "1"
-
-        logger.info(
-            f"{LOG_PREFIX} 自然语言触发: count={count_str} "
-            f"tag_configured={'yes' if tag_part else 'no'}"
-        )
-        async for result in self._handle_search(
-            event, tag=tag_part, count_str=count_str
-        ):
-            yield result
 
     # ──────────────────────────────────────────────────────────────
     # 工具方法
