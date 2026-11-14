@@ -284,6 +284,8 @@ python -m pytest -q tests/test_checkin_cache.py tests/test_checkin_calendar.py t
 
 公开查询输入与固定SDK边界见 `tests/test_pixiv_queries.py`；扩展取图回归见 `tests/test_public_discovery.py`：覆盖四工具注册与卸载、无 token 随机取样、Pixiv 专属模式、免费无副作用、查询后发图、上游顺序、指定页与重取、候选缓冲、真实续查、游标隔离／失效／淘汰、扫描及超时预算。相关回归与完整 `python -m pytest -v tests` 均需通过；官方生命周期须确认四个工具重载与卸载无残留。离线桩不代表真实 Pixiv、模型选择或协议端收图通过。
 
+现有 SDK 分页场景同时覆盖关联接口的真实索引数组格式及 `viewed` 续查，确认首批候选保留、下一批使用固定认证端点，并转发已浏览作品位置。真实图源核验仍需分别执行查询、跨上游批次续查和下载，不能只验证内存候选翻页。
+
 扩展取图还覆盖关联种子与结果尺寸分离、Lolicon具体页码和未知总页数、非首张的实际文件尺寸校验，以及指定详情过滤状态。
 
 `tests/test_filtering.py` 使用真实 SQLite 索引覆盖随机选图与上游顺序的独立开关、开启／关闭去重，以及整页已用时仅普通模式推进命令游标；明确 Pixiv 模式不得推进命令游标。

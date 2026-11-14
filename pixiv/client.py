@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import re
 import time
 from dataclasses import dataclass, field
 from urllib.parse import parse_qs, urlsplit
@@ -29,6 +30,19 @@ def parse_continuation(value: object, endpoint: str, allowed: set[str]) -> dict 
     result = {}
     for key in allowed:
         values = params.get(key)
+        if key.endswith("[]"):
+            indexed = sorted(
+                (int(match[1]), group)
+                for name, group in params.items()
+                if (match := re.fullmatch(re.escape(key[:-2]) + r"\[([0-9]{1,4})\]", name))
+            )
+            if indexed:
+                if values is not None or len(indexed) > 1024 or any(
+                    index != position or len(group) != 1
+                    for position, (index, group) in enumerate(indexed)
+                ):
+                    raise QueryError("upstream_error", "图片源返回的分页数组无效。")
+                values = [group[0] for _, group in indexed]
         if values is None:
             continue
         if not values or any(not v.isdigit() or len(v) > 20 for v in values):
@@ -205,21 +219,32 @@ class PixivClient:
     async def _public_page(self, name, params, continuation, *, field="illusts") -> PixivPage:
         allowed = {"offset"}
         if name == "illust_related":
-            allowed.add("seed_illust_ids[]")
+            allowed.update({"seed_illust_ids[]", "viewed[]"})
         if name == "illust_recommended":
             allowed.update({"max_bookmark_id_for_recommend", "min_bookmark_id_for_recent_illust"})
         if continuation and set(continuation) - {key.removesuffix("[]") for key in allowed}:
             raise QueryError("invalid_request", "分页参数与接口不匹配。")
         api = await self._acquire_api()
         try:
+            method, endpoint = getattr(api.api, "illust_recommended_auth" if name == "illust_recommended" else name)
+            if name == "illust_related" and continuation and "viewed" in continuation:
+                # SDK 的关联方法未暴露 viewed；仍只请求固定关联接口。
+                query_params = dict(params, filter="for_ios")
+                for key, value in continuation.items():
+                    if isinstance(value, list):
+                        query_params.update({f"{key}[{index}]": item for index, item in enumerate(value)})
+                    else:
+                        query_params[key] = value
+                request = api.requests_(method=method, url=endpoint, params=query_params)
+            else:
+                request = getattr(api, name)(**params, **(continuation or {}))
             response = await self._wait_for(
-                getattr(api, name)(**params, **(continuation or {})), operation="公开查询"
+                request, operation="公开查询"
             )
             if not isinstance(response, dict) or response.get("error") or not isinstance(response.get(field), list):
                 raise QueryError("upstream_error", "Pixiv 查询失败或响应结构无效。")
             if any(not isinstance(item, dict) for item in response[field]):
                 raise QueryError("upstream_error", "Pixiv 候选结构无效。")
-            endpoint = getattr(api.api, "illust_recommended_auth" if name == "illust_recommended" else name)[1]
             return PixivPage(response[field], parse_continuation(response.get("next_url"), endpoint, allowed))
         finally:
             await self._release_api()

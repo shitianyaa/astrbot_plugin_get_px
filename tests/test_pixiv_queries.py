@@ -75,6 +75,23 @@ async def test_sdk_page_dispatch_and_public_field_boundary(tmp_path):
         await client.query_page(ArtworkQuery(mode="recommended"))
     assert client._active_calls == 0
 
+    # 真实关联续页使用索引数组，SDK 高层方法未提供 viewed 参数。
+    api.illust_related = AsyncMock(return_value={
+        "illusts": [_illust(2)],
+        "next_url": "https://app-api.pixiv.net/v2/illust/related?illust_id=42&filter=for_ios&seed_illust_ids[0]=42&viewed[0]=2",
+    })
+    api.requests_ = AsyncMock(return_value={"illusts": [_illust(3)]})
+    query = ArtworkQuery(mode="related", illust_id=42)
+    first = await client.query_page(query)
+    assert first.items[0]["id"] == "2"
+    assert first.next_params == {"seed_illust_ids": [42], "viewed": [2]}
+    second = await client.query_page(query, first.next_params)
+    assert second.items[0]["id"] == "3" and second.next_params is None
+    assert api.requests_.await_args.kwargs == {
+        "method": "GET", "url": "https://app-api.pixiv.net/v2/illust/related",
+        "params": {"illust_id": 42, "filter": "for_ios", "seed_illust_ids[0]": 42, "viewed[0]": 2},
+    }
+
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
