@@ -144,7 +144,7 @@ async def test_automatic_onebot_delivery(tmp_path, group, forward, outcome):
     content = [Plain("fixture"), Image.fromFileSystem(str(path))]
     if forward:
         content = [Nodes([Node(uin="123", name="fixture", content=content)])]
-    missing = ActionFailed({"status": "failed", "retcode": 1200, "message": "ENOENT copyfile /shared/timeout/image.jpg"})
+    missing = ActionFailed({"status": "failed", "retcode": 1200, "message": "路径不存在", "wording": "路径不存在"})
     timeout = ActionFailed({"status": "failed", "retcode": 1200, "message": "Timeout: NTEvent NodeIKernelMsgService/sendMsg"})
     side_effect = {
         "success": [dict(message_id=1)], "empty": [None],
@@ -176,7 +176,7 @@ async def test_automatic_onebot_delivery(tmp_path, group, forward, outcome):
         assert file.startswith("base64://") if index else file == path.resolve().as_uri()
     logs = " ".join(call.args[0] for call in logger.warning.call_args_list)
     if outcome in ("file_error", "retry_error"):
-        assert "ENOENT copyfile" in logs and "to_transport=base64" in logs
+        assert "路径不存在" in logs and "to_transport=base64" in logs
     if outcome == "retry_error":
         assert "base64 rejected" in logs and "transport=base64" in logs
     if outcome == "timeout":
@@ -295,10 +295,14 @@ def test_timeout_classification_includes_wrapped_cause(message, expected):
 def test_file_error_classification_ignores_paths_and_unrelated_response_fields():
     from astrbot_plugin_get_px.pixiv.delivery import _is_file_read_error
 
-    for message in ("send failed path=/shared/copyfile/image.jpg", "send failed"):
+    for message in ("send failed path=/shared/copyfile/image.jpg", "send failed", "profile not found"):
         error = ActionFailed({"message": message, "data": {"path": "/shared/copyfile/image.jpg"}})
         assert not _is_file_read_error(error)
-    assert _is_file_read_error(ActionFailed({"message": "ENOENT copyfile /shared/image.jpg"}))
+    for message in (
+        "ENOENT copyfile /shared/image.jpg", "路径不存在", "file not found",
+        "path not found", "file does not exist", "path does not exist",
+    ):
+        assert _is_file_read_error(ActionFailed({"message": message}))
 
 
 @pytest.mark.asyncio
