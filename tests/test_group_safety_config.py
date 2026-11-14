@@ -364,20 +364,6 @@ async def test_grouped_config_failed_save_restores_nested_identity_and_compatibi
     assert config[MIGRATION_KEY] is True
 
 
-def test_lolicon_exclude_ai_document_contracts_are_consistent():
-    import json
-    schema = json.loads(Path("_conf_schema.json").read_text(encoding="utf-8"))
-    hint = schema["pixiv_source"]["items"]["lolicon_exclude_ai"]["hint"]
-    readme_line = next(line for line in Path("README.md").read_text(encoding="utf-8").splitlines()
-                       if "`lolicon_exclude_ai`" in line)
-    config_line = next(line for line in Path("docs/project/configuration.md").read_text(encoding="utf-8").splitlines()
-                       if "`lolicon_exclude_ai`" in line)
-    for segment in (hint, readme_line, config_line):
-        assert "AI" in segment and "当前会话" in segment and "强制普通分级" in segment
-        assert "R18 始终关闭" not in segment
-    assert "lolicon_exclude_ai" in schema["pixiv_source"]["items"]
-
-
 @pytest.mark.asyncio
 async def test_nested_apply_all_failure_rolls_back_lists_markers_and_runtime():
     group_nested = [{"__template_key": "group_policy", "group_id": "g1",

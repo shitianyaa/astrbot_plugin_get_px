@@ -28,6 +28,23 @@ Lolicon 请求地址固定为 `https://api.lolicon.app/setu/v2`。旧 `lolicon_a
 
 OneBot 发图默认使用本地 `file:///` 路径；仅在明确文件读取失败（包括协议端“路径不存在”）时，将同一条消息回退到 base64 编码重试一次，超时不回退、不重发。base64 是图片编码，与 AstrBot 4.27.3 的 OneBot 默认发图编码相同；回退仍直接调用 OneBot，不额外尝试 AstrBot 框架发送。file 发送正常返回但没有有效 `message_id` 时仍扣费，并保留图片 10 分钟供协议端读取，不重发。旧 `onebot_image_transport`（顶层及 `pixiv_source` 内）由 AstrBot 在加载时按 schema 裁剪；插件不依赖旧键，也不能恢复框架已裁剪的值。发送异常仅记日志，详见 [发送流程](architecture.md#onebot-图片发送)。
 
+### Lolicon 图片反代
+
+Lolicon API 返回作品信息和各档图片 URL，插件筛选后直接下载；图片反代只替换 URL 的协议和主机，保留作品路径与画质档位，不重新选图，不代理 Lolicon API 或 Pixiv 登录，也不负责提高画质。
+
+在 `lolicon_image_proxy_origins` 中**一行一个完整 origin**，最多 5 个，按填写顺序尝试；不可用再尝试 API 返回地址，受单图总共 8 次下载预算限制。只填协议、域名和可选端口，不填路径、作品 ID 或 `{{path}}`；保存后重载。只对 Lolicon 来源且位于支持列表中的图片主机改写。
+
+以下为原文保留的历史测试记录，不代表当前可用性。
+
+| 地址 | 服务方地区建议 | 当时本机直连 | 当时本机走海外 HTTP 代理 |
+| --- | --- | --- | --- |
+| `https://i.pixiv.re` | 大陆优先，海外也可尝试 | 下载中途超过 30 秒 | 成功，2.09 秒 |
+| `https://i.pixiv.nl` | 大陆备用，海外也可尝试 | 下载中途超过 30 秒 | 下载中途超过 30 秒 |
+| `https://i.pixiv.cat` | 海外优先，大陆直连不推荐 | HTTP 500 | HTTP 500 |
+| `https://i.muxmus.com` | 未明确限制地区，需实测 | 成功，10.54 秒 | 成功，3.98 秒 |
+
+地区建议来自 [Pixiv.cat 反代说明](https://pixiv.cat/reverseproxy.html)；[木辛木杉服务](https://i.muxmus.com/) 提醒节制使用、不要用于爬虫。公共服务可能限速或停服，请使用可信服务；旧教程中的 `i.yuki.sh` [已停止服务](https://blog.yuki.sh/posts/599ec3ed8eda/)。
+
 ## 2. 图片筛选与去重（`content_dedupe`）
 
 | 字段 | 类型 | 默认值 | 说明 |
