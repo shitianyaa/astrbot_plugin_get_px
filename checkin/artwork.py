@@ -71,9 +71,11 @@ _CALENDAR_BG_ASPECT_PARAM = "gt1.7lt1.8"
 
 try:
     from ..pixiv.index import ordered_by_unused
+    from ..pixiv.usage import usage_id
     from ..pixiv.downloader import cleanup
 except ImportError:  # Direct imports used by the test suite.
     from pixiv.index import ordered_by_unused
+    from pixiv.usage import usage_id
     from pixiv.downloader import cleanup
 
 
@@ -770,7 +772,7 @@ class CheckinArtworkMixin:
             fresh = [
                 illust
                 for illust in ordered
-                if str(illust.get("id") or "") not in used_ids
+                if usage_id(illust.get("id")) not in used_ids
             ]
             if fresh:
                 illusts = fresh
@@ -1124,7 +1126,7 @@ class CheckinArtworkMixin:
             try:
                 used_ids.update(
                     await self.image_index.get_used_illust_ids(
-                        self._event_scope(event), source_key
+                        self._event_scope(event), source_key, feature="checkin"
                     )
                 )
             except Exception as e:

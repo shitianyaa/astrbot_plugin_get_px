@@ -18,6 +18,15 @@ class PixivPage:
     next_params: dict | None = None
 
 
+@dataclass
+class SourceRequest:
+    """普通抽图的一次请求选定来源后，沿真实游标续查；Lolicon仅有限重抽。"""
+
+    source: str = ""
+    next_params: dict | None = None
+    exhausted: bool = False
+
+
 def parse_continuation(value: object, endpoint: str, allowed: set[str]) -> dict | None:
     if not value:
         return None

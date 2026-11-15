@@ -50,12 +50,11 @@ Lolicon API 返回作品信息和各档图片 URL，插件筛选后直接下载�
 | 字段 | 类型 | 默认值 | 说明 |
 | --- | --- | --- | --- |
 | `filter_manga` | `bool` | `true` | 过滤 Pixiv 结果中的 manga；Lolicon 返回按插画处理 |
-| `dedupe_days` | `int` | `1` | 最近 0–7 个北京时间自然日；1 仅当天，非滚动 24 小时；同群共享，不同会话、标签和图源隔离；0 关闭并清空已完成历史，仍保留当天在途和送达未知占用 |
 | `group_content_safety_policies` | `template_list` | `[]` | 群聊内容安全策略：强制普通分级、内置安全词开关、独立自定义屏蔽词与独立作品 ID 黑名单，按群 ID 生效；建议在管理中心维护 |
 | `private_content_safety_policies` | `template_list` | `[]` | 私聊内容安全策略：字段同群聊策略，按用户 ID 独立生效；建议在管理中心维护 |
 | `group_content_safety_policies_migrated` | `bool` | `false` | 会话策略迁移标记（隐藏） |
 
-`dedupe_days` 不控制签到 JPEG、日历或预览缓存的有效期。窗口缩短会清理超期使用记录，扩大不能恢复已删除历史；配置保存后重载生效。查询、预占用及不同入口的复用规则见 [缓存与去重](cache-and-dedupe.md#2-正式图片去重)。
+图片去重采用固定业务窗口，不再提供 `dedupe_days`：普通取图滚动10分钟，签到背景最近2个北京时间自然日，历史相互独立；同会话按作品页合并跨标签、图源和入口的记录。JPEG、日历和预览缓存有效期不变。
 
 ## 3. 万象画卷联动（`checkin_omnidraw`）
 
@@ -148,20 +147,20 @@ v3.8.7 的配置升级基线为已成功完成迁移的 v3.8.0，配置只保留
 - 分组后存盘为嵌套 `config[组][键]`；新增配置项时加入对应组的 `items`，读取层无需改动。
 - 删除、重命名或改字段类型时必须说明兼容影响。
 - `forward_threshold` 按下载张数判断，仅 aiocqhttp 合并转发；旧 `send_as_forward` 仅在新字段缺失时兼容（`true`→0，`false`→20）。
-- `dedupe_days` 缩短天数会在重载时清理超期记录，增加天数无法恢复已清理历史。
+- `content_dedupe.dedupe_days` 已从 schema 移除，框架加载时裁剪旧键；运行时不再读取旧值。历史行沿用原表并按新窗口筛选，不新增数据库 schema。
 - `image_quality` 不影响签到背景，签到卡/日历背景画质由 `checkin_card_quality_tier` 独立控制。
 - `pixiv_refresh_token` 留空时跳过 Pixiv，仅请求 Lolicon；失败或无结果时不再有可用回退源。
 - schema 顶层仅定义六个正式分组，不再复制隐藏兼容键。策略服务只读写 `content_dedupe` 的正式模板；分组中的空列表不得恢复已停用的顶层策略。
 
 ## 模型取图参数
 
-`/ps`（Pixiv搜索）、`/pd`（指定作品单页）、`/pr`（榜单）复用模型工具的明确模式查询及领域执行，不新增配置。它们需要 `pixiv_refresh_token`，不使用 `preferred_image_source` 跨源回退；发送合并、数量和费用遵循原 `/p` 的 `forward_threshold`、`max_count`、`p_coin_cost` 及余额预检规则，正常保留聊天账单。`/pd` 的可选数字是页码，不是数量。
+`/p` 统一随机及组合搜索，复用图源优先级；`/pd` 指定作品单页、`/pr` 榜单固定使用 Pixiv。三者和模型工具共用领域执行，沿用命令账单与合并阈值，不新增配置。`/ps` 已移除。
 
 v3.8.8 新增的出站代理配置由管理员设置，不暴露为模型工具参数。原生工具沿用 `max_count`、`p_coin_cost`、`checkin_enabled`、图源、画质、大小上限和现有群聊／私聊安全策略。模式、目标、数量、发送及筛选参数仅作用于本次工具调用，完整约束见 [随包 Skill](../../skills/get-px-image/SKILL.md)。默认 `single`；`auto` 才使用 `forward_threshold`，`forward` 仍受 OneBot 平台能力限制。
 
 模型工具数量结果中，`requested_count` 是请求数量，`effective_count` 是应用配置及余额限制后的执行数量，`max_count` 是本次读取的上限，`count_limits` 列出 `max_count`／`balance`（可同时存在）。缩减原因通过 `notice` 说明；实际候选不足另由 `message` 说明，均不代表标签失效。搜索日志分别记录原始请求数、实际执行数与配置上限。
 
-`search` 模式将 `tag` 整串交给 Pixiv，空格连接的多个关键词表示 AND（同时匹配），整串最多48字符；默认按标签部分匹配。角色、作品及用户指定的服装可组合，尺寸和比例使用独立筛选参数。`auto` 与 `/p` 仍沿用配置的两源顺序，插件未统一转换组合语法；明确需要 AND 时使用 `search`，不新增持久配置。
+`tag` 整串最多48字符，空格表示 AND。`search` 固定 Pixiv，`auto` 与 `/p` 按来源适配同样的组合条件；Lolicon 最多3个条件，超出时只尝试可用的 Pixiv，不丢弃条件。尺寸和比例使用独立参数。
 
 模型工具默认逐张直发，仅 `send_mode=auto` 读取合并阈值。比例容差省略时使用 `min(0.1, aspect_ratio/2)`，显式传入仍须非负且小于目标比例，0 表示精确比例。
 

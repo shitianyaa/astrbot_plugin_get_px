@@ -507,9 +507,7 @@ async def test_repeated_cancellation_waits_for_claim_and_releases_pending(tmp_pa
     from astrbot_plugin_get_px.pixiv.index import ImageIndexStore
 
     plugin, context, _ = await setup_flow(tmp_path, items=1)
-    plugin.config["dedupe_days"] = 1
-    plugin._dedupe_days_cfg = 1
-    plugin.image_index = ImageIndexStore(tmp_path, retention_days=1)
+    plugin.image_index = ImageIndexStore(tmp_path)
     plugin._pick_illusts = MethodType(FiltersMixin._pick_illusts, plugin)
     started, release = asyncio.Event(), asyncio.Event()
     claim = plugin.image_index.claim_usage
@@ -654,8 +652,10 @@ async def test_unsubmitted_requests_allow_safe_retry_without_send_or_charge(tmp_
         plugin.downloader.download_for_send.side_effect = RuntimeError("fixture")
     elif failure == "index":
         plugin.image_index = SimpleNamespace(
-            retention_days=99, set_retention_days=AsyncMock(side_effect=RuntimeError("fixture"))
+            get_used_illust_ids=AsyncMock(side_effect=RuntimeError("fixture"))
         )
+        from astrbot_plugin_get_px.pixiv.filters import FiltersMixin
+        plugin._pick_illusts = FiltersMixin._pick_illusts.__get__(plugin)
     else:
         plugin._check_rate_limit = lambda sender: 7
     plugin._fetch_source_candidates = AsyncMock(wraps=plugin._fetch_source_candidates)
@@ -680,5 +680,5 @@ async def test_unsubmitted_requests_allow_safe_retry_without_send_or_charge(tmp_
     plugin.checkin_store.spend_coins.assert_not_awaited()
     assert not context.context.event.sent
     assert (await plugin.checkin_store.find_profile("10001")).coins == 100
-    assert plugin._fetch_source_candidates.await_count == (2 if tool else 1) * (0 if failure == "rate" else 3 if failure == "download" else 1)
+    assert plugin._fetch_source_candidates.await_count == (2 if tool else 1) * (0 if failure == "rate" else 1 if failure in ("source", "index") else 3)
     assert plugin.downloader.download_for_send.await_count == (2 if tool else 1) * int(failure == "download")

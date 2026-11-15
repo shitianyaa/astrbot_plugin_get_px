@@ -20,6 +20,7 @@ from .delivery import (
 from .downloader import cleanup
 from .search_result import SearchResult
 from .selection import ImageSelection
+from .client import SourceRequest
 
 LOG_PREFIX = "[GetPx]"
 DEFAULT_IMAGE_SIZE_LIMIT_MB = 10.0
@@ -75,6 +76,7 @@ class SearchExecution:
         self.selection = selection
         self.candidate_stream = candidate_stream
         self.rate_limit_checked = rate_limit_checked
+        self.source_request = SourceRequest()
 
     async def run(self) -> SearchResult:
         if not await self._prepare() or not await self._load_candidates():
@@ -83,7 +85,10 @@ class SearchExecution:
             if not await self._download_images():
                 return self.result
             if not self.downloaded:
-                self.result.message = self.failure_message
+                self.result.message = (
+                    "本次尝试的图片均下载失败或未通过文件校验。"
+                    if self.download_attempts else self.failure_message
+                )
                 return self.result
             if self.tool and len(self.downloaded) < self.count:
                 self.result.message = f"本次只找到 {len(self.downloaded)} 张可用图片（原需 {self.count} 张），其余已跳过；未放宽筛选条件。"
@@ -221,6 +226,10 @@ class SearchExecution:
             except asyncio.TimeoutError:
                 self.result.message = "本次取图等待时间已用尽，未开始发送。"
                 return False
+        continuation = (
+            self.candidate_stream.continuation
+            if self.candidate_stream is not None else self.source_request.next_params
+        )
         logger.info(
             f"{LOG_PREFIX}"
             f" 搜索候选获取完成: tag_configured={('yes' if self.tag else 'no')}"
@@ -230,36 +239,16 @@ class SearchExecution:
             f" max_count={self.max_count}"
             f" quality={_search_quality_label(self.quality)}"
             f" candidate_count={self.raw_count}"
+            f" pixiv_next_page={'yes' if continuation is not None else 'no'}"
         )
-        if not self.illusts and self.candidate_stream is None:
-            self.result.message = (
-                "图片源请求失败或未返回候选，本次未开始发送。"
-                if self.tool
-                else "❌ 图片源请求失败或无结果，换个标签试试"
-            )
-            return False
         if self.filter_manga:
             self.illusts = self.plugin._filter_manga(self.illusts)
-            if not self.illusts and self.candidate_stream is None:
-                self.result.message = (
-                    "没有通过漫画过滤的可用作品，本次未开始发送。"
-                    if self.tool
-                    else "😶 过滤漫画后没有可用作品，可关闭漫画过滤后重试"
-                )
-                return False
         try:
             self.illusts = await self.plugin._filter_blacklisted_illusts(
                 self.illusts, self.policy
             )
         except RuntimeError:
             self.result.message = "🚫 内容安全服务暂不可用，本次请求已拒绝"
-            return False
-        if not self.illusts and self.candidate_stream is None:
-            self.result.message = (
-                "没有通过内容安全检查的可用作品，本次未开始发送。"
-                if self.tool
-                else "😶 可用作品都被内容安全策略过滤了，换个标签后再试"
-            )
             return False
         self.illusts = [
             item
@@ -268,20 +257,6 @@ class SearchExecution:
             or self.selection.matches_dimensions(item.get("width"), item.get("height"))
         ]
         self.pick_count = min(self.count, len(self.illusts))
-        self.dedupe_days = self.plugin._cfg_int("dedupe_days", 1, 0, 7)
-        if (
-            self.plugin.image_index is not None
-            and self.plugin.image_index.retention_days != self.dedupe_days
-        ):
-            try:
-                await self.plugin.image_index.set_retention_days(self.dedupe_days)
-            except Exception:
-                self.result.message = (
-                    "图片去重索引更新失败，本次未开始发送。"
-                    if self.tool
-                    else "图片去重索引更新失败，请稍后重试"
-                )
-                return False
         self.pending_illust_ids: set[str] = set()
         self.sent_illust_ids: set[str] = set()
         self.unknown_illust_ids: set[str] = set()
@@ -310,7 +285,7 @@ class SearchExecution:
         self.failure_message = (
             "本次未找到符合筛选条件的可用图片，未放宽条件。"
             if self.selection.active
-            else "😢 所有图片均下载失败，请稍后再试"
+            else "本次没有可发送的图片；候选可能为空、被过滤、处于去重窗口或在途占用中。"
         )
         if self.tool and (not self.selection.active):
             self.failure_message = "本次未获取到可发送的图片。"
@@ -320,7 +295,8 @@ class SearchExecution:
         """获取下一批候选，沿用当前入口的来源与游标。"""
         if self.candidate_stream is None:
             return await self.plugin._fetch_source_candidates(
-                self.event, self.tag, count=SEARCH_BATCH_SIZE, policy=self.policy
+                self.event, self.tag, count=SEARCH_BATCH_SIZE, policy=self.policy,
+                request_state=self.source_request,
             )
         before = self.candidate_stream.raw_count
         items = await self.candidate_stream.next_batch()
@@ -332,14 +308,6 @@ class SearchExecution:
 
     async def _download_images(self):
         """有界补取和下载；每张失败时及时释放临时占用。"""
-        self.queue = await self._pick_candidates(
-            self.illusts, self.pick_count, raw_count=self.raw_count
-        )
-        if not self.queue and (not self.tool):
-            self.result.message = (
-                "当前去重范围内没有未发送过的图片了，换个标签或稍后再试"
-            )
-            return False
         while (
             len(self.downloaded) < self.count
             and self.download_attempts < SEARCH_DOWNLOAD_ATTEMPTS
@@ -359,12 +327,13 @@ class SearchExecution:
                     self.queue = await self._pick_candidates(
                         remaining,
                         min(self.count - len(self.downloaded), len(remaining)),
+                        raw_count=self.raw_count,
                     )
                 if not self.queue:
                     if self.batch_attempts >= SEARCH_BATCH_ATTEMPTS or (
                         self.candidate_stream is not None
                         and self.candidate_stream.exhausted
-                    ):
+                    ) or (self.candidate_stream is None and self.source_request.exhausted):
                         break
                     try:
                         if (
@@ -387,6 +356,7 @@ class SearchExecution:
                                 if self.plugin.image_index is None
                                 else 0,
                                 policy=self.policy,
+                                request_state=self.source_request,
                             )
                         )
                         (
@@ -510,7 +480,7 @@ class SearchExecution:
                 items,
                 amount,
                 source_key=self.source_key,
-                dedupe_enabled=self.dedupe_days > 0,
+                dedupe_enabled=True,
                 raw_count=raw_count,
                 **extra,
             )
@@ -627,6 +597,9 @@ class SearchExecution:
             DeliveryStatus.ACCEPTED,
             DeliveryStatus.TIMED_OUT,
         ):
+            keep_pending = status in (DeliveryStatus.ACCEPTED, DeliveryStatus.TIMED_OUT)
+            if keep_pending:
+                self.unknown_illust_ids.update(ids)
             if (
                 status in (DeliveryStatus.ACCEPTED, DeliveryStatus.TIMED_OUT)
                 and self.file_transport
@@ -640,6 +613,7 @@ class SearchExecution:
                     illust,
                     feature="normal",
                     user_id=str(self.event.get_sender_id() or ""),
+                    keep_pending=keep_pending,
                 )
 
     def _retain_unknown(self, ids, images):

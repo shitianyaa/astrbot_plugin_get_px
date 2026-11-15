@@ -4,7 +4,6 @@
 
 搜索指令：
     /p [标签] [数量]           搜索并发送图片
-    /ps <关键词> [数量]       Pixiv 组合搜索
     /pd <作品ID或链接> [页码]  发送指定作品的单页
     /pr <日|周|月> [数量]     按榜单顺序发送图片
 
@@ -136,13 +135,11 @@ class GetPxPlugin(
         self.data_dir = Path(data_dir)
         self.downloader.temp_dir = self.data_dir / "temp"
         self._cleanup_retired_transport_config()
-        dedupe_days = self._cfg_int("dedupe_days", 1, 0, 7)
         self._init_client()
         # SQLite DDL/迁移是同步操作，放入线程池避免阻塞事件循环
         self.image_index = await asyncio.to_thread(
             ImageIndexStore,
             data_dir,
-            retention_days=dedupe_days,
         )
         await self.image_index.cleanup_old_days(trigger="startup")
         checkin_database_existed = (self.data_dir / "checkin.sqlite3").exists()
@@ -369,22 +366,7 @@ class GetPxPlugin(
     @filter.command("p")
     async def cmd_p(self, event: AstrMessageEvent, query: GreedyStr = GreedyStr):
         """搜索并发送图片。参数: [标签] [数量]"""
-        if not self._ensure_client_or_error(event):
-            yield event.plain_result(
-                "⚠️ 图片源暂不可用，请配置 Lolicon API，或填写 pixiv_refresh_token 作为回退"
-            )
-            return
-        event.stop_event()
-        # 框架无参时传入空字符串；直接调用时则会保留默认哨兵。
-        raw_query = "" if query is GreedyStr else str(query or "")
-        tag, count = self._split_tag_and_count(raw_query)
-        async for result in self._handle_search(event, tag=tag, count_str=count):
-            yield result
-
-    @filter.command("ps")
-    async def cmd_ps(self, event: AstrMessageEvent, query: GreedyStr = GreedyStr):
-        """Pixiv 搜索并发图。参数: <关键词，可用空格组合> [数量]"""
-        async for result in self._handle_pixiv_command(event, "search", query):
+        async for result in self._handle_pixiv_command(event, "auto", query):
             yield result
 
     @filter.command("pd")

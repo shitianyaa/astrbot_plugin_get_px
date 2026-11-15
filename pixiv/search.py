@@ -12,6 +12,7 @@ from .execution import SearchExecution
 from .selection import ImageSelection
 from .catalog import CandidateStream
 from .query import ArtworkQuery
+from .client import SourceRequest
 
 
 LOG_PREFIX = "[GetPx]"
@@ -94,6 +95,7 @@ class SearchMixin:
         aspect_ratio: str = "",
         use_page_cursor: bool = True,
         policy: ContentSafetyPolicy = STRICT_CONTENT_SAFETY_POLICY,
+        request_state: SourceRequest | None = None,
     ) -> tuple[list[dict], int, str]:
         """按首选图片源顺序取图，请求失败或无结果时尝试另一源。"""
         preferred = self._cfg_str("preferred_image_source", "Lolicon").lower()
@@ -103,6 +105,8 @@ class SearchMixin:
             )
             preferred = "lolicon"
         sources = ("pixiv", "lolicon") if preferred == "pixiv" else ("lolicon", "pixiv")
+        if request_state is not None and request_state.source:
+            sources = (request_state.source,)
         if (
             getattr(self, "lolicon_client", None) is None
             and getattr(self, "client", None) is None
@@ -149,21 +153,36 @@ class SearchMixin:
                                 f"{LOG_PREFIX} 读取 Pixiv 分页游标失败: "
                                 f"error_type={type(exc).__name__}"
                             )
-                    if tag:
+                    if request_state is not None:
+                        query = ArtworkQuery(mode="search" if tag else "recommended", tag=tag)
+                        continuation = request_state.next_params if request_state.source else {"offset": page_offset}
+                        page = await client.query_page(query, continuation)
+                        illusts = page.items
+                        request_state.next_params = page.next_params
+                        request_state.exhausted = page.next_params is None
+                    elif tag:
                         illusts = await client.search(tag, offset=page_offset)
                     else:
                         illusts = await client.recommended(offset=page_offset)
-                if illusts:
+                if illusts or (request_state is not None and source == "pixiv" and request_state.next_params is not None):
+                    if request_state is not None:
+                        request_state.source = source
+                        if source == "lolicon":
+                            request_state.exhausted = False
                     return illusts, len(illusts), source_key
                 logger.info(
-                    f"{LOG_PREFIX} 图片源无结果，继续尝试可用来源: source={source}"
+                    f"{LOG_PREFIX} 图片源未返回候选: source={source} "
+                    f"fallback_allowed={'no' if request_state is not None and request_state.source else 'yes'}"
                 )
             except Exception as exc:
                 logger.warning(
-                    f"{LOG_PREFIX} 图片源请求失败，继续尝试可用来源: "
+                    f"{LOG_PREFIX} 图片源请求失败: "
                     f"source={source} tag_configured={'yes' if tag else 'no'} "
+                    f"fallback_allowed={'no' if request_state is not None and request_state.source else 'yes'} "
                     f"error_type={type(exc).__name__}"
                 )
+        if request_state is not None:
+            request_state.exhausted = True
         return [], 0, source_key
 
     async def _record_image_usage(
@@ -174,6 +193,7 @@ class SearchMixin:
         *,
         feature: str,
         user_id: str = "",
+        keep_pending: bool = False,
     ) -> None:
         if self.image_index is None or not source_key:
             return
@@ -187,6 +207,7 @@ class SearchMixin:
                 illust_id=illust_id,
                 feature=feature,
                 user_id=user_id,
+                keep_pending=keep_pending,
             )
         except Exception as exc:
             log_delivery_error(

@@ -7,6 +7,7 @@ from astrbot.api import logger
 from astrbot.api.event import AstrMessageEvent
 
 from .index import ordered_by_unused
+from .usage import usage_id
 from .safety import (
     ContentSafetyPolicy,
     STRICT_CONTENT_SAFETY_POLICY,
@@ -224,18 +225,8 @@ class FiltersMixin:
             return []
 
         by_usage = ordered_by_unused(illusts, used_ids)
-        fresh = [i for i in by_usage if str(i.get("id") or "") not in used_ids]
-        repeated = [i for i in by_usage if str(i.get("id") or "") in used_ids]
-
-        # 若整页全被用过，推进分页游标供下次翻页
-        if dedupe_enabled and not fresh and raw_count > 0 and not ordered:
-            try:
-                await self.image_index.advance_page_offset(scope, source_key, raw_count)
-            except Exception as e:
-                logger.warning(
-                    f"{LOG_PREFIX} 分页游标更新失败: "
-                    f"error_type={type(e).__name__}"
-                )
+        fresh = [i for i in by_usage if usage_id(i.get("id")) not in used_ids]
+        repeated = [i for i in by_usage if usage_id(i.get("id")) in used_ids]
 
         candidates = (
             list(illusts) if ordered else
@@ -256,9 +247,10 @@ class FiltersMixin:
                     illust_id=illust_id,
                     feature="normal_pending",
                     user_id=user_id,
-                    ignore_history=not dedupe_enabled,
+                    ignore_history=allow_repeat or not dedupe_enabled,
                 )
-            except Exception:
+            except Exception as exc:
+                logger.warning(f"{LOG_PREFIX} 图片占用失败: error_type={type(exc).__name__}")
                 return chosen
             if claimed:
                 chosen.append(illust)

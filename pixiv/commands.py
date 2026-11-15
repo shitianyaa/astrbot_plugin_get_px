@@ -9,7 +9,7 @@ from .query import ArtworkQuery, QueryError
 from .search_result import SearchResult
 
 COMMAND_USAGE = {
-    "search": "用法：/ps <关键词，可用空格组合> [数量]",
+    "auto": "用法：/p [关键词，可用空格组合] [数量]",
     "artwork": "用法：/pd <作品ID或标准Pixiv链接> [页码，默认1]",
     "ranking": "用法：/pr <日|周|月，也可用day|week|month> [数量]",
 }
@@ -35,7 +35,7 @@ def parse_command(mode: str, text: str) -> tuple[ArtworkQuery, int]:
     args = {"mode": mode}
     count = 1
     try:
-        if mode == "search":
+        if mode == "auto":
             tag, amount = split_tag_and_count(text)
             args["tag"] = tag
             count = int(amount) if amount else 1
@@ -74,7 +74,10 @@ class PixivCommandMixin:
         except QueryError as exc:
             yield event.plain_result(str(exc))
             return
-        if not self._cfg_str("pixiv_refresh_token"):
+        if mode == "auto" and not self._ensure_client_or_error(event):
+            yield event.plain_result("图片源暂不可用，请检查图源配置。")
+            return
+        if mode != "auto" and not self._cfg_str("pixiv_refresh_token"):
             yield event.plain_result("此指令需要配置 Pixiv Token，不回退其他图源。")
             return
         outcome = SearchResult(count)

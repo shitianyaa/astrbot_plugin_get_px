@@ -803,15 +803,15 @@ class MainErrorHandlingTest(unittest.IsolatedAsyncioTestCase):
         plugin._ensure_client_or_error = lambda _event: True
         received = []
 
-        async def handle_search(_event, *, tag, count_str):
+        async def handle_search(_event, tag, count_str, **kwargs):
             received.append((tag, count_str))
-            yield "ok"
+            kwargs["result"].message = "ok"
 
-        plugin._handle_search = handle_search
+        plugin._execute_search = handle_search
         event = _FakeEvent()
 
-        self.assertEqual(await _collect(plugin.cmd_p(event)), ["ok"])
-        self.assertEqual(received, [("", "")])
+        self.assertEqual(await _collect(plugin.cmd_p(event)), [event.plain_result("ok")])
+        self.assertEqual(received, [("", "1")])
         self.assertTrue(event.stopped)
 
     async def test_initialize_logs_v3_migration_guidance_for_old_database(self):

@@ -243,7 +243,7 @@ class CheckinBackgroundSelectionTest(unittest.IsolatedAsyncioTestCase):
                 )
                 self.assertEqual(
                     await plugin.image_index.get_used_illust_ids(
-                        "group:20001", "pixiv:recommended"
+                        "group:20001", "pixiv:recommended", feature="checkin"
                     ),
                     set(),
                 )
@@ -377,7 +377,7 @@ class CheckinBackgroundSelectionTest(unittest.IsolatedAsyncioTestCase):
                 self.assertIsNotNone(background)
                 self.assertEqual(
                     await plugin.image_index.get_used_illust_ids(
-                        "group:20001", "pixiv:recommended"
+                        "group:20001", "pixiv:recommended", feature="checkin"
                     ),
                     {"30"},
                 )
@@ -386,7 +386,7 @@ class CheckinBackgroundSelectionTest(unittest.IsolatedAsyncioTestCase):
 
                 self.assertEqual(
                     await plugin.image_index.get_used_illust_ids(
-                        "group:20001", "pixiv:recommended"
+                        "group:20001", "pixiv:recommended", feature="checkin"
                     ),
                     set(),
                 )
@@ -417,7 +417,7 @@ class CheckinBackgroundSelectionTest(unittest.IsolatedAsyncioTestCase):
                     )
                 self.assertEqual(
                     await plugin.image_index.get_used_illust_ids(
-                        "group:20001", "pixiv:recommended"
+                        "group:20001", "pixiv:recommended", feature="checkin"
                     ),
                     set(),
                 )

@@ -2,7 +2,7 @@ import asyncio
 import sqlite3
 import tempfile
 import unittest
-from datetime import datetime
+from datetime import datetime, timedelta
 from pathlib import Path
 
 from pixiv.index import ImageIndexStore
@@ -18,7 +18,8 @@ class FrozenImageIndexStore(ImageIndexStore):
         return self.date_key
 
     def now_iso(self) -> str:
-        return f"{self.date_key}T12:00:00+08:00"
+        day = datetime.fromisoformat(self.date_key)
+        return self._frozen_dt.replace(year=day.year, month=day.month, day=day.day).isoformat(timespec="seconds")
 
     def _now_dt(self) -> datetime:
         return self._frozen_dt
@@ -66,10 +67,10 @@ class ImageIndexStoreTest(unittest.IsolatedAsyncioTestCase):
                 await store.record_usage(
                     scope="group:1", source_key="pixiv:recommended", illust_id="101", feature="normal"
                 )
-                await store.set_retention_days(0)
+                store._frozen_dt += timedelta(minutes=11)
                 store.close()
                 store = FrozenImageIndexStore(tmp)
-                await store.set_retention_days(0)
+                store._frozen_dt += timedelta(minutes=11)
                 self.assertEqual(
                     await store.get_used_illust_ids("group:1", "pixiv:recommended"), {"100"}
                 )
@@ -96,7 +97,7 @@ class ImageIndexStoreTest(unittest.IsolatedAsyncioTestCase):
                 await store.record_usage(
                     scope="group:1", source_key="pixiv:recommended", illust_id="100", feature="normal"
                 )
-                self.assertEqual(await store.get_used_illust_ids("group:1", "pixiv:recommended"), set())
+                self.assertEqual(await store.get_used_illust_ids("group:1", "pixiv:recommended"), {"100"})
             finally:
                 store.close()
 

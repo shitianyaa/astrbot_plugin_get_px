@@ -110,7 +110,7 @@ async def test_candidate_selection_preserves_random_or_upstream_order(
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("ordered", [False, True])
-async def test_only_ordinary_selection_advances_command_cursor_when_all_used(
+async def test_selection_leaves_pagination_to_the_execution_layer(
     tmp_path, ordered
 ):
     mixin = object.__new__(FiltersMixin)
@@ -125,9 +125,7 @@ async def test_only_ordinary_selection_advances_command_cursor_when_all_used(
             event, [{"id": "1"}], 1, source_key="source", raw_count=30,
             ordered=ordered,
         ) == []
-        assert await mixin.image_index.get_page_offset("scope", "source") == (
-            0 if ordered else 30
-        )
+        assert await mixin.image_index.get_page_offset("scope", "source") == 0
     finally:
         mixin.image_index.close()
 

@@ -68,6 +68,18 @@ class _SourceEvent:
         return "1"
 
 
+@pytest.mark.asyncio
+async def test_combined_keywords_become_separate_and_tags():
+    client = LoliconClient()
+    session = _FakeSession()
+    client._session = session
+    await client.search("洛茜 黑丝", count=2)
+    assert [value for key, value in session.calls[0][1]["params"] if key == "tag"] == ["洛茜", "黑丝"]
+    with pytest.raises(ValueError):
+        await client.search("一 二 三 四")
+    assert len(session.calls) == 1
+
+
 class _SourceLolicon:
     available = True
 

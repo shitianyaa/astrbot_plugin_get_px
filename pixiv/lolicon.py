@@ -57,8 +57,10 @@ class LoliconClient:
             ("excludeAI", "true" if self.exclude_ai else "false"),
         ]
         params.extend(("size", size) for size in IMAGE_SIZES)
-        if tag.strip():
-            params.append(("tag", tag.strip()))
+        terms = tag.split()
+        if len(terms) > 3:
+            raise ValueError("Lolicon AND 搜索最多支持三个条件，不能丢弃条件")
+        params.extend(("tag", term) for term in terms)
         if aspect_ratio:
             params.append(("aspectRatio", aspect_ratio))
 

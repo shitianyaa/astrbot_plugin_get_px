@@ -12,6 +12,7 @@ from zoneinfo import ZoneInfo
 from astrbot.api import logger
 
 from .safety import normalize_safety_text
+from . import usage
 
 
 LOG_PREFIX = "[GetPx]"
@@ -22,59 +23,15 @@ _CLEANUP_THROTTLE_SECONDS = 3600  # 每小时最多清理一次旧记录
 
 
 class ImageIndexStore:
-    def __init__(self, data_dir: Path | str, *, retention_days: int = 1):
+    def __init__(self, data_dir: Path | str):
         self._db_path = Path(data_dir) / "image_index.sqlite3"
         self._blacklist_thumb_dir = Path(data_dir) / "image_blacklist" / "thumbs"
         self._db_path.parent.mkdir(parents=True, exist_ok=True)
         self._blacklist_thumb_dir.mkdir(parents=True, exist_ok=True)
         self._lock = asyncio.Lock()
-        self._retention_days = self._normalize_retention_days(retention_days)
         self._last_cleanup_ts: float = 0.0
         self._conn: sqlite3.Connection | None = None
         self._init_db()
-
-    @staticmethod
-    def _normalize_retention_days(value: int) -> int:
-        try:
-            days = int(value)
-        except (TypeError, ValueError):
-            days = 1
-        return max(0, min(7, days))
-
-    @property
-    def retention_days(self) -> int:
-        return self._retention_days
-
-    async def set_retention_days(
-        self, retention_days: int, *, cleanup: bool = True
-    ) -> int:
-        days = self._normalize_retention_days(retention_days)
-        date_key = self.today_key()
-        async with self._lock:
-            previous_days = self._retention_days
-            self._retention_days = days
-            removed = 0
-            try:
-                if cleanup:
-                    removed = await asyncio.to_thread(
-                        self._cleanup_old_days_sync, date_key
-                    )
-                    self._last_cleanup_ts = time.monotonic()
-            except Exception as exc:
-                self._retention_days = previous_days
-                logger.warning(
-                    f"{LOG_PREFIX} 图片去重配置应用失败: "
-                    f"原天数={previous_days}，新天数={days}，"
-                    f"错误类型={type(exc).__name__}"
-                )
-                raise
-        status = "disabled" if days == 0 else "enabled"
-        logger.info(
-            f"{LOG_PREFIX} 图片去重配置已应用: "
-            f"原天数={previous_days}，当前天数={days}，"
-            f"清理数量={removed}，状态={'关闭' if status == 'disabled' else '启用'}"
-        )
-        return days
 
     @staticmethod
     def today_key() -> str:
@@ -110,33 +67,16 @@ class ImageIndexStore:
             self._conn = None
 
     async def cleanup_old_days(self, *, trigger: str = "manual") -> int:
-        date_key = self.today_key()
-        try:
-            async with self._lock:
-                removed = await asyncio.to_thread(
-                    self._cleanup_old_days_sync, date_key
-                )
-                self._last_cleanup_ts = time.monotonic()
-        except Exception as exc:
-            logger.warning(
-                f"{LOG_PREFIX} 图片去重索引清理失败: "
-                f"触发方式={trigger}，保留天数={self._retention_days}，"
-                f"错误类型={type(exc).__name__}"
-            )
-            raise
-        status = "disabled" if self._retention_days == 0 else "enabled"
-        logger.info(
-            f"{LOG_PREFIX} 图片去重索引清理完成: "
-            f"触发方式={trigger}，保留天数={self._retention_days}，"
-            f"清理数量={removed}，状态={'关闭' if status == 'disabled' else '启用'}"
-        )
+        async with self._lock:
+            removed = await asyncio.to_thread(self._cleanup_old_days_sync, self.today_key())
+            self._last_cleanup_ts = time.monotonic()
+        logger.info(f"{LOG_PREFIX} 图片去重索引清理完成: trigger={trigger} removed_count={removed}")
         return removed
 
-    async def get_used_illust_ids(self, scope: str, source_key: str) -> set[str]:
-        date_key = self.today_key()
+    async def get_used_illust_ids(self, scope: str, source_key: str, *, feature: str = "normal", ignore_history: bool = False) -> set[str]:
         async with self._lock:
             return await asyncio.to_thread(
-                self._get_used_illust_ids_sync, date_key, scope, source_key
+                usage.used_ids, self._get_conn(), self.today_key(), self.now_iso(), scope, feature, ignore_history
             )
 
     async def record_usage(
@@ -147,6 +87,7 @@ class ImageIndexStore:
         illust_id: str,
         feature: str,
         user_id: str = "",
+        keep_pending: bool = False,
     ) -> None:
         illust_id = str(illust_id or "")
         if not illust_id:
@@ -164,12 +105,13 @@ class ImageIndexStore:
                     feature,
                     user_id,
                     now,
+                    keep_pending,
                 )
         except Exception as exc:
             logger.warning(
                 f"{LOG_PREFIX} 图片去重索引操作失败: "
                 f"操作=记录占用，功能={feature}，"
-                f"保留天数={self._retention_days}，"
+                f"窗口=固定，"
                 f"错误类型={type(exc).__name__}"
             )
             raise
@@ -348,7 +290,7 @@ class ImageIndexStore:
         except Exception as exc:
             logger.warning(
                 f"{LOG_PREFIX} 图片去重索引操作失败: "
-                f"操作=占用，功能={feature}，保留天数={self._retention_days}，"
+                f"操作=占用，功能={feature}，窗口=固定，"
                 f"错误类型={type(exc).__name__}"
             )
             raise
@@ -378,7 +320,7 @@ class ImageIndexStore:
         except Exception as exc:
             logger.warning(
                 f"{LOG_PREFIX} 图片去重索引操作失败: "
-                f"操作=释放，功能={feature}，保留天数={self._retention_days}，"
+                f"操作=释放，功能={feature}，窗口=固定，"
                 f"错误类型={type(exc).__name__}"
             )
             raise
@@ -451,28 +393,8 @@ class ImageIndexStore:
         )
         conn.commit()
 
-    def _retention_cutoff_key(self, date_key: str) -> str:
-        current_date = datetime.fromisoformat(date_key).date()
-        return (current_date - timedelta(days=max(1, self._retention_days) - 1)).isoformat()
-
     def _cleanup_old_days_sync(self, date_key: str) -> int:
-        conn = self._get_conn()
-        try:
-            if self._retention_days == 0:
-                cursor = conn.execute(
-                    "DELETE FROM image_usage WHERE feature NOT IN ('normal_pending', 'checkin_pending') OR date_key < ?",
-                    (self._retention_cutoff_key(date_key),),
-                )
-            else:
-                cutoff_key = self._retention_cutoff_key(date_key)
-                cursor = conn.execute(
-                    "DELETE FROM image_usage WHERE date_key < ?", (cutoff_key,)
-                )
-            conn.commit()
-        except Exception:
-            conn.rollback()
-            raise
-        return max(0, cursor.rowcount)
+        return usage.cleanup(self._get_conn(), date_key, self.now_iso())
 
     def _maybe_cleanup_old_days_sync(self, date_key: str) -> None:
         """每小时最多清理一次，避免写操作频繁触发 DELETE。"""
@@ -484,7 +406,7 @@ class ImageIndexStore:
         if removed > 0:
             logger.info(
                 f"{LOG_PREFIX} 已清理过期图片去重索引: "
-                f"触发方式=定时，保留天数={self._retention_days}，清理数量={removed}"
+                f"trigger=write removed_count={removed}"
             )
 
     def _get_page_offset_sync(self, scope: str, source_key: str) -> int:
@@ -546,21 +468,6 @@ class ImageIndexStore:
         conn.commit()
         return new_offset
 
-    def _get_used_illust_ids_sync(
-        self, date_key: str, scope: str, source_key: str
-    ) -> set[str]:
-        cutoff_key = self._retention_cutoff_key(date_key)
-        conn = self._get_conn()
-        rows = conn.execute(
-            """
-            SELECT illust_id FROM image_usage
-            WHERE date_key BETWEEN ? AND ? AND scope = ?
-                AND ((source_key = ? AND (? OR feature IN ('normal_pending', 'checkin_pending')))
-                    OR (source_key = ? AND feature IN ('normal_pending', 'checkin_pending')))
-            """,
-            (cutoff_key, date_key, scope, source_key, self._retention_days > 0, source_key + ":inflight"),
-        ).fetchall()
-        return {str(row["illust_id"]) for row in rows}
 
     def _get_blacklisted_illust_ids_sync(self) -> set[str]:
         conn = self._get_conn()
@@ -803,128 +710,24 @@ class ImageIndexStore:
             ids.append(item)
         return ids
 
-    def _record_usage_sync(
-        self,
-        date_key: str,
-        scope: str,
-        source_key: str,
-        illust_id: str,
-        feature: str,
-        user_id: str,
-        sent_at: str,
-    ) -> None:
+    def _record_usage_sync(self, date_key, scope, source_key, illust_id, feature, user_id, sent_at, keep_pending=False):
         self._maybe_cleanup_old_days_sync(date_key)
-        conn = self._get_conn()
-        try:
-            if self._retention_days > 0:
-                conn.execute(
-                    """
-                    INSERT INTO image_usage (
-                        date_key, scope, source_key, illust_id, feature, user_id, sent_at
-                    )
-                    VALUES (?, ?, ?, ?, ?, ?, ?)
-                    ON CONFLICT(date_key, scope, source_key, illust_id)
-                    DO UPDATE SET
-                        feature = excluded.feature,
-                        user_id = excluded.user_id,
-                        sent_at = excluded.sent_at
-                    """,
-                    (date_key, scope, source_key, illust_id, feature, user_id, sent_at),
-                )
-            # 确认使用后释放同一业务的在途占用；关闭历史去重也执行。
-            conn.execute(
-                """
-                DELETE FROM image_usage
-                WHERE scope = ? AND source_key IN (?, ?) AND illust_id = ? AND feature = ?
-                """,
-                (scope, source_key, source_key + ":inflight", illust_id, feature + "_pending"),
-            )
-            conn.commit()
-        except Exception:
-            conn.rollback()
-            raise
+        usage.record(self._get_conn(), date_key, scope, illust_id, feature, user_id, sent_at, keep_pending)
 
-    def _claim_usage_sync(
-        self,
-        date_key: str,
-        scope: str,
-        source_key: str,
-        illust_id: str,
-        feature: str,
-        user_id: str,
-        sent_at: str,
-        ignore_history: bool = False,
-    ) -> bool:
+    def _claim_usage_sync(self, date_key, scope, source_key, illust_id, feature, user_id, sent_at, ignore_history=False):
         self._maybe_cleanup_old_days_sync(date_key)
-        cutoff_key = self._retention_cutoff_key(date_key)
-        conn = self._get_conn()
-        try:
-            conn.execute("BEGIN IMMEDIATE")
-            row = conn.execute(
-                """
-                SELECT 1 FROM image_usage
-                WHERE date_key BETWEEN ? AND ? AND scope = ? AND illust_id = ?
-                    AND ((source_key = ? AND (? OR feature IN ('normal_pending', 'checkin_pending')))
-                        OR (source_key = ? AND feature IN ('normal_pending', 'checkin_pending')))
-                LIMIT 1
-                """,
-                (cutoff_key, date_key, scope, illust_id, source_key,
-                 self._retention_days > 0 and not ignore_history, source_key + ":inflight"),
-            ).fetchone()
-            if row is not None:
-                conn.rollback()
-                return False
-            conn.execute(
-                """
-                INSERT INTO image_usage (
-                    date_key, scope, source_key, illust_id, feature, user_id, sent_at
-                )
-                VALUES (?, ?, ?, ?, ?, ?, ?)
-                """,
-                (date_key, scope, source_key + ":inflight", illust_id, feature, user_id, sent_at),
-            )
-            conn.commit()
-            return True
-        except Exception:
-            conn.rollback()
-            raise
+        return usage.claim(self._get_conn(), date_key, scope, illust_id, feature, user_id, sent_at, ignore_history)
 
-    def _release_usage_sync(
-        self,
-        date_key: str,
-        scope: str,
-        source_key: str,
-        illust_id: str,
-        feature: str,
-    ) -> None:
+    def _release_usage_sync(self, date_key, scope, source_key, illust_id, feature):
         self._maybe_cleanup_old_days_sync(date_key)
-        cutoff_key = self._retention_cutoff_key(date_key)
-        conn = self._get_conn()
-        try:
-            conn.execute(
-                """
-                DELETE FROM image_usage
-                WHERE rowid IN (
-                    SELECT rowid FROM image_usage
-                    WHERE date_key BETWEEN ? AND ? AND scope = ? AND source_key IN (?, ?)
-                        AND illust_id = ? AND feature = ?
-                    ORDER BY date_key DESC
-                    LIMIT 1
-                )
-                """,
-                (cutoff_key, date_key, scope, source_key, source_key + ":inflight", illust_id, feature),
-            )
-            conn.commit()
-        except Exception:
-            conn.rollback()
-            raise
+        usage.release(self._get_conn(), date_key, scope, illust_id, feature)
 
 
 def ordered_by_unused(illusts: Iterable[dict], used_ids: set[str]) -> list[dict]:
     fresh: list[dict] = []
     repeated: list[dict] = []
     for illust in illusts:
-        illust_id = str(illust.get("id", ""))
+        illust_id = usage.usage_id(illust.get("id", ""))
         if illust_id and illust_id in used_ids:
             repeated.append(illust)
         else:

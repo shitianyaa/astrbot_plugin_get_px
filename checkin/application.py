@@ -83,11 +83,7 @@ class CheckinApplicationMixin:
         image_index = getattr(self, "image_index", None)
         if image_index is None:
             return False
-        try:
-            return int(getattr(image_index, "retention_days", 1)) > 0
-        except (TypeError, ValueError):
-            # 未知的第三方索引实现按启用处理，避免误释放真实占用。
-            return True
+        return True
 
     async def _handle_checkin(
         self,

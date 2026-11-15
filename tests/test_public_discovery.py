@@ -409,7 +409,6 @@ async def test_explicit_pages_deduplicate_targets_keep_order_and_report_skips(tm
 async def test_explicit_repeat_allows_completed_history_but_not_pending_claim(tmp_path):
     plugin, context, _, service = await flow(tmp_path)
     plugin.image_index = ImageIndexStore(tmp_path)
-    plugin._dedupe_days_cfg = 1
     await plugin.image_index.record_usage(
         scope=plugin._event_scope(context.context.event),
         source_key="pixiv:artwork",
@@ -430,12 +429,14 @@ async def test_explicit_repeat_allows_completed_history_but_not_pending_claim(tm
         source_key="pixiv:artwork:explicit_pending",
         illust_id="1",
         feature="normal_pending",
+        ignore_history=True,
     )
     assert not await plugin.image_index.claim_usage(
         scope=scope,
         source_key="pixiv:artwork:explicit_pending",
         illust_id="1",
         feature="normal_pending",
+        ignore_history=True,
     )
     plugin.image_index.close()
 
@@ -490,7 +491,6 @@ async def test_query_budget_cancel_and_concurrent_repeat_have_no_send(tmp_path):
 async def test_explicit_delivery_settlement_and_pending_cleanup(tmp_path, status):
     plugin, context, _, service = await flow(tmp_path)
     plugin.image_index = ImageIndexStore(tmp_path)
-    plugin.config["dedupe_days"] = 0
     with patch(
         "astrbot_plugin_get_px.pixiv.execution.send_once", AsyncMock(return_value=status)
     ):
@@ -501,9 +501,9 @@ async def test_explicit_delivery_settlement_and_pending_cleanup(tmp_path, status
     coins = (await plugin.checkin_store.find_profile("10001")).coins
     assert coins == (100 if status is DeliveryStatus.UNKNOWN else 80)
     pending = await plugin.image_index.get_used_illust_ids(
-        plugin._event_scope(context.context.event), "pixiv:artwork:explicit_pending"
+        plugin._event_scope(context.context.event), "pixiv:artwork:explicit_pending", ignore_history=True
     )
-    assert bool(pending) is (status is DeliveryStatus.UNKNOWN)
+    assert bool(pending) is (status is not DeliveryStatus.CONFIRMED)
     if status is DeliveryStatus.UNKNOWN:
         context.context.event = Event()
         with patch("astrbot_plugin_get_px.pixiv.execution.send_once", AsyncMock()) as sender:
@@ -517,7 +517,6 @@ async def test_explicit_delivery_settlement_and_pending_cleanup(tmp_path, status
 async def test_explicit_failure_preserves_completed_history_and_count_limits(tmp_path):
     plugin, context, _, service = await flow(tmp_path)
     plugin.image_index = ImageIndexStore(tmp_path)
-    plugin._dedupe_days_cfg = 1
     plugin.config["max_count"] = 1
     scope = plugin._event_scope(context.context.event)
     await plugin.image_index.record_usage(
@@ -533,7 +532,7 @@ async def test_explicit_failure_preserves_completed_history_and_count_limits(tmp
     ]
     assert result["count_limits"] == ["max_count"] and result["downloaded_count"] == 0
     assert not await plugin.image_index.get_used_illust_ids(
-        scope, "pixiv:artwork:explicit_pending"
+        scope, "pixiv:artwork:explicit_pending", ignore_history=True
     )
     assert await plugin.image_index.get_used_illust_ids(scope, "pixiv:artwork") == {"1"}
     assert plugin.client.public_detail.await_count == 1

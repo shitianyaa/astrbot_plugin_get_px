@@ -68,8 +68,8 @@ async def test_tool_size_limit_can_only_tighten_and_does_not_write_config(
 @pytest.mark.parametrize("file_size", [(60, 80), (160, 120), None])
 async def test_metadata_filter_precedes_claim_and_real_file_filter_releases_usage(tmp_path, file_size):
     plugin, context, paths = await setup_flow(tmp_path, items=3)
-    plugin.config.update(dedupe_days=1, image_quality="large")
-    plugin.image_index = ImageIndexStore(tmp_path, retention_days=1)
+    plugin.config.update(image_quality="large")
+    plugin.image_index = ImageIndexStore(tmp_path)
     plugin._pick_illusts = MethodType(FiltersMixin._pick_illusts, plugin)
     # 1元信息为横图；2原作够大但所选large文件太小；3满足全部条件。
     plugin.illusts[0].update(width=200, height=100)
