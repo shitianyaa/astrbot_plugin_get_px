@@ -18,12 +18,12 @@ QUERY_PROPERTIES = {
     "search_target": {
         "type": "string",
         "enum": list(SEARCH_TARGETS),
-        "description": "仅search：标签部分匹配、精确匹配或标题描述。",
+        "description": "仅search：partial_match_for_tags默认按标签部分匹配；exact_match_for_tags按标签精确匹配；title_and_caption按标题/简介关键词匹配。搜索文本统一传tag。",
     },
     "sort": {
         "type": "string",
         "enum": ["date_desc", "date_asc"],
-        "description": "仅search，最新或最早优先，不支持热门排序。",
+        "description": "仅search：date_desc默认最新发布在前，date_asc最早在前。不支持服务端热门排序，补查统计也不改变顺序。",
     },
     "start_date": {"type": "string", "description": "仅search，开始日期YYYY-MM-DD。"},
     "end_date": {"type": "string", "description": "仅search，结束日期YYYY-MM-DD。"},
@@ -48,7 +48,7 @@ QUERY_PROPERTIES = {
         "type": "array",
         "minItems": 1,
         "maxItems": 20,
-        "description": "仅artwork：明确指定的作品和单页；重复目标合并，数量由目标数决定，不与count矛盾；不取整部，不换其他作品补齐。",
+        "description": "仅artwork：按输入顺序指定作品和单页；重复目标合并，数量由目标数决定，不与count矛盾。发送允许重取已完成历史，仍检查安全与在途占用；不取整部，失败不换其他作品补齐。",
         "items": {
             "type": "object",
             "properties": {
@@ -72,7 +72,7 @@ QUERY_PROPERTIES = {
 IMAGE_PROPERTIES = {
     "tag": {
         "type": "string",
-        "description": "用户所需的短标签，最多48字符；角色可用原名或一个确定的译名，不拼多语言别名，不擅自扩写。空串为随机。",
+        "description": "auto或search的角色名/关键词，最多48字符；角色可用原名或一个确定的译名，不拼多语言别名，不擅自扩写。仅auto可省略或空串以随机/推荐；search必填非空文本，范围由search_target决定。",
         "maxLength": MAX_TOOL_TAG_LENGTH,
     },
     "count": {
@@ -124,11 +124,12 @@ IMAGE_PROPERTIES = {
 }
 
 ARTWORK_QUERY_OPTIONS = {
-    "limit": {"type": "integer", "minimum": 1, "maximum": 20, "default": 5},
+    "limit": {"type": "integer", "minimum": 1, "maximum": 20, "default": 5,
+              "description": "本次最多返回的候选数，不保证足量；不是发送张数。"},
     "include_stats": {
         "type": "boolean",
         "default": False,
-        "description": "用户问点赞/热度或要求挑热门图时设true，按需补查本批作品的total_likes点赞、total_bookmarks收藏、total_view浏览。缺失为null，不等于0；补查有界且失败不影响候选。只比较本批，不是全站热门排序，不改变榜单顺序。续查只传cursor并继承此选项。",
+        "description": "用户问点赞/热度或要求挑热门图时设true，补查本批total_likes点赞、total_bookmarks收藏、total_view浏览。失败保留已有统计，仅未知为null，不能当0；指标有缺失时只称已知数值中最高。补查阶段共享剩余查询预算且最多3秒，不是整次查询限时。默认false只返回上游已有统计，未知字段可能省略。补查不改变候选顺序；搜索默认最新在前，只比较本批，不代表标签热门排序。续查只传cursor继承选项。",
     },
     "cursor": {
         "type": "string",
@@ -169,9 +170,11 @@ IMAGE_DESCRIPTION = (
     "默认auto保留原行为。"
     "普通请求不先展示候选；"
     "用户要求热门或比较热度时先用get_px_artworks(include_stats=true)查候选，再按ID发送。"
+    "按比较顺序传入targets，指定发送保留该顺序，允许重取已完成历史；仍复核安全、数量、余额、文件限制及在途占用。"
+    "指定目标失败不换其他作品补齐，不提前保证全部发出。"
     "日榜ranking_mode=day，周榜week，月榜month，保留上游榜单顺序。"
     "指定作品数量由targets决定；"
-    "明确Pixiv列表模式保持上游顺序并按现有去重选取。"
+    "直接发送明确Pixiv列表模式保持上游顺序并按现有去重选取。"
 )
 
 CONTEXT_DESCRIPTION = (
@@ -182,11 +185,14 @@ CONTEXT_DESCRIPTION = (
 )
 
 ARTWORKS_DESCRIPTION = (
-    "仅查询公开作品详情或候选元数据，不发图、不扣费、不下载、不占去重。"
+    "仅查询公开作品详情或候选元数据，不发图、不扣费、不下载、不占用图片使用记录，也不按已发送历史排除候选。"
     "用户直接要图时优先get_px_image；"
     "用户要挑热门图时先查候选热度再选定作品发送；"
     "只有要挑选或查信息才列候选。"
     "支持相同取图模式；"
+    "搜索文本传tag，可按标签或标题/简介匹配；默认按发布时间倒序，不支持服务端热门排序。"
+    "可组合模式条件、尺寸筛选、limit及include_stats；返回字段固定，不接受fields参数。"
+    "include_stats仅补查统计，不改变顺序；未指定热度指标时以已知收藏数为主，点赞和浏览辅助，不编造综合评分。"
     "Pixiv可真实续查，Lolicon只有随机取样。"
     "字段不证明看过画面，不推断图库总量。"
     "用户未明确要求时禁止主动调用视觉工具看图，“热门/高质量”不是识图授权。"
@@ -197,7 +203,7 @@ ARTWORKS_DESCRIPTION = (
 USERS_DESCRIPTION = (
     "按名称找Pixiv作者或按明确ID查公开身份，不读取私人信息、账号关系或图片，不扣费。"
     "同名结果先交由用户确认，不擅自认定。"
-    "得到明确ID后用get_px_image的author模式发图。"
+    "用户已明确要发图且得到明确ID后，才用get_px_image的author模式发送；只查询身份时不发图。"
     "需要插件配置Pixiv认证。"
 )
 
