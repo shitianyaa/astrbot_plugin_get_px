@@ -215,7 +215,7 @@ OneBot、模型、T2I 和浏览器请求由各自配置管理。容器中的 `12
 ```text
 pixivpy-async
 aiohttp
-aiohttp-socks==0.11.0
+aiohttp-socks==0.12.0
 Pillow
 lunar-python
 ```
