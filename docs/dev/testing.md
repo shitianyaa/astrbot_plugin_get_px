@@ -98,6 +98,7 @@ python scripts/ci/check_plugin_lifecycle.py \
 
 ### 发图测试
 
+- `test_pixiv_commands.py` - /ps、/pd、/pr 的真实指令注册、多词条件与单页解析、顺序、命令账单、合并阈值、安全／余额／限频拒绝、完成历史重取及在途保护；网络和聊天发送由测试替代。
 - `test_network.py` - 两种出站代理模式、Pixiv OAuth/API 参数、图片／热度／一言会话注入、环境代理隔离、无效配置拒绝与代理故障不直连；节假日请求与现有日历测试共同验证。
 - `test_lolicon.py`、`test_pixiv_client.py` - 图源规范化、固定 API 地址、优先级与双向失败／空结果回退；覆盖无 Pixiv 客户端、分页游标和安全参数传递
 - `test_p_command_count.py` - 发图参数和数量

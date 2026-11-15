@@ -155,9 +155,13 @@ v3.8.7 的配置升级基线为已成功完成迁移的 v3.8.0，配置只保留
 
 ## 模型取图参数
 
+`/ps`（Pixiv搜索）、`/pd`（指定作品单页）、`/pr`（榜单）复用模型工具的明确模式查询及领域执行，不新增配置。它们需要 `pixiv_refresh_token`，不使用 `preferred_image_source` 跨源回退；发送合并、数量和费用遵循原 `/p` 的 `forward_threshold`、`max_count`、`p_coin_cost` 及余额预检规则，正常保留聊天账单。`/pd` 的可选数字是页码，不是数量。
+
 v3.8.8 新增的出站代理配置由管理员设置，不暴露为模型工具参数。原生工具沿用 `max_count`、`p_coin_cost`、`checkin_enabled`、图源、画质、大小上限和现有群聊／私聊安全策略。模式、目标、数量、发送及筛选参数仅作用于本次工具调用，完整约束见 [随包 Skill](../../skills/get-px-image/SKILL.md)。默认 `single`；`auto` 才使用 `forward_threshold`，`forward` 仍受 OneBot 平台能力限制。
 
 模型工具数量结果中，`requested_count` 是请求数量，`effective_count` 是应用配置及余额限制后的执行数量，`max_count` 是本次读取的上限，`count_limits` 列出 `max_count`／`balance`（可同时存在）。缩减原因通过 `notice` 说明；实际候选不足另由 `message` 说明，均不代表标签失效。搜索日志分别记录原始请求数、实际执行数与配置上限。
+
+`search` 模式将 `tag` 整串交给 Pixiv，空格连接的多个关键词表示 AND（同时匹配），整串最多48字符；默认按标签部分匹配。角色、作品及用户指定的服装可组合，尺寸和比例使用独立筛选参数。`auto` 与 `/p` 仍沿用配置的两源顺序，插件未统一转换组合语法；明确需要 AND 时使用 `search`，不新增持久配置。
 
 模型工具默认逐张直发，仅 `send_mode=auto` 读取合并阈值。比例容差省略时使用 `min(0.1, aspect_ratio/2)`，显式传入仍须非负且小于目标比例，0 表示精确比例。
 

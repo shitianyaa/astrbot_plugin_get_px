@@ -26,6 +26,7 @@ checkin/
 │  ├─ artwork.py         卡片渲染与背景作品选择
 │  └─ holiday.py         联网节假日数据更新与查询
 pixiv/
+│  ├─ commands.py        /ps、/pd、/pr 参数适配及兼容 /p 的数量解析
 │  ├─ search.py          普通搜索入口、图源优先级与回退
 │  ├─ execution.py       单次请求的选图、下载、发送与结算清理
 │  ├─ search_result.py   命令与工具共享的执行结果
@@ -163,6 +164,8 @@ initialize 获取插件数据目录后，将 `data_dir / "temp"` 注入共享 Im
 大小约束由 `download()` 统一执行：Content-Length 超限时不读取正文，流式字节累计超限立即中止并清理半文件；`download_for_send()` 不重复检查返回大小。`ImageSizeLimitError` 按类型记录为 `size_limit` 并交回选图层，异常文案不参与分类。
 
 ## 模型取图
+
+`main.py` 只注册 `/ps`、`/pd`、`/pr`，由 `pixiv/commands.py` 将文字参数适配成 `ArtworkQuery`。原 `/p` 复用该模块的尾部数量解析，保留配置图源顺序。三个明确指令和模型工具均将查询对象交给 `SearchMixin._execute_search()`，由共享入口创建 `CandidateStream`；没有独立的指令下载、发送或结算实现。指令使用命令账单及配置合并阈值，`tools/` 保留模型会话、同消息任务协调和结果投影。
 
 `tools/service.py` 的 `ImageToolService` 统一注册 `get_px_image`、`get_px_context` 及公开查询工具 `get_px_artworks`、`get_px_users`，`skills/get-px-image/SKILL.md` 提供随包调用说明。`main.py` 在初始化后注册工具，卸载时先停用工具、取消并等待在途调用完成结算与清理，再关闭领域资源；生命周期检查覆盖工具解绑。
 

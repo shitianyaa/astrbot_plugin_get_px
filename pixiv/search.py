@@ -10,6 +10,8 @@ from .safety import ContentSafetyPolicy, STRICT_CONTENT_SAFETY_POLICY
 from .search_result import SearchResult
 from .execution import SearchExecution
 from .selection import ImageSelection
+from .catalog import CandidateStream
+from .query import ArtworkQuery
 
 
 LOG_PREFIX = "[GetPx]"
@@ -216,9 +218,16 @@ class SearchMixin:
         selection_deadline: float | None = None,
         send_mode: str = "auto",
         selection: ImageSelection | None = None,
-        candidate_stream=None,
+        query: ArtworkQuery | None = None,
         rate_limit_checked: bool = False,
     ) -> SearchResult:
+        candidate_stream = (
+            CandidateStream(
+                self, event, query, None, selection or ImageSelection(), delivery=True
+            )
+            if query is not None and query.mode != "auto"
+            else None
+        )
         return await SearchExecution(
             self,
             event,

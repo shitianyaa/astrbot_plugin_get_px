@@ -72,7 +72,7 @@ QUERY_PROPERTIES = {
 IMAGE_PROPERTIES = {
     "tag": {
         "type": "string",
-        "description": "auto或search的角色名/关键词，最多48字符；角色可用原名或一个确定的译名，允许必要的作品消歧，不拼多语言别名或编造画面条件。仅auto可省略或空串以随机/推荐；search必填非空文本，范围由search_target决定。",
+        "description": "auto或search的角色名/关键词，整串最多48字符；search必填非空文本，支持用空格连接多个条件表示AND，如白子 蔚蓝档案、洛茜 白丝，范围由search_target决定。角色可用原名或确定的译名；角色+作品/用户指定服装属于有效组合，不堆叠同角色多语言别名或编造条件。auto可省略或空串以随机/推荐，跨源不保证同样组合语义；需要AND时用search。",
         "maxLength": MAX_TOOL_TAG_LENGTH,
     },
     "count": {

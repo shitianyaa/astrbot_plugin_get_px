@@ -4,6 +4,9 @@
 
 搜索指令：
     /p [标签] [数量]           搜索并发送图片
+    /ps <关键词> [数量]       Pixiv 组合搜索
+    /pd <作品ID或链接> [页码]  发送指定作品的单页
+    /pr <日|周|月> [数量]     按榜单顺序发送图片
 
 签到指令：
     /签到                      每日签到
@@ -51,6 +54,7 @@ from .checkin.omnidraw_bridge import OmnidrawBridge
 from .checkin.shop import CheckinShopMixin
 from .pixiv import DeliveryMixin, FiltersMixin, SearchMixin
 from .pixiv.client import PixivClient
+from .pixiv.commands import PixivCommandMixin
 from .pixiv.constants import MAX_IMAGE_COUNT
 from .pixiv.downloader import ImageDownloader
 from .pixiv.index import ImageIndexStore
@@ -83,6 +87,7 @@ class GetPxPlugin(
     CheckinCommandMixin,
     CheckinShopMixin,
     CheckinArtworkMixin,
+    PixivCommandMixin,
     SearchMixin,
     DeliveryMixin,
     FiltersMixin,
@@ -376,15 +381,23 @@ class GetPxPlugin(
         async for result in self._handle_search(event, tag=tag, count_str=count):
             yield result
 
-    @staticmethod
-    def _split_tag_and_count(query: str) -> tuple[str, str]:
-        """把 GreedyStr 参数拆成标签与尾部数量；纯数字视为随机发图数量。"""
-        tokens = query.split()
-        if not tokens:
-            return "", ""
-        if tokens[-1].isdigit():
-            return " ".join(tokens[:-1]), tokens[-1]
-        return " ".join(tokens), ""
+    @filter.command("ps")
+    async def cmd_ps(self, event: AstrMessageEvent, query: GreedyStr = GreedyStr):
+        """Pixiv 搜索并发图。参数: <关键词，可用空格组合> [数量]"""
+        async for result in self._handle_pixiv_command(event, "search", query):
+            yield result
+
+    @filter.command("pd")
+    async def cmd_pd(self, event: AstrMessageEvent, query: GreedyStr = GreedyStr):
+        """下载并发送指定作品单页。参数: <作品ID或标准链接> [页码]"""
+        async for result in self._handle_pixiv_command(event, "artwork", query):
+            yield result
+
+    @filter.command("pr")
+    async def cmd_pr(self, event: AstrMessageEvent, query: GreedyStr = GreedyStr):
+        """按 Pixiv 榜单顺序发图。参数: <日|周|月> [数量]"""
+        async for result in self._handle_pixiv_command(event, "ranking", query):
+            yield result
 
     # ──────────────────────────────────────────────────────────────
     # 签到指令

@@ -12,7 +12,6 @@ from astrbot.core.platform.message_session import MessageSession
 from ..pixiv.constants import MAX_IMAGE_COUNT
 from ..pixiv.selection import ImageSelection, SELECTION_PARAMETERS
 from ..pixiv.query import ArtworkQuery, QUERY_KEYS, MODES, QueryError
-from ..pixiv.catalog import CandidateStream
 from ..pixiv.discovery import DiscoveryService
 from .definitions import MAX_TOOL_TAG_LENGTH
 from .requests import EventRequests
@@ -158,11 +157,6 @@ class ImageToolService:
             self._explicit_claims.update(holds)
             acquired = True
             # 留一半（最多30秒）给发送、结算和清理，实际发送仍遵循已有回执规则。
-            extra = {}
-            if query.mode != "auto":
-                extra["candidate_stream"] = CandidateStream(
-                    self.plugin, event, query, None, selection, delivery=True
-                )
             await self.plugin._execute_search(
                 event,
                 query.tag,
@@ -173,7 +167,7 @@ class ImageToolService:
                 send_mode=send_mode,
                 selection=selection,
                 rate_limit_checked=True,
-                **extra,
+                query=query,
             )
         except asyncio.CancelledError:
             outcome.interrupted = True
