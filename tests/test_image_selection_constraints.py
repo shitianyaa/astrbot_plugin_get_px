@@ -102,7 +102,7 @@ async def test_metadata_filter_precedes_claim_and_real_file_filter_releases_usag
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("available", [False, True])
-async def test_filtered_batches_replenish_without_relaxing_or_repeating(tmp_path, available):
+async def test_filtered_batches_keep_conditions_and_retry_only_if_unsubmitted(tmp_path, available):
     plugin, context, _ = await setup_flow(tmp_path, items=1)
     wrong = dict(_illust(10), width=160, height=120)
     good = dict(_illust(11), width=120, height=160)
@@ -110,7 +110,7 @@ async def test_filtered_batches_replenish_without_relaxing_or_repeating(tmp_path
         ([wrong], 1, "pixiv:search:test"),
         ([good] if available else [wrong], 1, "lolicon:search:test"),
         ([wrong], 1, "lolicon:search:test"),
-    ])
+    ] * 2)
     path = tmp_path / "portrait.png"
     Image.new("RGB", (120, 160)).save(path)
     plugin.downloader.download_for_send.return_value = (str(path), "original", path.stat().st_size)
@@ -118,9 +118,9 @@ async def test_filtered_batches_replenish_without_relaxing_or_repeating(tmp_path
     service = ImageToolService(plugin)
     with patch("astrbot_plugin_get_px.pixiv.execution.send_once", AsyncMock(return_value=DeliveryStatus.CONFIRMED)) as sender:
         summary = await service.image(context, {"tag": "test", "count": 2, "orientation": "portrait"})
-        repeated = await service.image(context, {"orientation": "landscape"})
-    assert repeated["duplicate_call"]
-    assert plugin._fetch_source_candidates.await_count == 3
+        repeated = await service.image(context, {"tag": "test", "count": 2, "orientation": "portrait"})
+    assert bool(repeated.get("duplicate_call")) == available
+    assert plugin._fetch_source_candidates.await_count == (3 if available else 6)
     assert plugin.downloader.download_for_send.await_count == int(available)
     assert sender.await_count == int(available)
     assert summary["downloaded_count"] == int(available) and summary["message"]

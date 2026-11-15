@@ -365,6 +365,12 @@ async def test_uncertain_or_failed_delivery_keeps_existing_charge_rules(
     tmp_path, status, send_mode
 ):
     plugin, context, _ = await setup_flow(tmp_path, coins=100, items=1)
+    if status is DeliveryStatus.FAILED:
+        path = tmp_path / "retry.jpg"
+        async def download(*args, **kwargs):
+            path.write_bytes(b"image")
+            return str(path), "original", 5
+        plugin.downloader.download_for_send.side_effect = download
     with patch(
         "astrbot_plugin_get_px.pixiv.execution.send_once", AsyncMock(return_value=status)
     ) as sender:
@@ -373,14 +379,18 @@ async def test_uncertain_or_failed_delivery_keeps_existing_charge_rules(
         repeated = await service.image(
             context, {"send_mode": "forward" if send_mode == "single" else "single"}
         )
-    assert repeated["duplicate_call"] and sender.await_count == 1
+    if status is DeliveryStatus.FAILED:
+        assert "duplicate_call" not in repeated and sender.await_count == 2
+    else:
+        assert repeated["duplicate_call"] and sender.await_count == 1
     charged = status is DeliveryStatus.TIMED_OUT
     assert (await plugin.checkin_store.find_profile("10001")).coins == (
         80 if charged else 100
     )
     assert summary["delivery"] == {status.value: 1}
     assert summary["settlement"] == ("completed" if charged else "not_required")
-    assert not summary["retry_allowed"] and not context.context.event.sent
+    assert summary["retry_allowed"] == (status is DeliveryStatus.FAILED)
+    assert not context.context.event.sent
 
 
 @pytest.mark.asyncio
@@ -632,7 +642,7 @@ async def test_settlement_exception_after_commit_reports_unknown_without_retry(t
 @pytest.mark.asyncio
 @pytest.mark.parametrize("tool", [True, False])
 @pytest.mark.parametrize("failure", ["source", "manga", "safety", "download", "index", "rate"])
-async def test_rejected_and_exhausted_requests_never_send_charge_or_repeat(tmp_path, tool, failure):
+async def test_unsubmitted_requests_allow_safe_retry_without_send_or_charge(tmp_path, tool, failure):
     plugin, context, _ = await setup_flow(tmp_path, items=1)
     if failure == "source":
         plugin.illusts = []
@@ -657,12 +667,12 @@ async def test_rejected_and_exhausted_requests_never_send_charge_or_repeat(tmp_p
             calls = plugin._fetch_source_candidates.await_count
             downloads = plugin.downloader.download_for_send.await_count
             repeated = await service.image(context, {})
-            assert repeated["duplicate_call"] and not repeated["running"]
+            assert "duplicate_call" not in repeated and not repeated["running"]
             assert not summary["delivery"] and not summary["downloaded_count"]
             assert summary["settlement"] == "not_required" and summary["message"]
-            assert not summary["retry_allowed"]
-            assert plugin._fetch_source_candidates.await_count == calls
-            assert plugin.downloader.download_for_send.await_count == downloads
+            assert summary["retry_allowed"]
+            assert plugin._fetch_source_candidates.await_count >= calls
+            assert plugin.downloader.download_for_send.await_count >= downloads
         else:
             messages = [item async for item in plugin._handle_search(context.context.event, "", "1")]
             assert len(messages) == 1
@@ -670,5 +680,5 @@ async def test_rejected_and_exhausted_requests_never_send_charge_or_repeat(tmp_p
     plugin.checkin_store.spend_coins.assert_not_awaited()
     assert not context.context.event.sent
     assert (await plugin.checkin_store.find_profile("10001")).coins == 100
-    assert plugin._fetch_source_candidates.await_count == (0 if failure == "rate" else 3 if failure == "download" else 1)
-    assert plugin.downloader.download_for_send.await_count == int(failure == "download")
+    assert plugin._fetch_source_candidates.await_count == (2 if tool else 1) * (0 if failure == "rate" else 3 if failure == "download" else 1)
+    assert plugin.downloader.download_for_send.await_count == (2 if tool else 1) * int(failure == "download")

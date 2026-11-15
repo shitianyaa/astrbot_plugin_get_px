@@ -304,3 +304,5 @@ python -m pytest -q tests/test_checkin_cache.py tests/test_checkin_calendar.py t
 运行 `python -m pytest -q tests/test_artwork_stats.py tests/test_public_discovery.py tests/test_image_tools.py`。新增长期用例仅保留三个业务场景：按需查询及游标继承后指定作品发送，补查超时仍保留候选和已知统计，卸载取消补查并关闭会话。HTTP 字段映射和异常组合采用一次性验证，不另留实现细节测试。离线回归不代表公开端点持续可用或真实模型遵守 Skill。
 
 工具入口、共享参数及执行编排分别位于 tools/images.py、tools/discovery.py、tools/definitions.py 和 tools/service.py；发图执行位于 pixiv/execution.py。现有测试的发送与时钟替身注入执行模块，工具服务直接从 tools/service.py 导入，不保留旧路径别名。结构整理复用现有领域回归，不新增拆分专用用例。
+
+模型多任务回归复用 tests/test_public_discovery.py 和 tests/test_image_tools.py 的领域场景，验证同消息三个不同角色、统一发送准入、并发总名额与余额、未提交后重试、送达未知只阻止同任务重试，以及换查询条件不续期。模型任务协调位于 tools/requests.py，结果投影位于 tools/results.py，领域发送和结算继续独立验证。

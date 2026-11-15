@@ -217,6 +217,7 @@ class SearchMixin:
         send_mode: str = "auto",
         selection: ImageSelection | None = None,
         candidate_stream=None,
+        rate_limit_checked: bool = False,
     ) -> SearchResult:
         return await SearchExecution(
             self,
@@ -229,4 +230,5 @@ class SearchMixin:
             send_mode=send_mode,
             selection=selection,
             candidate_stream=candidate_stream,
+            rate_limit_checked=rate_limit_checked,
         ).run()

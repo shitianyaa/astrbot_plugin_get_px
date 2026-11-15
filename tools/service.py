@@ -10,12 +10,12 @@ from astrbot.api import logger
 from astrbot.core.platform.message_session import MessageSession
 
 from ..pixiv.constants import MAX_IMAGE_COUNT
-from ..pixiv.search_result import SearchResult
 from ..pixiv.selection import ImageSelection, SELECTION_PARAMETERS
 from ..pixiv.query import ArtworkQuery, QUERY_KEYS, MODES, QueryError
 from ..pixiv.catalog import CandidateStream
 from ..pixiv.discovery import DiscoveryService
 from .definitions import MAX_TOOL_TAG_LENGTH
+from .requests import EventRequests
 from .images import GetPxImageTool, GetPxContextTool
 from .discovery import GetPxArtworksTool, GetPxUsersTool
 
@@ -121,13 +121,6 @@ class ImageToolService:
         event = self._event(context)
         # 先校验会话，不能给缺失 UMO 的请求默认全局放行。
         normalize_session(event.unified_msg_origin)
-        existing = event.get_extra(self.EVENT_KEY)
-        if existing is not None:
-            summary = existing.tool_summary()
-            summary["duplicate_call"] = True
-            summary["notice"] = ""
-            summary["guidance"] += "此请求已执行或正在执行；新增取图请另发一条新消息。"
-            return summary
         timeout = context.tool_call_timeout
         if (
             isinstance(timeout, bool)
@@ -136,10 +129,25 @@ class ImageToolService:
             or timeout <= 0
         ):
             raise ValueError("工具等待预算无效")
-        outcome = SearchResult(count)
-        event.set_extra(self.EVENT_KEY, outcome)
+        state = EventRequests.for_event(
+            event, self.plugin._cfg_int("max_count", 5, 1, MAX_IMAGE_COUNT),
+            timeout - min(30.0, timeout / 2),
+        )
+        key = (query, selection)
         task = asyncio.current_task()
         self._calls.add(task)
+        try:
+            return await state.send(
+                key, count, event,
+                lambda: self.plugin._check_rate_limit(event.get_sender_id()),
+                lambda outcome, allowed, deadline: self._execute_image(
+                    event, query, allowed, send_mode, selection, outcome, deadline
+                ),
+            )
+        finally:
+            self._calls.discard(task)
+
+    async def _execute_image(self, event, query, count, send_mode, selection, outcome, deadline):
         holds = {(event.unified_msg_origin, target.key) for target in query.targets}
         acquired = False
         try:
@@ -150,7 +158,6 @@ class ImageToolService:
             self._explicit_claims.update(holds)
             acquired = True
             # 留一半（最多30秒）给发送、结算和清理，实际发送仍遵循已有回执规则。
-            deadline = time.monotonic() + timeout - min(30.0, timeout / 2)
             extra = {}
             if query.mode != "auto":
                 extra["candidate_stream"] = CandidateStream(
@@ -158,13 +165,14 @@ class ImageToolService:
                 )
             await self.plugin._execute_search(
                 event,
-                tag.strip(),
+                query.tag,
                 str(count),
                 tool=True,
                 result=outcome,
                 selection_deadline=deadline,
                 send_mode=send_mode,
                 selection=selection,
+                rate_limit_checked=True,
                 **extra,
             )
         except asyncio.CancelledError:
@@ -176,10 +184,21 @@ class ImageToolService:
             logger.warning(
                 f"[GetPx] Tool 取图执行异常: error_type={type(exc).__name__}"
             )
-            outcome.message = "取图执行未完整结束，请勿重复调用；发送或结算状态需核对。"
+            outcome.submission_uncertain = outcome.submission_started
+            outcome.retry_allowed = not outcome.submission_started
+            outcome.message = (
+                "取图执行未完整结束，请勿重复调用；发送或结算状态需核对。"
+                if outcome.submission_started
+                else "取源或准备阶段未完成，本任务尚未提交，可在原需求和剩余预算内重试。"
+            )
+        else:
+            outcome.retry_allowed = (
+                not any(n for status, n in outcome.delivery.items() if status != "failed")
+                and outcome.settlement == "not_required"
+                and not outcome.interrupted
+            )
         finally:
             outcome.running = False
-            self._calls.discard(task)
             if acquired:
                 self._explicit_claims.difference_update(holds)
             if query.mode == "artwork":
@@ -196,7 +215,6 @@ class ImageToolService:
                 for target in outcome.targets:
                     if target["status"] == "candidate":
                         target["status"] = "not_submitted"
-        return outcome.tool_summary()
 
     async def query(self, context, kind, args):
         task = asyncio.current_task()
@@ -211,7 +229,18 @@ class ImageToolService:
             ):
                 raise ValueError("工具等待预算无效")
             self._calls.add(task)
-            return await self.discovery.query(event, kind, args, timeout)
+            state = EventRequests.for_event(
+                event, self.plugin._cfg_int("max_count", 5, 1, MAX_IMAGE_COUNT),
+                timeout - min(30.0, timeout / 2),
+            )
+            if state.query_deadline is None:
+                state.query_deadline = time.monotonic() + min(
+                    timeout, self.plugin._cfg_float("request_timeout", 30.0, 5.0, 120.0)
+                )
+            remaining = min(timeout, state.query_deadline - time.monotonic())
+            if remaining <= 0:
+                return self.discovery.error(TimeoutError())
+            return await self.discovery.query(event, kind, args, remaining)
         except asyncio.CancelledError:
             raise
         except Exception as exc:

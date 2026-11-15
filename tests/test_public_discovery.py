@@ -6,7 +6,7 @@ import asyncio
 import json
 from dataclasses import replace
 from types import SimpleNamespace
-from unittest.mock import AsyncMock, patch
+from unittest.mock import AsyncMock, Mock, patch
 
 import pytest
 
@@ -18,7 +18,136 @@ from astrbot_plugin_get_px.pixiv.filters import FiltersMixin
 from astrbot_plugin_get_px.pixiv.index import ImageIndexStore
 from astrbot_plugin_get_px.pixiv.query import QueryError
 from astrbot_plugin_get_px.pixiv.delivery import DeliveryStatus
+from astrbot_plugin_get_px.pixiv.delivery import DeliveryNotSubmitted
 from astrbot_plugin_get_px.tools.service import ImageToolService
+
+
+@pytest.mark.asyncio
+async def test_distinct_character_tasks_share_admission_and_keep_own_results(tmp_path):
+    plugin, context, _, service = await flow(tmp_path, items=3)
+    plugin._check_rate_limit = Mock(return_value=0)
+    plugin.client.query_page.side_effect = [PixivPage([_illust(i)]) for i in (1, 2, 3)]
+    with patch("astrbot_plugin_get_px.pixiv.execution.send_once", AsyncMock(return_value=DeliveryStatus.CONFIRMED)) as send:
+        results = [await service.image(context, {"mode": "search", "tag": tag}) for tag in ("白子", "星野", "芹香")]
+        duplicate = await service.image(context, {"mode": "search", "tag": "星野", "count": 1, "send_mode": "single"})
+    assert all(r["delivery"] == {"confirmed": 1} and "duplicate_call" not in r for r in results)
+    assert duplicate["duplicate_call"] and not duplicate["retry_allowed"]
+    assert send.await_count == 3
+    plugin._check_rate_limit.assert_called_once()
+    assert (await plugin.checkin_store.find_profile("10001")).coins == 40
+
+
+@pytest.mark.asyncio
+async def test_concurrent_distinct_tasks_share_message_limit_and_balance(tmp_path):
+    plugin, context, _, service = await flow(tmp_path, items=3)
+    plugin.config["max_count"] = 2
+    plugin.client.query_page.side_effect = [PixivPage([_illust(i)]) for i in (1, 2)]
+    with patch("astrbot_plugin_get_px.pixiv.execution.send_once", AsyncMock(return_value=DeliveryStatus.CONFIRMED)) as send:
+        results = await asyncio.gather(*(service.image(context, {"mode": "search", "tag": tag}) for tag in ("a", "b", "c")))
+    assert send.await_count == 2
+    assert results[2]["count_limits"] == ["event_limit"]
+    assert not results[2]["delivery"]
+    assert (await plugin.checkin_store.find_profile("10001")).coins == 60
+
+
+@pytest.mark.asyncio
+async def test_unsubmitted_failure_can_retry_but_success_cannot(tmp_path):
+    plugin, context, paths, service = await flow(tmp_path, items=1)
+    plugin.downloader.download_for_send.side_effect = [RuntimeError("fixture"), (paths[0], "original", 5)]
+    args = {"mode": "search", "tag": "a"}
+    with patch("astrbot_plugin_get_px.pixiv.execution.send_once", AsyncMock(return_value=DeliveryStatus.CONFIRMED)) as send:
+        failed = await service.image(context, args)
+        success = await service.image(context, args)
+        duplicate = await service.image(context, args)
+    assert failed["retry_allowed"] and not failed["delivery"]
+    assert success["delivery"] == {"confirmed": 1} and not success["retry_allowed"]
+    assert duplicate["duplicate_call"] and send.await_count == 1
+
+
+@pytest.mark.asyncio
+async def test_new_queries_do_not_renew_message_query_budget(tmp_path):
+    import time
+    from astrbot_plugin_get_px.tools.requests import EventRequests
+    plugin, context, _, service = await flow(tmp_path)
+    await service.query(context, "artworks", {"mode": "search", "tag": "a"})
+    state = EventRequests.for_event(context.context.event, 5, 120)
+    state.query_deadline = time.monotonic() - 1
+    result = await service.query(context, "artworks", {"mode": "search", "tag": "b"})
+    assert result["status"] == "budget_exhausted"
+    assert plugin.client.query_page.await_count == 1
+
+
+@pytest.mark.asyncio
+async def test_transient_query_error_does_not_poison_same_event_retry(tmp_path):
+    plugin, context, _, service = await flow(tmp_path)
+    plugin.client.query_page.side_effect = [QueryError("upstream_error", "fixture"), PixivPage([_illust(1)])]
+    args = {"mode": "search", "tag": "a"}
+    first = await service.query(context, "artworks", args)
+    second = await service.query(context, "artworks", args)
+    assert first["status"] == "upstream_error" and first["retry_allowed"]
+    assert second["status"] == "ok" and plugin.client.query_page.await_count == 2
+
+
+@pytest.mark.asyncio
+async def test_source_exception_does_not_reserve_message_capacity(tmp_path):
+    from astrbot_plugin_get_px.tools.requests import EventRequests
+    plugin, context, _, service = await flow(tmp_path, items=1)
+    plugin.client.query_page.side_effect = [RuntimeError("fixture"), PixivPage([_illust(1)])]
+    args = {"mode": "search", "tag": "a"}
+    with patch("astrbot_plugin_get_px.pixiv.execution.send_once", AsyncMock(return_value=DeliveryStatus.CONFIRMED)) as send:
+        failed = await service.image(context, dict(args, count=5))
+        state = EventRequests.for_event(context.context.event, 5, 120)
+        assert state.used == 0 and failed["retry_allowed"]
+        success = await service.image(context, args)
+    assert success["delivery"] == {"confirmed": 1} and send.await_count == 1
+    assert (await plugin.checkin_store.find_profile("10001")).coins == 80
+
+
+@pytest.mark.asyncio
+async def test_partial_submission_followed_by_pre_submit_cancel_cannot_retry(tmp_path):
+    plugin, context, _, service = await flow(tmp_path, items=2)
+    args = {"mode": "search", "tag": "a", "count": 2}
+    with patch("astrbot_plugin_get_px.pixiv.execution.send_once", AsyncMock(side_effect=[DeliveryStatus.CONFIRMED, DeliveryNotSubmitted("fixture")])) as send:
+        with pytest.raises(DeliveryNotSubmitted):
+            await service.image(context, args)
+        repeated = await service.image(context, args)
+    assert repeated["delivery"] == {"confirmed": 1} and not repeated["retry_allowed"]
+    assert repeated["settlement"] == "completed" and repeated["interrupted"]
+    assert repeated["duplicate_call"] and send.await_count == 2
+    assert (await plugin.checkin_store.find_profile("10001")).coins == 80
+
+
+@pytest.mark.asyncio
+async def test_unexpected_submit_error_retains_only_attempted_images_as_unknown(tmp_path):
+    from astrbot_plugin_get_px.tools.requests import EventRequests
+    plugin, context, _, service = await flow(tmp_path, items=3)
+    plugin.config["max_count"] = 2
+    plugin.client.query_page.side_effect = [PixivPage([_illust(1), _illust(2)]), PixivPage([_illust(3)])]
+    args = {"mode": "search", "tag": "a", "count": 2}
+    with patch("astrbot_plugin_get_px.pixiv.execution.send_once", AsyncMock(side_effect=[RuntimeError("fixture"), DeliveryStatus.CONFIRMED])) as send:
+        first = await service.image(context, args)
+        state = EventRequests.for_event(context.context.event, 2, 120)
+        assert state.used == 1
+        second = await service.image(context, {"mode": "search", "tag": "b"})
+        repeated = await service.image(context, args)
+    assert first["delivery"] == {"unknown": 1} and not first["retry_allowed"]
+    assert second["delivery"] == {"confirmed": 1}
+    assert repeated["duplicate_call"] and send.await_count == 2
+    assert state.used == 2
+
+
+@pytest.mark.asyncio
+async def test_unknown_task_blocks_only_its_own_repeat(tmp_path):
+    plugin, context, _, service = await flow(tmp_path, items=2)
+    plugin.client.query_page.side_effect = [PixivPage([_illust(i)]) for i in (1, 2)]
+    with patch("astrbot_plugin_get_px.pixiv.execution.send_once", AsyncMock(side_effect=[DeliveryStatus.UNKNOWN, DeliveryStatus.CONFIRMED])) as send:
+        first = await service.image(context, {"mode": "search", "tag": "a"})
+        second = await service.image(context, {"mode": "search", "tag": "b"})
+        repeated = await service.image(context, {"mode": "search", "tag": "a"})
+    assert first["delivery"] == {"unknown": 1} and not first["retry_allowed"]
+    assert second["delivery"] == {"confirmed": 1}
+    assert repeated["duplicate_call"] and repeated["delivery"] == {"unknown": 1}
+    assert send.await_count == 2
 
 
 async def flow(tmp_path, items=10):

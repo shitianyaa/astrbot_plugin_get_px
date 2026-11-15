@@ -166,6 +166,8 @@ class DiscoveryService:
             except Exception as exc:
                 result = self.error(exc)
             future.set_result(deepcopy(result))
+            if result.get("status") in ("upstream_error", "query_unavailable"):
+                memo.pop(key, None)
             return result
         except asyncio.CancelledError:
             raise
@@ -209,7 +211,7 @@ class DiscoveryService:
             "status": code,
             "records": [],
             "message": message,
-            "retry_allowed": False,
+            "retry_allowed": code in ("upstream_error", "query_unavailable"),
         }
 
     async def _execute(self, event, kind, args, policy, binding):

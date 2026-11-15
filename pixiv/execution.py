@@ -62,6 +62,7 @@ class SearchExecution:
         send_mode="auto",
         selection=None,
         candidate_stream=None,
+        rate_limit_checked=False,
     ):
         self.plugin = plugin
         self.event = event
@@ -73,6 +74,7 @@ class SearchExecution:
         self.send_mode = send_mode
         self.selection = selection
         self.candidate_stream = candidate_stream
+        self.rate_limit_checked = rate_limit_checked
 
     async def run(self) -> SearchResult:
         if not await self._prepare() or not await self._load_candidates():
@@ -115,7 +117,7 @@ class SearchExecution:
             self.forward_threshold = MAX_IMAGE_COUNT
         elif self.tool and self.send_mode == "forward":
             self.forward_threshold = 0
-        wait = self.plugin._check_rate_limit(self.event.get_sender_id())
+        wait = 0 if self.rate_limit_checked else self.plugin._check_rate_limit(self.event.get_sender_id())
         if wait > 0:
             logger.debug(
                 f"{LOG_PREFIX} 搜索请求触发频率限制: retry_after_seconds={wait}"
@@ -593,15 +595,29 @@ class SearchExecution:
         """按实际提交阶段维护计费、去重占用和文件读取窗口。"""
         ids = {str(illust["id"]) for illust, *_ in images if illust.get("id")}
         try:
+            self.result.submission_started = True
             status = await send_once(self.event, content, context=context)
         except DeliveryNotSubmitted:
+            self.result.submission_started = any(
+                n for state, n in self.result.delivery.items() if state != "failed"
+            )
             raise
         except asyncio.CancelledError:
             # 提交期间取消也可能已送达，保留占用与协议端读取窗口。
             self._retain_unknown(ids, images)
             self.result.record_delivery(DeliveryStatus.UNKNOWN, len(images))
             raise
+        except Exception as exc:
+            self._retain_unknown(ids, images)
+            self.result.record_delivery(DeliveryStatus.UNKNOWN, len(images))
+            log_delivery_error(
+                exc, context=context, phase="submit", delivery_status="unknown"
+            )
+            raise
         self.result.record_delivery(status, len(images))
+        self.result.submission_started = any(
+            n for state, n in self.result.delivery.items() if state != "failed"
+        )
         for item_id in ids:
             self._target_status(item_id, status.value)
         if status is DeliveryStatus.UNKNOWN:

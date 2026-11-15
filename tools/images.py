@@ -30,7 +30,7 @@ class GetPxImageTool(FunctionTool):
             logger.warning(f"[GetPx] Tool 请求已拒绝: error_type={type(exc).__name__}")
             result = {
                 "message": "参数、会话或服务状态不满足取图要求，本次未开始新的取图。",
-                "retry_allowed": False,
+                "retry_allowed": isinstance(exc, ValueError),
             }
         return json.dumps(result, ensure_ascii=False)
 
