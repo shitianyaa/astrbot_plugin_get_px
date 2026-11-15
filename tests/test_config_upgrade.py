@@ -140,4 +140,6 @@ def test_init_client_ignores_retired_url_and_reuses_pixiv_client(monkeypatch):
     plugin._init_client()
     assert plugin.lolicon_client is lolicon and lolicon.available
     assert plugin.client is pixiv
-    factory.assert_called_once_with(refresh_token="fixture-token", request_timeout=30.0)
+    factory.assert_called_once_with(
+        refresh_token="fixture-token", request_timeout=30.0, proxy_url=""
+    )

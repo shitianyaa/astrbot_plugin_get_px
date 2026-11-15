@@ -3,13 +3,16 @@ from __future__ import annotations
 from contextlib import closing
 import sqlite3
 import tempfile
+import sys
 from pathlib import Path
 
 import pytest
 
-from checkin.card import get_checkin_card_template
-from checkin.store import CheckinStore
-from checkin.themes import CHECKIN_THEMES, resolve_checkin_theme
+sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
+
+from astrbot_plugin_get_px.checkin.card import get_checkin_card_template
+from astrbot_plugin_get_px.checkin.store import CheckinStore
+from astrbot_plugin_get_px.checkin.themes import CHECKIN_THEMES, resolve_checkin_theme
 
 
 class FrozenCheckinStore(CheckinStore):

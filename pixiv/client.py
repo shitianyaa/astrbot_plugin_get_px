@@ -9,6 +9,7 @@ from urllib.parse import parse_qs, urlsplit
 from astrbot.api import logger
 
 from .query import ArtworkQuery, QueryError
+from .network import normalize_proxy_url
 
 
 @dataclass
@@ -72,6 +73,7 @@ class PixivClient:
     refresh_token: str
     request_timeout: float = 30.0
     close_timeout: float = 5.0
+    proxy_url: str = field(default="", repr=False)
 
     _api: object = field(default=None, repr=False)
     _cached_token: str = field(default="", repr=False)
@@ -82,6 +84,7 @@ class PixivClient:
     _closed: bool = field(default=False, repr=False)
 
     def __post_init__(self) -> None:
+        self.proxy_url = normalize_proxy_url(self.proxy_url)
         self._idle = asyncio.Condition(self._lock)
 
     async def ensure_logged_in(self):
@@ -106,7 +109,7 @@ class PixivClient:
                 "未安装 pixivpy-async，请运行: pip install pixivpy-async"
             )
 
-        api = AppPixivAPI()
+        api = AppPixivAPI(proxy=self.proxy_url or None, env=False)
         try:
             await self._wait_for(
                 api.login(refresh_token=self.refresh_token),

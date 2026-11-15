@@ -98,6 +98,7 @@ python scripts/ci/check_plugin_lifecycle.py \
 
 ### 发图测试
 
+- `test_network.py` - 两种出站代理模式、Pixiv OAuth/API 参数、图片／热度／一言会话注入、环境代理隔离、无效配置拒绝与代理故障不直连；节假日请求与现有日历测试共同验证。
 - `test_lolicon.py`、`test_pixiv_client.py` - 图源规范化、固定 API 地址、优先级与双向失败／空结果回退；覆盖无 Pixiv 客户端、分页游标和安全参数传递
 - `test_p_command_count.py` - 发图参数和数量
 - `test_p_coin_cost.py`、`test_delivery.py` - 发送、结算、去重状态和诊断
@@ -146,6 +147,12 @@ python -m pytest tests/test_command_registration.py -v
 node --check pages/pluginCenter/app.js
 # 手工验证：打开 Plugin Pages 管理中心
 ```
+
+## 出站代理验证
+
+运行 `python -m pytest -q tests/test_network.py tests/test_config_upgrade.py tests/test_downloader.py tests/test_lolicon.py tests/test_pixiv_client.py tests/test_artwork_stats.py tests/test_checkin_greeting.py tests/test_holiday_calendar.py`。网络回归使用本地替身／回环服务，不读取生产 Token、不依赖公网代理；配置升级复用真实 AstrBot 加载场景。
+
+部署前分别以代理地址留空、`http://127.0.0.1:10808` 和 `socks5h://127.0.0.1:10808` 核对图源元数据、公开热度、实际图片下载，并检查“Lolicon API 不走代理”只豁免 API，不豁免图片。公网直连失败必须单独记录，不视为代理功能失败；插件直连不等于绕过系统 TUN。实测脚本、图片和日志仅保存在工作区 `Temp/`，不向聊天发图。
 
 ## 快速全面检查
 

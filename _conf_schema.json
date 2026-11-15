@@ -431,8 +431,25 @@
   "runtime": {
     "description": "运行参数",
     "type": "object",
-    "hint": "请求频率、超时与界面等全局运行参数。",
+    "hint": "出站代理、请求频率、超时与界面等全局运行参数。",
     "items": {
+      "network_proxy_url": {
+        "description": "出站代理地址",
+        "type": "string",
+        "default": "",
+        "obvious_hint": true,
+        "hint": "留空时插件自有请求直连，不读取环境代理。支持 http://、socks5://、socks5h://，如 http://127.0.0.1:10808；必须包含主机和端口，可带账号密码，特殊字符须百分号编码。SOCKS5 使用代理端 DNS。不支持 https:// 代理服务器；HTTP 代理可访问 HTTPS 网站。代理失败不回退直连，保存重载后生效；容器内须使用可达地址。"
+      },
+      "network_proxy_mode": {
+        "description": "出站代理模式",
+        "type": "string",
+        "default": "全部走代理",
+        "options": [
+          "全部走代理",
+          "Lolicon API 不走代理"
+        ],
+        "hint": "有代理地址时生效。全部走代理覆盖插件自有的 Pixiv 登录/API/热度、Lolicon API、所有图片及头像下载、一言和节假日请求；第二项仅让 Lolicon API 直连，其返回图片仍走代理。图片反代改写独立保留；OneBot、模型、T2I 和浏览器请求由各自配置管理。"
+      },
       "request_timeout": {
         "description": "下载超时（秒）",
         "type": "float",

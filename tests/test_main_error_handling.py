@@ -851,6 +851,7 @@ class MainErrorHandlingTest(unittest.IsolatedAsyncioTestCase):
 
     async def test_initialize_migrates_policy_before_convergence_and_logs_result(self):
         plugin = object.__new__(GetPxPlugin)
+        plugin.network_routing = main_module.NetworkRouting()
         plugin.downloader = SimpleNamespace(temp_dir=None, resume_cleanup=AsyncMock())
         order = []
         plugin.config = {}
@@ -930,6 +931,7 @@ class MainErrorHandlingTest(unittest.IsolatedAsyncioTestCase):
 
     async def test_initialize_skips_convergence_when_policy_migration_fails(self):
         plugin = object.__new__(GetPxPlugin)
+        plugin.network_routing = main_module.NetworkRouting()
         plugin.downloader = SimpleNamespace(temp_dir=None, resume_cleanup=AsyncMock())
         plugin.config = {}
         plugin.context = SimpleNamespace(add_llm_tools=Mock())

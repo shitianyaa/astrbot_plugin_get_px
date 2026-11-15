@@ -1,4 +1,5 @@
 pixivpy-async
 aiohttp
+aiohttp-socks==0.11.0
 Pillow
 lunar-python

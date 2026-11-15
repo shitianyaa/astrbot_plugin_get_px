@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import asyncio
 import json
 import os
 from dataclasses import dataclass
@@ -9,6 +8,8 @@ from pathlib import Path
 from typing import Any
 
 import aiohttp
+
+from ..pixiv.network import NETWORK_ERRORS, create_http_session, normalize_proxy_url
 
 
 HOLIDAY_REFRESH_DAYS = 180
@@ -25,7 +26,10 @@ class OnlineHoliday:
 
 
 class HolidayCalendar:
-    def __init__(self, data_dir: Path | str, *, plugin_version: str) -> None:
+    def __init__(
+        self, data_dir: Path | str, *, plugin_version: str, proxy_url: str = "",
+    ) -> None:
+        self.proxy_url = normalize_proxy_url(proxy_url)
         self.path = Path(data_dir) / "holiday_calendar.json"
         self.plugin_version = plugin_version
         self._state: dict[str, Any] = self._load()
@@ -75,7 +79,7 @@ class HolidayCalendar:
             }
             successful_years: list[int] = []
             timeout = aiohttp.ClientTimeout(total=8)
-            async with aiohttp.ClientSession(timeout=timeout) as session:
+            async with create_http_session(self.proxy_url, timeout=timeout) as session:
                 for index, year in enumerate(years):
                     try:
                         async with session.get(
@@ -85,10 +89,10 @@ class HolidayCalendar:
                             payload = await response.json(content_type=None)
                         days.update(self._parse_year(payload, year))
                         successful_years.append(year)
-                    except (aiohttp.ClientError, ValueError, TypeError):
+                    except NETWORK_ERRORS + (ValueError, TypeError):
                         if index == 0:
                             raise
-        except (aiohttp.ClientError, asyncio.TimeoutError, ValueError, TypeError):
+        except NETWORK_ERRORS + (ValueError, TypeError):
             return False
 
         self._state.update(

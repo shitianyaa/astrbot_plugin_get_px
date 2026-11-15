@@ -24,13 +24,13 @@
 
 旧阈值不会自动改为 10 MiB；使用原图且频繁因大小限制换图时，建议手动将上限调整为 10 MiB。
 
-Lolicon 请求地址固定为 `https://api.lolicon.app/setu/v2`。旧 `lolicon_api_url` 从 schema 删除，由 AstrBot 加载时裁剪；简单 dict 中的残留值也不参与请求，旧自定义地址和留空停用不再生效。图片反代 origin 配置仍只代理图片，不代理 API。
+Lolicon 请求地址固定为 `https://api.lolicon.app/setu/v2`。旧 `lolicon_api_url` 从 schema 删除，由 AstrBot 加载时裁剪；简单 dict 中的残留值也不参与请求，旧自定义地址和留空停用不再生效。图片反代 origin 配置仅改写图片地址；连接出口另由 `network_proxy_url` 与 `network_proxy_mode` 控制。
 
 OneBot 发图默认使用本地 `file:///` 路径；仅在明确文件读取失败（包括协议端“路径不存在”）时，将同一条消息回退到 base64 编码重试一次，超时不回退、不重发。base64 是图片编码，与 AstrBot 4.27.3 的 OneBot 默认发图编码相同；回退仍直接调用 OneBot，不额外尝试 AstrBot 框架发送。file 发送正常返回但没有有效 `message_id` 时仍扣费，并保留图片 10 分钟供协议端读取，不重发。旧 `onebot_image_transport`（顶层及 `pixiv_source` 内）由 AstrBot 在加载时按 schema 裁剪；插件不依赖旧键，也不能恢复框架已裁剪的值。发送异常仅记日志，详见 [发送流程](architecture.md#onebot-图片发送)。
 
 ### Lolicon 图片反代
 
-Lolicon API 返回作品信息和各档图片 URL，插件筛选后直接下载；图片反代只替换 URL 的协议和主机，保留作品路径与画质档位，不重新选图，不代理 Lolicon API 或 Pixiv 登录，也不负责提高画质。
+Lolicon API 返回作品信息和各档图片 URL，插件筛选后直接下载；图片反代只替换 URL 的协议和主机，保留作品路径与画质档位，不重新选图、不负责提高画质，也不决定连接出口。配置出站代理后，反代地址同样通过该代理下载。
 
 在 `lolicon_image_proxy_origins` 中**一行一个完整 origin**，最多 5 个，按填写顺序尝试；不可用再尝试 API 返回地址，受单图总共 8 次下载预算限制。只填协议、域名和可选端口，不填路径、作品 ID 或 `{{path}}`；保存后重载。只对 Lolicon 来源且位于支持列表中的图片主机改写。
 
@@ -99,9 +99,27 @@ Lolicon API 返回作品信息和各档图片 URL，插件筛选后直接下载�
 
 | 字段 | 类型 | 默认值 | 说明 |
 | --- | --- | --- | --- |
+| `network_proxy_url` | `string` | 空 | 插件自有请求的出站代理，支持 HTTP／SOCKS5；留空直连，不读取环境代理 |
+| `network_proxy_mode` | `enum` | `全部走代理` | 可选 `Lolicon API 不走代理`，仅豁免元数据 API，图片仍走代理 |
 | `request_timeout` | `float` | `30.0` | 单张图片下载最大等待，5–120 秒 |
 | `rate_limit_seconds` | `int` | `3` | 同一用户两次请求最小间隔，0 禁用，0–60 秒 |
 | `webui_font_source` | `enum` | `mirror` | 插件管理中心 Google Fonts 加载方式：`mirror`(国内镜像)/`official`/`none` |
+
+### 出站代理
+
+在 `runtime.network_proxy_url` 填写 `http://127.0.0.1:10808`、`socks5://127.0.0.1:10808` 或 `socks5h://127.0.0.1:10808`，保存并重载。须包含主机和 1–65535 端口，不含路径、查询或片段；可带账号密码，保留字符须百分号编码。SOCKS5 使用代理端 DNS，`socks5h` 规范化为 `socks5`。不支持 `https://` 代理服务器，但 HTTP 代理可承载 HTTPS 网站请求。
+
+| 插件请求 | 全部走代理 | Lolicon API 不走代理 |
+| --- | --- | --- |
+| Pixiv OAuth、Token 刷新及全部 App API | 代理 | 代理 |
+| Pixiv 公开热度 | 代理 | 代理 |
+| `https://api.lolicon.app/setu/v2` | 代理 | 直连 |
+| 全部图片、Lolicon 图片反代与 QQ 头像下载 | 代理 | 代理 |
+| 一言、GitHub 节假日数据 | 代理 | 代理 |
+
+代理地址为空时上述请求均按旧行为直连，模式不影响出口。不读取或修改 `HTTP_PROXY`、`NO_PROXY` 或 AstrBot 全局代理；配置格式或模式无效时拒绝加载，不静默切成直连。代理网络失败沿用原失败／换源流程，不做出站直连回退；图片反代与图源切换后的请求仍遵守各自路由。
+
+“全部”仅指插件自有网络请求。OneBot、模型提供商、AstrBot T2I 与管理页面浏览器请求仍由各自配置管理。系统 TUN／透明代理不受此开关控制。Docker 中的回环地址是容器本身，请使用容器内可达地址；仅使用可信代理，不在日志中记录代理凭据。依赖 `aiohttp-socks==0.11.0`，其要求 `aiohttp>=3.10`。
 
 ## 会话内容安全策略
 
@@ -137,7 +155,7 @@ v3.8.7 的配置升级基线为已成功完成迁移的 v3.8.0，配置只保留
 
 ## 模型取图参数
 
-v3.8.8 无新增持久配置。原生工具沿用 `max_count`、`p_coin_cost`、`checkin_enabled`、图源、画质、大小上限和现有群聊／私聊安全策略。模式、目标、数量、发送及筛选参数仅作用于本次工具调用，完整约束见 [随包 Skill](../../skills/get-px-image/SKILL.md)。默认 `single`；`auto` 才使用 `forward_threshold`，`forward` 仍受 OneBot 平台能力限制。
+v3.8.8 新增的出站代理配置由管理员设置，不暴露为模型工具参数。原生工具沿用 `max_count`、`p_coin_cost`、`checkin_enabled`、图源、画质、大小上限和现有群聊／私聊安全策略。模式、目标、数量、发送及筛选参数仅作用于本次工具调用，完整约束见 [随包 Skill](../../skills/get-px-image/SKILL.md)。默认 `single`；`auto` 才使用 `forward_threshold`，`forward` 仍受 OneBot 平台能力限制。
 
 模型工具数量结果中，`requested_count` 是请求数量，`effective_count` 是应用配置及余额限制后的执行数量，`max_count` 是本次读取的上限，`count_limits` 列出 `max_count`／`balance`（可同时存在）。缩减原因通过 `notice` 说明；实际候选不足另由 `message` 说明，均不代表标签失效。搜索日志分别记录原始请求数、实际执行数与配置上限。
 

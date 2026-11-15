@@ -55,6 +55,7 @@ from .pixiv.constants import MAX_IMAGE_COUNT
 from .pixiv.downloader import ImageDownloader
 from .pixiv.index import ImageIndexStore
 from .pixiv.lolicon import LoliconClient
+from .pixiv.network import NetworkRouting, PROXY_ALL
 from .plugin_api import PluginWebApi
 
 # ──────────────────────────────────────────────────────────────────────
@@ -93,8 +94,10 @@ class GetPxPlugin(
         self.group_safety_service = GroupSafetyService(config, log_prefix=LOG_PREFIX)
         self.client: PixivClient | None = None
         self.lolicon_client: LoliconClient | None = None
+        self.network_routing = self._network_config()
         self.downloader = ImageDownloader(
-            self._cfg_str("lolicon_image_proxy_origins", "")
+            self._cfg_str("lolicon_image_proxy_origins", ""),
+            proxy_url=self.network_routing.proxy_url,
         )
         self._last_request: dict[str, float] = {}
         self.data_dir: Path | None = None
@@ -107,7 +110,9 @@ class GetPxPlugin(
         )
         self.checkin_store: CheckinStore | None = None
         self.checkin_cache: CheckinCardCache | None = None
-        self.checkin_greeting = CheckinGreetingGenerator(context)
+        self.checkin_greeting = CheckinGreetingGenerator(
+            context, proxy_url=self.network_routing.proxy_url
+        )
         self.holiday_calendar: HolidayCalendar | None = None
         self._holiday_refresh_task: asyncio.Task | None = None
         self._termination_task: asyncio.Task[None] | None = None
@@ -181,6 +186,7 @@ class GetPxPlugin(
         self.holiday_calendar = HolidayCalendar(
             self.data_dir,
             plugin_version=PLUGIN_VERSION,
+            proxy_url=self.network_routing.proxy_url,
         )
         await self.downloader.resume_cleanup()
         self._holiday_refresh_task = asyncio.create_task(
@@ -206,11 +212,22 @@ class GetPxPlugin(
                 f"error_type={type(exc).__name__}"
             )
 
+    def _network_config(self) -> NetworkRouting:
+        return NetworkRouting(
+            self._cfg_str("network_proxy_url"),
+            self._cfg_str("network_proxy_mode", PROXY_ALL),
+        )
+
     def _init_client(self):
         """初始化固定地址的 Lolicon 和可选的 Pixiv 客户端。"""
+        routing = getattr(self, "network_routing", None)
+        if routing is None:
+            routing = self._network_config()
+            self.network_routing = routing
         if getattr(self, "lolicon_client", None) is None:
             self.lolicon_client = LoliconClient(
                 exclude_ai=self._cfg_bool("lolicon_exclude_ai", True),
+                proxy_url=routing.lolicon_proxy_url,
                 request_timeout=self._cfg_float(
                     "request_timeout", 30.0, 5.0, 120.0
                 ),
@@ -223,6 +240,7 @@ class GetPxPlugin(
         if getattr(self, "client", None) is None:
             self.client = PixivClient(
                 refresh_token=token,
+                proxy_url=routing.proxy_url,
                 request_timeout=self._cfg_float("request_timeout", 30.0, 5.0, 120.0),
             )
         logger.info(f"{LOG_PREFIX} 图片源初始化完成: available_sources=lolicon,pixiv")

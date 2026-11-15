@@ -64,7 +64,7 @@ AstrBot 图片与签到插件，支持 Lolicon / Pixiv 搜图、模型取图、�
 ### 升级提醒
 
 > [!WARNING]
-> 升级前备份插件配置和数据目录。早于 v3.8.0 的版本须先升级到 v3.8.0 并确认配置迁移成功；v2.8.x 或已有数据库无版本号时，还须先经过 v3.0.0 完成数据迁移。详见[升级说明](docs/project/configuration.md#升级基线)。从已完成迁移的 v3.8.0 及之后版本升级到 v3.8.8，无需新增配置。
+> 升级前备份插件配置和数据目录。早于 v3.8.0 的版本须先升级到 v3.8.0 并确认配置迁移成功；v2.8.x 或已有数据库无版本号时，还须先经过 v3.0.0 完成数据迁移。详见[升级说明](docs/project/configuration.md#升级基线)。从已完成迁移的 v3.8.0 及之后版本升级到 v3.8.8，新代理配置自动补齐为空，默认仍直连，无数据库迁移。
 
 ## 图片获取
 
@@ -162,6 +162,8 @@ AstrBot 图片与签到插件，支持 Lolicon / Pixiv 搜图、模型取图、�
 | `checkin_card_quality_tier` | 签到卡和日历画质：省流量／清晰／极致，默认省流量 |
 | `dedupe_days` | 默认只去重北京时间当天，可设 `0–7`；`0` 关闭历史去重，仍保留当天在途和送达未知占用；不同会话、标签和图源独立 |
 | `lolicon_image_proxy_origins` | Lolicon 图片地址无法访问时填写，每行一个 origin |
+| `network_proxy_url` | 插件出站代理，默认留空直连；如 `http://127.0.0.1:10808`，也支持 SOCKS5 |
+| `network_proxy_mode` | 默认「全部走代理」；可选「Lolicon API 不走代理」，该模式下图片仍走代理 |
 
 修改后保存并重载。完整配置见[配置说明](docs/project/configuration.md)。
 
@@ -187,7 +189,13 @@ AstrBot 图片与签到插件，支持 Lolicon / Pixiv 搜图、模型取图、�
 
 在 `lolicon_image_proxy_origins` 中一行填写一个完整 origin，如 `https://i.pixiv.re`，最多 5 个；不填路径或作品 ID。保存后重载，公共服务可能限速或停服，填写方法见[Lolicon 图片反代](docs/project/configuration.md#lolicon-图片反代)。
 
-反代只改写 Lolicon 图片地址，不代理 API 或 Pixiv 登录。需要 HTTP/SOCKS 出站代理时，使用 [`proxy` 分支](https://github.com/shitianyaa/astrbot_plugin_get_px/tree/proxy)。
+反代只改写 Lolicon 图片地址，出站代理控制连接出口，两者可同时使用。
+
+### 出站代理怎么设置？
+
+在「运行参数」填写 `network_proxy_url`，如 `http://127.0.0.1:10808` 或 `socks5h://127.0.0.1:10808`，保存并重载。默认「全部走代理」；选「Lolicon API 不走代理」时，仅 Lolicon 元数据 API 直连，其返回图片、Pixiv 登录／查询／热度、头像、一言及节假日仍走代理。留空时保持插件自有请求直连，不读取环境代理；代理失败不自动改成直连。
+
+OneBot、模型、T2I 和浏览器请求由各自配置管理。容器中的 `127.0.0.1` 指容器本身，须填写容器内可达的代理地址。协议与完整路由见[出站代理](docs/project/configuration.md#出站代理)。
 
 ## 更多文档
 
@@ -207,6 +215,7 @@ AstrBot 图片与签到插件，支持 Lolicon / Pixiv 搜图、模型取图、�
 ```text
 pixivpy-async
 aiohttp
+aiohttp-socks==0.11.0
 Pillow
 lunar-python
 ```

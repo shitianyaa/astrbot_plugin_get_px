@@ -10,6 +10,7 @@ import aiohttp
 from astrbot.api import logger
 
 from .query import positive_id
+from .network import create_http_session, normalize_proxy_url
 
 STATS_TIMEOUT = 3.0
 MAX_STATS_BYTES = 256 * 1024
@@ -22,17 +23,22 @@ STAT_FIELDS = {
 
 @dataclass
 class ArtworkStatsClient:
+    proxy_url: str = field(default="", repr=False)
     _session: aiohttp.ClientSession | None = field(default=None, repr=False)
     _closed: bool = field(default=False, repr=False)
     _semaphore: asyncio.Semaphore = field(
         default_factory=lambda: asyncio.Semaphore(3), repr=False
     )
 
+    def __post_init__(self) -> None:
+        self.proxy_url = normalize_proxy_url(self.proxy_url)
+
     def _ensure_session(self) -> aiohttp.ClientSession:
         if self._closed:
             raise RuntimeError("作品热度客户端已关闭")
         if self._session is None or self._session.closed:
-            self._session = aiohttp.ClientSession(
+            self._session = create_http_session(
+                self.proxy_url,
                 headers={"User-Agent": "Mozilla/5.0", "Referer": "https://www.pixiv.net/"},
                 cookie_jar=aiohttp.DummyCookieJar(),
             )

@@ -77,7 +77,9 @@ class DiscoveryService:
         self.plugin = plugin
         self.cursors: OrderedDict[str, CursorState] = OrderedDict()
         self.last_request: dict[str, float] = {}
-        self.stats_client = ArtworkStatsClient()
+        self.stats_client = ArtworkStatsClient(
+            proxy_url=plugin._cfg_str("network_proxy_url")
+        )
 
     def clear(self):
         self.cursors.clear()

@@ -34,6 +34,7 @@ pixiv/
 │  ├─ catalog.py         共用作品流、过滤及公开字段投影
 │  ├─ discovery.py       查询复用、独立限频与有界内存续页
 │  ├─ stats.py           无凭据的公开作品热度补查与会话关闭
+│  ├─ network.py         出站代理校验、Lolicon API 分流与独立会话工厂
 │  ├─ delivery.py        消息发送错误处理
 │  ├─ filters.py         普通分级、漫画和安全策略过滤
 │  ├─ safety.py          内置安全词与文本规范化
@@ -53,6 +54,14 @@ plugin_api/
 根目录保留会话策略服务 `group_safety.py`；签到、取图和 Web API 业务分别位于对应包中。根 `__init__.py` 只有模块说明，不注册旧包路径别名；新代码和测试直接导入真实模块。
 
 模块按职责划分，不按行数强制拆分。`__init__.py` 和组合入口可以很小；普通业务模块只有在具备独立职责和测试边界时才单独存在。
+
+## 出站代理
+
+`main.py` 通过公共配置读取方法构造不可变 `NetworkRouting`，向 Pixiv、Lolicon、下载器、一言及节假日客户端注入出口；公开查询服务向独立热度客户端注入同一代理配置。Pixiv SDK 的 OAuth 与 App API 使用显式 `proxy`，其余请求由 `create_http_session()` 创建独立会话，使用 HTTP CONNECT／SOCKS5 连接器，关闭时沿用各自生命周期。
+
+`network_proxy_url` 留空时直连。两种模式仅决定 Lolicon 固定元数据 API 是否豁免，全部图片及反代地址始终使用已配置的代理；原图地址与网络直连不是同一概念，下载日志分别记录 `route` 与 `network_route`。会话不信任环境代理，不修改进程环境；配置无效拒绝加载，代理网络失败不回退出站直连。下载限制、超时、取消、图源／图片反代轮换、发送和结算不变。
+
+OneBot、模型、T2I 和浏览器请求不在此路由范围。配置及路由表见[出站代理](configuration.md#出站代理)。
 
 ## 签到指令入口
 
