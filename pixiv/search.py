@@ -94,6 +94,7 @@ class SearchMixin:
         offset: int = 0,
         aspect_ratio: str = "",
         use_page_cursor: bool = True,
+        feature: str = "normal",
         policy: ContentSafetyPolicy = STRICT_CONTENT_SAFETY_POLICY,
         request_state: SourceRequest | None = None,
     ) -> tuple[list[dict], int, str]:
@@ -112,7 +113,8 @@ class SearchMixin:
             and getattr(self, "client", None) is None
         ):
             self._init_client()
-        for source in sources:
+        for source_index, source in enumerate(sources):
+            fallback_allowed = source_index + 1 < len(sources)
             source_key = self._source_key(tag, source)
             if source == "pixiv" and not tag:
                 source_key = "pixiv:recommended"
@@ -143,10 +145,11 @@ class SearchMixin:
                         use_page_cursor
                         and page_offset == 0
                         and self.image_index is not None
+                        and (request_state is None or not request_state.source)
                     ):
                         try:
                             page_offset = await self.image_index.get_page_offset(
-                                self._event_scope(event), source_key
+                                self._event_scope(event), source_key, feature=feature
                             )
                         except Exception as exc:
                             logger.warning(
@@ -160,10 +163,41 @@ class SearchMixin:
                         illusts = page.items
                         request_state.next_params = page.next_params
                         request_state.exhausted = page.next_params is None
+                        page_offset = int((continuation or {}).get("offset", 0))
                     elif tag:
                         illusts = await client.search(tag, offset=page_offset)
                     else:
                         illusts = await client.recommended(offset=page_offset)
+                    logger.info(
+                        f"{LOG_PREFIX} Pixiv 分页候选获取完成: feature={feature} "
+                        f"offset={page_offset} candidate_count={len(illusts)}"
+                    )
+                    at_end = request_state.exhausted if request_state is not None else not illusts
+                    if use_page_cursor and page_offset > 0 and at_end:
+                        if self.image_index is not None:
+                            await self.image_index.reset_page_offset(
+                                self._event_scope(event), source_key, feature=feature
+                            )
+                        # 仅首次起点查空时回首页；真实续页到底后留待下一请求。
+                        if not illusts and (request_state is None or not request_state.source):
+                            logger.info(
+                                f"{LOG_PREFIX} Pixiv 起始空页已回到首页: "
+                                f"feature={feature} previous_offset={page_offset}"
+                            )
+                            if request_state is not None:
+                                request_state.retried_first_page = True
+                                page = await client.query_page(query, {"offset": 0})
+                                illusts = page.items
+                                request_state.next_params = page.next_params
+                                request_state.exhausted = page.next_params is None
+                            elif tag:
+                                illusts = await client.search(tag, offset=0)
+                            else:
+                                illusts = await client.recommended(offset=0)
+                            logger.info(
+                                f"{LOG_PREFIX} Pixiv 首页重查完成: feature={feature} "
+                                f"offset=0 candidate_count={len(illusts)}"
+                            )
                 if illusts or (request_state is not None and source == "pixiv" and request_state.next_params is not None):
                     if request_state is not None:
                         request_state.source = source
@@ -172,13 +206,13 @@ class SearchMixin:
                     return illusts, len(illusts), source_key
                 logger.info(
                     f"{LOG_PREFIX} 图片源未返回候选: source={source} "
-                    f"fallback_allowed={'no' if request_state is not None and request_state.source else 'yes'}"
+                    f"fallback_allowed={'yes' if fallback_allowed else 'no'}"
                 )
             except Exception as exc:
                 logger.warning(
                     f"{LOG_PREFIX} 图片源请求失败: "
                     f"source={source} tag_configured={'yes' if tag else 'no'} "
-                    f"fallback_allowed={'no' if request_state is not None and request_state.source else 'yes'} "
+                    f"fallback_allowed={'yes' if fallback_allowed else 'no'} "
                     f"error_type={type(exc).__name__}"
                 )
         if request_state is not None:
@@ -194,6 +228,7 @@ class SearchMixin:
         feature: str,
         user_id: str = "",
         keep_pending: bool = False,
+        owner: str = "",
     ) -> None:
         if self.image_index is None or not source_key:
             return
@@ -208,6 +243,7 @@ class SearchMixin:
                 feature=feature,
                 user_id=user_id,
                 keep_pending=keep_pending,
+                owner=owner,
             )
         except Exception as exc:
             log_delivery_error(

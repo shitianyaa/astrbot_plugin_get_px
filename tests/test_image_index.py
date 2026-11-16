@@ -54,7 +54,7 @@ class ImageIndexStoreTest(unittest.IsolatedAsyncioTestCase):
                 store = FrozenImageIndexStore(tmp)
                 store._frozen_dt += timedelta(minutes=11)
                 self.assertEqual(
-                    await store.get_used_illust_ids("group:1", "pixiv:recommended"), {"100"}
+                    await store.get_used_illust_ids("group:1", "pixiv:recommended"), set()
                 )
 
                 await store.release_usage(
@@ -289,11 +289,8 @@ class ImageIndexStoreTest(unittest.IsolatedAsyncioTestCase):
                 )
                 self.assertEqual(new_offset, 30)
 
-                # 直接修改数据库，把 updated_at 改成 PAGE_CURSOR_TTL_DAYS+1 天前
-                from pixiv.index import PAGE_CURSOR_TTL_DAYS
-                from datetime import timedelta
-
-                old_time = store._frozen_dt - timedelta(days=PAGE_CURSOR_TTL_DAYS + 1)
+                # 普通分页与取图历史共用十分钟窗口。
+                old_time = store._frozen_dt - timedelta(minutes=10)
                 # 关闭 store 的连接，用独立连接修改数据库
                 store.close()
                 from contextlib import closing
@@ -305,7 +302,7 @@ class ImageIndexStoreTest(unittest.IsolatedAsyncioTestCase):
                         (
                             old_time.isoformat(timespec="seconds"),
                             "group:1",
-                            "search:blue_archive",
+                            "normal:search:blue_archive",
                         ),
                     )
                     conn.commit()

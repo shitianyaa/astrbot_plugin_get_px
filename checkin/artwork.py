@@ -713,6 +713,7 @@ class CheckinArtworkMixin:
                     offset=transient_offset if preview_nonce else 0,
                     aspect_ratio=CHECKIN_ARTWORK_ASPECT_PARAM,
                     use_page_cursor=not preview_nonce,
+                    feature="checkin",
                     policy=_policy,
                 )
             except Exception as e:
@@ -755,7 +756,7 @@ class CheckinArtworkMixin:
                     return None
                 try:
                     await self.image_index.advance_page_offset(
-                        self._event_scope(event), source_key, raw_count
+                        self._event_scope(event), source_key, raw_count, feature="checkin"
                     )
                     logger.info(
                         f"{LOG_PREFIX} 签到背景第 {page_attempt} 页无符合 3:4 的竖向作品\uff0c切换下一页"
@@ -787,7 +788,7 @@ class CheckinArtworkMixin:
 
             try:
                 await self.image_index.advance_page_offset(
-                    self._event_scope(event), source_key, raw_count
+                    self._event_scope(event), source_key, raw_count, feature="checkin"
                 )
                 logger.info(
                     f"{LOG_PREFIX} 签到背景第 {page_attempt} 页候选均已使用\uff0c切换下一页"
@@ -985,6 +986,7 @@ class CheckinArtworkMixin:
                 "",
                 count=20,
                 aspect_ratio=_CALENDAR_BG_ASPECT_PARAM,
+                use_page_cursor=False,
                 policy=policy,
             )
         except Exception as exc:

@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import time
-from datetime import datetime, timedelta
+from datetime import datetime
 from pathlib import Path
 import shutil
 import sqlite3
@@ -16,7 +16,6 @@ from . import usage
 
 LOG_PREFIX = "[GetPx]"
 SHANGHAI_TZ = ZoneInfo("Asia/Shanghai")
-PAGE_CURSOR_TTL_DAYS = 3
 MIN_RESULTS_FOR_NEXT_PAGE = 20
 _CLEANUP_THROTTLE_SECONDS = 3600  # 每小时最多清理一次旧记录
 
@@ -87,6 +86,7 @@ class ImageIndexStore:
         feature: str,
         user_id: str = "",
         keep_pending: bool = False,
+        owner: str = "",
     ) -> None:
         illust_id = str(illust_id or "")
         if not illust_id:
@@ -105,6 +105,7 @@ class ImageIndexStore:
                     user_id,
                     now,
                     keep_pending,
+                    owner,
                 )
         except Exception as exc:
             logger.warning(
@@ -115,21 +116,25 @@ class ImageIndexStore:
             )
             raise
 
-    async def get_page_offset(self, scope: str, source_key: str) -> int:
-        """获取指定 scope + source_key 的分页游标，未记录时返回 0。"""
+    async def get_page_offset(self, scope: str, source_key: str, *, feature: str = "normal") -> int:
+        """按业务读取仍在窗口内的分页位置，不读取旧共享键。"""
         async with self._lock:
             return await asyncio.to_thread(
-                self._get_page_offset_sync, scope, source_key
+                self._get_page_offset_sync, scope, source_key, feature
             )
 
     async def advance_page_offset(
-        self, scope: str, source_key: str, results_count: int
+        self, scope: str, source_key: str, results_count: int, *, feature: str = "normal"
     ) -> int:
         """当前页全被用过后推进游标；若结果数明显少于正常页则重置为 0（已到底，循环）。返回新的 offset。"""
         async with self._lock:
             return await asyncio.to_thread(
-                self._advance_page_offset_sync, scope, source_key, results_count
+                self._advance_page_offset_sync, scope, source_key, results_count, feature
             )
+
+    async def reset_page_offset(self, scope: str, source_key: str, *, feature: str = "normal") -> None:
+        async with self._lock:
+            await asyncio.to_thread(self._reset_page_offset_sync, scope, f"{feature}:{source_key}")
 
     async def list_safety_terms(self) -> list[dict[str, str]]:
         async with self._lock:
@@ -209,6 +214,7 @@ class ImageIndexStore:
         feature: str,
         user_id: str = "",
         ignore_history: bool = False,
+        owner: str = "",
     ) -> bool:
         illust_id = str(illust_id or "")
         if not illust_id:
@@ -227,6 +233,7 @@ class ImageIndexStore:
                     user_id,
                     now,
                     ignore_history,
+                    owner,
                 )
         except Exception as exc:
             logger.warning(
@@ -243,6 +250,7 @@ class ImageIndexStore:
         source_key: str,
         illust_id: str,
         feature: str,
+        owner: str = "",
     ) -> None:
         illust_id = str(illust_id or "")
         if not illust_id or not feature:
@@ -257,6 +265,7 @@ class ImageIndexStore:
                     source_key,
                     illust_id,
                     feature,
+                    owner,
                 )
         except Exception as exc:
             logger.warning(
@@ -340,8 +349,9 @@ class ImageIndexStore:
                 f"trigger=write removed_count={removed}"
             )
 
-    def _get_page_offset_sync(self, scope: str, source_key: str) -> int:
+    def _get_page_offset_sync(self, scope: str, source_key: str, feature: str = "normal") -> int:
         conn = self._get_conn()
+        source_key = f"{feature}:{source_key}"
         row = conn.execute(
             """
             SELECT page_offset, updated_at FROM source_page_cursor
@@ -353,32 +363,34 @@ class ImageIndexStore:
             return 0
         page_offset = row["page_offset"]
         updated_at = row["updated_at"]
-        # 超过 PAGE_CURSOR_TTL_DAYS 天未访问，重置游标（同一连接）
         try:
             updated = datetime.fromisoformat(updated_at)
             if updated.tzinfo is None:
                 updated = updated.replace(tzinfo=SHANGHAI_TZ)
-            if self._now_dt() - updated > timedelta(days=PAGE_CURSOR_TTL_DAYS):
-                conn.execute(
-                    "DELETE FROM source_page_cursor WHERE scope = ? AND source_key = ?",
-                    (scope, source_key),
-                )
-                conn.commit()
+            cutoff = usage.window_start(datetime.fromisoformat(self.now_iso()), feature)
+            if updated < cutoff or (feature == "normal" and updated == cutoff):
+                self._reset_page_offset_sync(scope, source_key)
                 return 0
         except (ValueError, TypeError):
+            self._reset_page_offset_sync(scope, source_key)
             return 0
         return page_offset
 
+    def _reset_page_offset_sync(self, scope: str, source_key: str) -> None:
+        conn = self._get_conn()
+        conn.execute(
+            "DELETE FROM source_page_cursor WHERE scope = ? AND source_key = ?",
+            (scope, source_key),
+        )
+        conn.commit()
+
     def _advance_page_offset_sync(
-        self, scope: str, source_key: str, results_count: int
+        self, scope: str, source_key: str, results_count: int, feature: str = "normal"
     ) -> int:
         now = self.now_iso()
         conn = self._get_conn()
-        row = conn.execute(
-            "SELECT page_offset FROM source_page_cursor WHERE scope = ? AND source_key = ?",
-            (scope, source_key),
-        ).fetchone()
-        current = row["page_offset"] if row is not None else 0
+        current = self._get_page_offset_sync(scope, source_key, feature)
+        source_key = f"{feature}:{source_key}"
 
         # 如果结果数明显少于正常页大小，说明已到底，重置为 0
         if results_count < MIN_RESULTS_FOR_NEXT_PAGE:
@@ -584,17 +596,17 @@ class ImageIndexStore:
             ids.append(item)
         return ids
 
-    def _record_usage_sync(self, date_key, scope, source_key, illust_id, feature, user_id, sent_at, keep_pending=False):
+    def _record_usage_sync(self, date_key, scope, source_key, illust_id, feature, user_id, sent_at, keep_pending=False, owner=""):
         self._maybe_cleanup_old_days_sync(date_key)
-        usage.record(self._get_conn(), date_key, scope, illust_id, feature, user_id, sent_at, keep_pending)
+        usage.record(self._get_conn(), date_key, scope, illust_id, feature, user_id, sent_at, keep_pending, owner)
 
-    def _claim_usage_sync(self, date_key, scope, source_key, illust_id, feature, user_id, sent_at, ignore_history=False):
+    def _claim_usage_sync(self, date_key, scope, source_key, illust_id, feature, user_id, sent_at, ignore_history=False, owner=""):
         self._maybe_cleanup_old_days_sync(date_key)
-        return usage.claim(self._get_conn(), date_key, scope, illust_id, feature, user_id, sent_at, ignore_history)
+        return usage.claim(self._get_conn(), date_key, scope, illust_id, feature, user_id, sent_at, ignore_history, owner)
 
-    def _release_usage_sync(self, date_key, scope, source_key, illust_id, feature):
+    def _release_usage_sync(self, date_key, scope, source_key, illust_id, feature, owner=""):
         self._maybe_cleanup_old_days_sync(date_key)
-        usage.release(self._get_conn(), date_key, scope, illust_id, feature)
+        usage.release(self._get_conn(), date_key, scope, illust_id, feature, owner)
 
 
 def ordered_by_unused(illusts: Iterable[dict], used_ids: set[str]) -> list[dict]:

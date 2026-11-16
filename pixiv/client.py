@@ -25,6 +25,7 @@ class SourceRequest:
     source: str = ""
     next_params: dict | None = None
     exhausted: bool = False
+    retried_first_page: bool = False
 
 
 def parse_continuation(value: object, endpoint: str, allowed: set[str]) -> dict | None:

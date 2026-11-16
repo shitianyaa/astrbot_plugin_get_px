@@ -68,14 +68,15 @@ async def test_ordinary_history_does_not_block_checkin_or_other_sessions(store):
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("with_completed_record", [False, True])
-async def test_pending_outlives_ten_minute_window_and_blocks_explicit_retry(store, with_completed_record):
+async def test_ordinary_pending_expires_at_ten_minutes_even_for_explicit_retry(store, with_completed_record):
     assert await claim(store)
     if with_completed_record:
         await record(store, keep_pending=True)
-    freeze(store, "2026-11-16T00:10:00+08:00")
+    freeze(store, "2026-11-16T00:04:59+08:00")
     assert not await claim(store, ignore_history=True)
     assert await store.get_used_illust_ids("group:1", "any", ignore_history=True) == {"42"}
-    await store.release_usage(scope="group:1", source_key="any", illust_id="42:0", feature="normal_pending")
+    freeze(store, "2026-11-16T00:05:00+08:00")
+    assert not await store.get_used_illust_ids("group:1", "any", ignore_history=True)
     assert await claim(store, ignore_history=True)
 
 
@@ -110,11 +111,64 @@ async def test_concurrent_sources_and_connections_claim_the_same_identity_once(s
 
 
 @pytest.mark.asyncio
-async def test_cleanup_preserves_checkin_and_pending_while_expiring_normal_history(store):
+async def test_cleanup_preserves_checkin_while_expiring_normal_history_and_pending(store):
     await record(store, identity="1")
     await record(store, feature="checkin", identity="2")
     assert await claim(store, identity="3")
+    assert await claim(store, feature="checkin_pending", identity="4")
     freeze(store, "2026-11-16T00:10:00+08:00")
     await store.cleanup_old_days()
-    assert await store.get_used_illust_ids("group:1", "any") == {"3"}
-    assert await store.get_used_illust_ids("group:1", "any", feature="checkin") == {"2"}
+    assert await store.get_used_illust_ids("group:1", "any") == set()
+    assert await store.get_used_illust_ids("group:1", "any", feature="checkin") == {"2", "4"}
+
+
+@pytest.mark.asyncio
+async def test_cursor_windows_are_separate_and_ignore_legacy_shared_offsets(store):
+    scope, key = "group:1", "pixiv:search:洛茜 黑丝"
+    conn = store._get_conn()
+    conn.execute("INSERT INTO source_page_cursor VALUES (?, ?, ?, ?)", (scope, key, 90, store.now_iso()))
+    conn.commit()
+    assert await store.get_page_offset(scope, key) == 0
+    assert await store.get_page_offset(scope, key, feature="checkin") == 0
+    await store.advance_page_offset(scope, key, 30)
+    await store.advance_page_offset(scope, key, 60, feature="checkin")
+    assert await store.get_page_offset(scope, key) == 30
+    assert await store.get_page_offset(scope, key, feature="checkin") == 60
+    freeze(store, "2026-11-16T00:04:59+08:00")
+    assert await store.get_page_offset(scope, key) == 30
+    freeze(store, "2026-11-16T00:05:00+08:00")
+    assert await store.get_page_offset(scope, key) == 0
+    # 推进也必须忽略过期起点，不能从失效位置继续累加。
+    assert await store.advance_page_offset(scope, key, 30) == 30
+    assert await store.get_page_offset(scope, key, feature="checkin") == 60
+    freeze(store, "2026-11-17T00:00:00+08:00")
+    assert await store.get_page_offset(scope, key, feature="checkin") == 0
+
+
+@pytest.mark.asyncio
+async def test_same_day_expired_claim_renews_before_physical_cleanup(store):
+    freeze(store, "2026-11-15T12:00:00+08:00")
+    assert await claim(store)
+    freeze(store, "2026-11-15T12:10:00+08:00")
+    assert not await store.get_used_illust_ids("group:1", "any")
+    assert store._get_conn().execute("SELECT COUNT(*) FROM image_usage").fetchone()[0] == 1
+    assert await claim(store)
+    assert not await claim(store, ignore_history=True)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("old_cleanup", ["release", "record"])
+async def test_expired_request_cannot_release_a_new_owners_claim(store, old_cleanup):
+    freeze(store, "2026-11-15T12:00:00+08:00")
+    assert await claim(store, owner="first-request")
+    freeze(store, "2026-11-15T12:09:59+08:00")
+    assert not await claim(store, owner="second-request")
+    freeze(store, "2026-11-15T12:10:00+08:00")
+    assert await claim(store, owner="second-request")
+    if old_cleanup == "release":
+        await store.release_usage(scope="group:1", source_key="any", illust_id="42", feature="normal_pending", owner="first-request")
+    else:
+        await record(store, owner="first-request")
+    assert not await claim(store, owner="third-request", ignore_history=True)
+    await store.release_usage(scope="group:1", source_key="any", illust_id="42", feature="normal_pending", owner="second-request")
+    assert await claim(store, owner="third-request", ignore_history=True)

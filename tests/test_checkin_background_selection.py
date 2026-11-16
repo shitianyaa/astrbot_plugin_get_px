@@ -485,10 +485,10 @@ class CheckinBackgroundSelectionTest(unittest.IsolatedAsyncioTestCase):
             )
             try:
                 await plugin.image_index.advance_page_offset(
-                    "group:20001", "pixiv:recommended", 20
+                    "group:20001", "pixiv:recommended", 20, feature="checkin"
                 )
                 await plugin.image_index.advance_page_offset(
-                    "group:20001", "pixiv:recommended", 20
+                    "group:20001", "pixiv:recommended", 20, feature="checkin"
                 )
 
                 background = await plugin._download_checkin_pixiv_background(

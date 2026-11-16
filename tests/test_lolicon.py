@@ -286,7 +286,7 @@ async def test_preferred_pixiv_random_uses_recommended_page_cursor():
     assert source == "pixiv:recommended"
     assert pixiv.recommended_calls == [60]
     assert lolicon.calls == []
-    index.get_page_offset.assert_awaited_once_with("group:1", source)
+    index.get_page_offset.assert_awaited_once_with("group:1", source, feature="normal")
 
 
 @pytest.mark.asyncio

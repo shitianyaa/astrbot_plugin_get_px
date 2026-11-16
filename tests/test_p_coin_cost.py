@@ -167,9 +167,20 @@ class _SearchFlowHarness(SearchMixin):
         return illusts
 
     async def _pick_illusts(
-        self, event, illusts, pick_count, *, source_key, dedupe_enabled, raw_count
+        self, event, illusts, pick_count, *, source_key, dedupe_enabled, raw_count, owner=""
     ):
-        return illusts[:pick_count]
+        if self.image_index is None:
+            return illusts[:pick_count]
+        chosen = []
+        for illust in illusts:
+            if len(chosen) >= pick_count:
+                break
+            if await self.image_index.claim_usage(
+                scope=self._event_scope(event), source_key=source_key,
+                illust_id=str(illust["id"]), feature="normal_pending", owner=owner,
+            ):
+                chosen.append(illust)
+        return chosen
 
     async def _fetch_source_candidates(
         self, event, tag, *, count=20, offset=0, aspect_ratio="", use_page_cursor=True,
@@ -444,11 +455,6 @@ async def test_delivery_state_controls_charge_pending_and_file_lifetime(tmp_path
     scope = harness._event_scope(event)
     ids = {str(i) for i in range(1, count + 1)}
     try:
-        for illust_id in ids:
-            await index.claim_usage(
-                scope=scope, source_key="lolicon:random", illust_id=illust_id,
-                feature="normal_pending", user_id="10001",
-            )
         if outcome in ("failed", "build_cancelled"):
             error = asyncio.CancelledError() if outcome == "build_cancelled" else ValueError("invalid payload")
             with patch("astrbot_plugin_get_px.pixiv.delivery._onebot_request", side_effect=error):
@@ -513,11 +519,6 @@ async def test_mixed_single_batch_charges_success_and_timeout_but_not_build_fail
     event.bot = Mock(call_action=AsyncMock(side_effect=[{"message_id": 123}, TimeoutError()]))
     scope = harness._event_scope(event)
     try:
-        for illust_id in paths:
-            await index.claim_usage(
-                scope=scope, source_key="lolicon:random", illust_id=illust_id,
-                feature="normal_pending", user_id="10001",
-            )
         await _run_search(harness, event, "3")
         assert await index.get_used_illust_ids(scope, "lolicon:random") == {"1", "2"}
         rows = index._get_conn().execute("SELECT illust_id, feature FROM image_usage").fetchall()

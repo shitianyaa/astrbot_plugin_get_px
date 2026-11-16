@@ -63,3 +63,66 @@ async def test_command_and_tool_different_conditions_share_recent_history(tmp_pa
         assert (await plugin.checkin_store.find_profile("10001")).coins == 80
     finally:
         plugin.image_index.close()
+
+
+@pytest.mark.asyncio
+async def test_stale_start_rechecks_home_once_without_changing_checkin_cursor(tmp_path):
+    plugin, event, _ = await command_flow(tmp_path)
+    plugin.config["preferred_image_source"] = "Pixiv"
+    plugin._fetch_source_candidates = SearchMixin._fetch_source_candidates.__get__(plugin)
+    plugin.image_index = ImageIndexStore(tmp_path)
+    scope, key = plugin._event_scope(event), plugin._source_key("洛茜 黑丝", "pixiv")
+    await plugin.image_index.advance_page_offset(scope, key, 30)
+    await plugin.image_index.advance_page_offset(scope, key, 60, feature="checkin")
+    plugin.client.query_page.side_effect = [PixivPage([]), PixivPage([_illust(1)])]
+    try:
+        with patch("astrbot_plugin_get_px.pixiv.execution.send_once", AsyncMock(return_value=DeliveryStatus.CONFIRMED)) as sender:
+            assert not await collect(plugin, event, GetPxPlugin.cmd_p, "洛茜 黑丝")
+        assert [call.args[1] for call in plugin.client.query_page.await_args_list] == [{"offset": 30}, {"offset": 0}]
+        sender.assert_awaited_once()
+        assert await plugin.image_index.get_page_offset(scope, key) == 0
+        assert await plugin.image_index.get_page_offset(scope, key, feature="checkin") == 60
+    finally:
+        plugin.image_index.close()
+
+
+@pytest.mark.asyncio
+async def test_empty_home_stops_retry_and_next_message_starts_at_zero(tmp_path):
+    plugin, event, _ = await command_flow(tmp_path)
+    plugin.config["preferred_image_source"] = "Pixiv"
+    plugin._fetch_source_candidates = SearchMixin._fetch_source_candidates.__get__(plugin)
+    plugin.image_index = ImageIndexStore(tmp_path)
+    scope, key = plugin._event_scope(event), plugin._source_key("洛茜 黑丝", "pixiv")
+    await plugin.image_index.advance_page_offset(scope, key, 30)
+    plugin.client.query_page.return_value = PixivPage([])
+    try:
+        first = await collect(plugin, event, GetPxPlugin.cmd_p, "洛茜 黑丝")
+        assert plugin.client.query_page.await_count == 2
+        assert "图片源没有返回候选" in str(first) and "去重" not in str(first)
+        await collect(plugin, event, GetPxPlugin.cmd_p, "洛茜 黑丝")
+        assert [call.args[1] for call in plugin.client.query_page.await_args_list] == [{"offset": 30}, {"offset": 0}, {"offset": 0}]
+        plugin.downloader.download_for_send.assert_not_awaited()
+        assert (await plugin.checkin_store.find_profile("10001")).coins == 100
+    finally:
+        plugin.image_index.close()
+
+
+@pytest.mark.asyncio
+async def test_home_retry_counts_towards_the_existing_batch_budget(tmp_path):
+    plugin, event, _ = await command_flow(tmp_path)
+    plugin.config["preferred_image_source"] = "Pixiv"
+    plugin._fetch_source_candidates = SearchMixin._fetch_source_candidates.__get__(plugin)
+    plugin.image_index = ImageIndexStore(tmp_path)
+    scope, key = plugin._event_scope(event), plugin._source_key("洛茜 黑丝", "pixiv")
+    await plugin.image_index.advance_page_offset(scope, key, 30)
+    filtered = dict(_illust(1), x_restrict=1)
+    plugin.client.query_page.side_effect = [
+        PixivPage([]), PixivPage([filtered], {"offset": 30}),
+        PixivPage([filtered], {"offset": 60}), PixivPage([_illust(2)]),
+    ]
+    try:
+        await collect(plugin, event, GetPxPlugin.cmd_p, "洛茜 黑丝")
+        assert plugin.client.query_page.await_count == 3
+        plugin.downloader.download_for_send.assert_not_awaited()
+    finally:
+        plugin.image_index.close()

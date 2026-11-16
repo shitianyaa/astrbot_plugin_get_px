@@ -125,6 +125,7 @@ class FiltersMixin:
         raw_count: int = 0,
         ordered: bool = False,
         allow_repeat: bool = False,
+        owner: str = "",
     ) -> list[dict]:
         if self.image_index is None:
             return illusts[:pick_count] if ordered else random.sample(illusts, pick_count)
@@ -166,6 +167,7 @@ class FiltersMixin:
                     feature="normal_pending",
                     user_id=user_id,
                     ignore_history=allow_repeat or not dedupe_enabled,
+                    owner=owner,
                 )
             except Exception as exc:
                 logger.warning(f"{LOG_PREFIX} 图片占用失败: error_type={type(exc).__name__}")

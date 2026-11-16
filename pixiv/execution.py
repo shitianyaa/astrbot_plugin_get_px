@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import time
+import secrets
 from dataclasses import replace
 
 from astrbot.api import logger
@@ -77,6 +78,7 @@ class SearchExecution:
         self.candidate_stream = candidate_stream
         self.rate_limit_checked = rate_limit_checked
         self.source_request = SourceRequest()
+        self.claim_owner = secrets.token_hex(16)
 
     async def run(self) -> SearchResult:
         if not await self._prepare() or not await self._load_candidates():
@@ -85,10 +87,12 @@ class SearchExecution:
             if not await self._download_images():
                 return self.result
             if not self.downloaded:
-                self.result.message = (
-                    "本次尝试的图片均下载失败或未通过文件校验。"
-                    if self.download_attempts else self.failure_message
-                )
+                if self.download_attempts:
+                    self.result.message = "本次尝试的图片均下载失败或未通过文件校验。"
+                elif not self.upstream_candidates_seen:
+                    self.result.message = "图片源没有返回候选，本次未进入下载和发送。"
+                else:
+                    self.result.message = self.failure_message
                 return self.result
             if self.tool and len(self.downloaded) < self.count:
                 self.result.message = f"本次只找到 {len(self.downloaded)} 张可用图片（原需 {self.count} 张），其余已跳过；未放宽筛选条件。"
@@ -275,8 +279,9 @@ class SearchExecution:
             else ""
         )
         self.attempted_ids: set[str] = set()
-        self.batch_attempts = 1
+        self.batch_attempts = 1 + int(self.source_request.retried_first_page)
         self.download_attempts = 0
+        self.upstream_candidates_seen = self.raw_count
         self.transient_offset = self.raw_count
         self.queue: list[dict] = []
         self.deadline = time.monotonic() + self.timeout_sec * max(3, self.count)
@@ -366,6 +371,7 @@ class SearchExecution:
                         ) = await asyncio.wait_for(
                             fetch, timeout=max(0, self.deadline - time.monotonic())
                         )
+                        self.upstream_candidates_seen += self.raw_count
                         if self.filter_manga:
                             self.illusts = self.plugin._filter_manga(self.illusts)
                         self.illusts = await self.plugin._filter_blacklisted_illusts(
@@ -452,6 +458,7 @@ class SearchExecution:
                             + self.pending_suffix,
                             illust_id=item_id,
                             feature="normal_pending",
+                            owner=self.claim_owner,
                         )
                         self.pending_illust_ids.discard(item_id)
                     except Exception as exc:
@@ -473,6 +480,8 @@ class SearchExecution:
             if self.candidate_stream is not None
             else {}
         )
+        if self.plugin.image_index is not None:
+            extra["owner"] = self.claim_owner
         # 占用可能在线程内落库；取消后仍等待结果，再交给统一清理。
         pick_task = asyncio.create_task(
             self.plugin._pick_illusts(
@@ -614,6 +623,7 @@ class SearchExecution:
                     feature="normal",
                     user_id=str(self.event.get_sender_id() or ""),
                     keep_pending=keep_pending,
+                    owner=self.claim_owner,
                 )
 
     def _retain_unknown(self, ids, images):
@@ -724,6 +734,7 @@ class SearchExecution:
                             + self.pending_suffix,
                             illust_id=illust_id,
                             feature="normal_pending",
+                            owner=self.claim_owner,
                         )
                     except Exception as exc:
                         log_delivery_error(
