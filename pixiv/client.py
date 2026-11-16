@@ -1,9 +1,11 @@
 from __future__ import annotations
 
 import asyncio
+import json
 import re
 import time
 from dataclasses import dataclass, field
+from importlib.metadata import version
 from urllib.parse import parse_qs, urlsplit
 
 from astrbot.api import logger
@@ -238,7 +240,21 @@ class PixivClient:
         if continuation and set(continuation) - {key.removesuffix("[]") for key in allowed}:
             raise QueryError("invalid_request", "分页参数与接口不匹配。")
         api = await self._acquire_api()
+        probe = ""
         try:
+            if name == "search_illust":
+                search_params = {
+                    key: params.get(key)
+                    for key in ("word", "search_target", "sort", "start_date", "end_date")
+                }
+                search_params["offset"] = (continuation or {}).get("offset", 0)
+                probe = (
+                    f"probe_id={time.monotonic_ns()} source=pixiv "
+                    f"sdk_version={version('pixivpy-async')} "
+                    f"network_route={urlsplit(self.proxy_url).scheme or 'direct'} "
+                    f"query={json.dumps(search_params, ensure_ascii=True)}"
+                )
+                logger.info(f"{LOG_PREFIX} 搜索探针请求: {probe}")
             method, endpoint = getattr(api.api, "illust_recommended_auth" if name == "illust_recommended" else name)
             if name == "illust_related" and continuation and "viewed" in continuation:
                 # SDK 的关联方法未暴露 viewed；仍只请求固定关联接口。
@@ -258,7 +274,17 @@ class PixivClient:
                 raise QueryError("upstream_error", "Pixiv 查询失败或响应结构无效。")
             if any(not isinstance(item, dict) for item in response[field]):
                 raise QueryError("upstream_error", "Pixiv 候选结构无效。")
-            return PixivPage(response[field], parse_continuation(response.get("next_url"), endpoint, allowed))
+            page = PixivPage(response[field], parse_continuation(response.get("next_url"), endpoint, allowed))
+            if probe:
+                logger.info(
+                    f"{LOG_PREFIX} 搜索探针返回: {probe} "
+                    f"candidate_count={len(page.items)} has_next={'yes' if page.next_params is not None else 'no'}"
+                )
+            return page
+        except Exception as exc:
+            if probe:
+                logger.warning(f"{LOG_PREFIX} 搜索探针失败: {probe} error_type={type(exc).__name__}")
+            raise
         finally:
             await self._release_api()
 

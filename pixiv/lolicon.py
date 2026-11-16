@@ -1,7 +1,10 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+import json
+import time
 from typing import Any
+from urllib.parse import urlsplit
 
 import aiohttp
 
@@ -66,6 +69,12 @@ class LoliconClient:
 
         session = self._ensure_session()
         timeout = aiohttp.ClientTimeout(total=self.request_timeout)
+        probe = (
+            f"probe_id={time.monotonic_ns()} source=lolicon "
+            f"network_route={urlsplit(self.proxy_url).scheme or 'direct'} "
+            f"query={json.dumps(params, ensure_ascii=True)}"
+        )
+        logger.info(f"{LOG_PREFIX} 搜索探针请求: {probe}")
         async with session.get(DEFAULT_API_URL, params=params, timeout=timeout) as resp:
             if resp.status != 200:
                 raise RuntimeError(f"Lolicon API HTTP {resp.status}")
@@ -74,7 +83,9 @@ class LoliconClient:
             raise RuntimeError("Lolicon API 返回格式无效")
         if payload.get("error"):
             raise RuntimeError(str(payload["error"]))
-        return [self._normalize(item) for item in payload.get("data") or []]
+        items = [self._normalize(item) for item in payload.get("data") or []]
+        logger.info(f"{LOG_PREFIX} 搜索探针返回: {probe} candidate_count={len(items)}")
+        return items
 
     async def search(
         self,
