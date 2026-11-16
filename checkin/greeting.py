@@ -11,6 +11,7 @@ import aiohttp
 from astrbot.api import logger
 
 from .content import GreetingContext, MAX_GREETING_LENGTH
+from ..pixiv.network import create_http_session, normalize_proxy_url
 
 LOG_PREFIX = "[GetPx]"
 
@@ -103,8 +104,9 @@ _CHECKIN_TAG_RE = re.compile(r"</?checkin_data\b[^>]*>", re.IGNORECASE)
 
 
 class CheckinGreetingGenerator:
-    def __init__(self, context: Any):
+    def __init__(self, context: Any, *, proxy_url: str = ""):
         self.context = context
+        self.proxy_url = normalize_proxy_url(proxy_url)
         self._session: aiohttp.ClientSession | None = None
         self._closed = False
         self._warning_log_times: dict[str, float] = {}
@@ -125,7 +127,7 @@ class CheckinGreetingGenerator:
         if self._closed:
             raise RuntimeError("check-in greeting generator is closed")
         if self._session is None or self._session.closed:
-            self._session = aiohttp.ClientSession()
+            self._session = create_http_session(self.proxy_url)
         return self._session
 
     async def close(self) -> None:

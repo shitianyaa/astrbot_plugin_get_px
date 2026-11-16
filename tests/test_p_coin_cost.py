@@ -132,13 +132,10 @@ class _SearchFlowHarness(SearchMixin):
         self.image_index = None
         self.checkin_store = None
         self.downloader = None
-        self._dedupe_days_cfg = 0
         self.download_results = []
         self.sent_chains = []
 
     def _cfg_int(self, key, default, lo, hi):
-        if key == "dedupe_days":
-            return self._dedupe_days_cfg
         return int(self.config.get(key, default))
 
     def _cfg_float(self, key, default, lo, hi):
@@ -170,14 +167,27 @@ class _SearchFlowHarness(SearchMixin):
         return illusts
 
     async def _pick_illusts(
-        self, event, illusts, pick_count, *, source_key, dedupe_enabled, raw_count
+        self, event, illusts, pick_count, *, source_key, dedupe_enabled, raw_count, owner=""
     ):
-        return illusts[:pick_count]
+        if self.image_index is None:
+            return illusts[:pick_count]
+        chosen = []
+        for illust in illusts:
+            if len(chosen) >= pick_count:
+                break
+            if await self.image_index.claim_usage(
+                scope=self._event_scope(event), source_key=source_key,
+                illust_id=str(illust["id"]), feature="normal_pending", owner=owner,
+            ):
+                chosen.append(illust)
+        return chosen
 
     async def _fetch_source_candidates(
         self, event, tag, *, count=20, offset=0, aspect_ratio="", use_page_cursor=True,
-        policy=None,
+        policy=None, request_state=None,
     ):
+        if request_state is not None:
+            request_state.exhausted = not bool(self.illusts)
         return self.illusts, len(self.illusts), "lolicon:random"
 
 
@@ -375,7 +385,6 @@ async def test_record_usage_error_does_not_repeat_confirmed_delivery():
     harness.downloader = AsyncMock()
     harness.downloader.download_for_send.return_value = ("unused.jpg", "original", 1024)
     harness.image_index = AsyncMock()
-    harness.image_index.retention_days = 1
     harness.image_index.record_usage.side_effect = RuntimeError("database unavailable")
     event = _FlowEvent()
     await _run_search(harness, event, "1")
@@ -421,9 +430,8 @@ async def test_delivery_state_controls_charge_pending_and_file_lifetime(tmp_path
         Image.new("RGB", (8, 8), "blue").save(path)
     harness = _SearchFlowHarness(illusts=[_illust(i) for i in range(1, count + 1)])
     harness._forward_threshold = lambda: 0 if forward else 1
-    harness._dedupe_days_cfg = 1
     harness.checkin_store, _ = _settle_store()
-    index = ImageIndexStore(tmp_path, retention_days=1)
+    index = ImageIndexStore(tmp_path)
     harness.image_index = index
     downloader = ImageDownloader(temp_dir=tmp_path)
     downloader.download_for_send = AsyncMock(
@@ -447,11 +455,6 @@ async def test_delivery_state_controls_charge_pending_and_file_lifetime(tmp_path
     scope = harness._event_scope(event)
     ids = {str(i) for i in range(1, count + 1)}
     try:
-        for illust_id in ids:
-            await index.claim_usage(
-                scope=scope, source_key="lolicon:random", illust_id=illust_id,
-                feature="normal_pending", user_id="10001",
-            )
         if outcome in ("failed", "build_cancelled"):
             error = asyncio.CancelledError() if outcome == "build_cancelled" else ValueError("invalid payload")
             with patch("astrbot_plugin_get_px.pixiv.delivery._onebot_request", side_effect=error):
@@ -497,9 +500,8 @@ async def test_mixed_single_batch_charges_success_and_timeout_but_not_build_fail
         Image.new("RGB", (8, 8), "blue").save(path)
     harness = _SearchFlowHarness(illusts=[_illust(i) for i in (1, 2, 3)])
     harness._should_use_forward = lambda **_kwargs: False
-    harness._dedupe_days_cfg = 1
     harness.checkin_store, _ = _settle_store()
-    index = ImageIndexStore(tmp_path, retention_days=1)
+    index = ImageIndexStore(tmp_path)
     harness.image_index = index
     downloader = ImageDownloader(temp_dir=tmp_path)
 
@@ -517,11 +519,6 @@ async def test_mixed_single_batch_charges_success_and_timeout_but_not_build_fail
     event.bot = Mock(call_action=AsyncMock(side_effect=[{"message_id": 123}, TimeoutError()]))
     scope = harness._event_scope(event)
     try:
-        for illust_id in paths:
-            await index.claim_usage(
-                scope=scope, source_key="lolicon:random", illust_id=illust_id,
-                feature="normal_pending", user_id="10001",
-            )
         await _run_search(harness, event, "3")
         assert await index.get_used_illust_ids(scope, "lolicon:random") == {"1", "2"}
         rows = index._get_conn().execute("SELECT illust_id, feature FROM image_usage").fetchall()
@@ -542,13 +539,12 @@ async def test_oversized_work_is_replaced_without_charge_or_pending_usage(tmp_pa
     from astrbot_plugin_get_px.pixiv.index import ImageIndexStore
 
     harness = _SearchFlowHarness(illusts=[_illust(i) for i in (1, 2, 3)])
-    harness._dedupe_days_cfg = 1
     harness.checkin_store, _ = _settle_store()
     harness._pick_illusts = MethodType(FiltersMixin._pick_illusts, harness)
     paths = {str(i): tmp_path / f"get_px_{i}.jpg" for i in (1, 2, 3)}
     for item in harness.illusts:
         item["meta_single_page"] = {"original_image_url": f"https://img/{item['id']}.jpg"}
-    index = ImageIndexStore(tmp_path, retention_days=1)
+    index = ImageIndexStore(tmp_path)
     harness.image_index = index
     downloader = ImageDownloader(temp_dir=tmp_path)
 
@@ -585,7 +581,6 @@ async def test_replenishment_tracks_source_and_releases_skipped_claims(tmp_path,
     from astrbot_plugin_get_px.pixiv.index import ImageIndexStore
 
     harness = _SearchFlowHarness()
-    harness._dedupe_days_cfg = 1
     harness.checkin_store, _ = _settle_store()
     harness._pick_illusts = MethodType(FiltersMixin._pick_illusts, harness)
     harness._fetch_source_candidates = AsyncMock(side_effect=[
@@ -598,7 +593,7 @@ async def test_replenishment_tracks_source_and_releases_skipped_claims(tmp_path,
         RuntimeError("图片超过大小上限"),
         asyncio.CancelledError() if cancelled else ("unused.jpg", "original", 1024),
     ]
-    index = ImageIndexStore(tmp_path, retention_days=1)
+    index = ImageIndexStore(tmp_path)
     harness.image_index = index
     event = _FlowEvent()
     try:
@@ -610,7 +605,7 @@ async def test_replenishment_tracks_source_and_releases_skipped_claims(tmp_path,
         assert harness._fetch_source_candidates.await_count == 3
         assert harness.downloader.download_for_send.await_count == 2
         scope = harness._event_scope(event)
-        assert await index.get_used_illust_ids(scope, "lolicon:random") == set()
+        assert await index.get_used_illust_ids(scope, "lolicon:random") == (set() if cancelled else {"2"})
         assert await index.get_used_illust_ids(scope, "pixiv:recommended") == (set() if cancelled else {"2"})
         if cancelled:
             harness.checkin_store.spend_coins.assert_not_awaited()
@@ -709,7 +704,7 @@ async def test_total_budget_scales_with_requested_count(count, timeout):
         clock[0] += timeout * 0.9
         return "unused.jpg", "original", 1024
     harness.downloader.download_for_send.side_effect = download
-    with patch("astrbot_plugin_get_px.pixiv.search.time", SimpleNamespace(monotonic=lambda: clock[0])):
+    with patch("astrbot_plugin_get_px.pixiv.execution.time", SimpleNamespace(monotonic=lambda: clock[0])):
         await _run_search(harness, _FlowEvent(), str(count))
     assert harness.downloader.download_for_send.await_count == count
     harness.checkin_store.spend_coins.assert_awaited_once_with(user_id="10001", cost=20 * count)

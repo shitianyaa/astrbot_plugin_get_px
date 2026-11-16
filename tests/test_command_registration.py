@@ -161,15 +161,19 @@ def test_checkin_admin_subcommands_keep_admin_permission() -> None:
         )
 
 
-def test_plain_checkin_trigger_is_preserved() -> None:
-    regex_filter = next(
-        event_filter
+def test_only_plain_checkin_uses_regex_trigger() -> None:
+    regex_handlers = [
+        (handler.handler_name, event_filter)
         for handler in _plugin_command_handlers()
-        if handler.handler_name == "checkin_auto_trigger"
         for event_filter in handler.event_filters
         if isinstance(event_filter, RegexFilter)
-    )
+    ]
+    assert [name for name, _ in regex_handlers] == ["checkin_auto_trigger"]
+    regex_filter = regex_handlers[0][1]
 
     assert regex_filter.regex.fullmatch("签到")
     assert not regex_filter.regex.fullmatch("签到中心")
     assert not regex_filter.regex.fullmatch("签到帮助")
+
+    assert not regex_filter.regex.fullmatch("来一份图")
+    assert not regex_filter.regex.fullmatch("来三张初音ミク图")

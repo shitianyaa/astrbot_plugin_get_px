@@ -47,6 +47,7 @@ class RuntimeSnapshot:
     handlers: tuple[object, ...] = ()
     web_apis: tuple[object, ...] = ()
     tasks: tuple[asyncio.Task[Any], ...] = ()
+    tools: tuple[object, ...] = ()
 
 
 @dataclass(slots=True)
@@ -64,8 +65,8 @@ class LifecycleReport:
 
     astrbot_version: str
     plugin_name: str
-    loaded_resource_counts: tuple[int, int, int]
-    reloaded_resource_counts: tuple[int, int, int]
+    loaded_resource_counts: tuple[int, int, int, int]
+    reloaded_resource_counts: tuple[int, int, int, int]
 
 
 class LifecycleCheckError(RuntimeError):
@@ -223,6 +224,8 @@ def _build_official_runtime(
     from astrbot.core import AstrBotConfig
     from astrbot.core.star.star_handler import star_handlers_registry
     from astrbot.core.star.star_manager import PluginManager
+    from astrbot.core.provider.register import llm_tools
+    from types import SimpleNamespace
 
     config = AstrBotConfig(
         config_path=str(astrbot_root / "data" / "cmd_config.json"),
@@ -243,6 +246,8 @@ def _build_official_runtime(
     # 对比只识别本次检查新增的资源，避免 harness 清空宿主已有状态。
     web_api_registry = registered_web_apis
     context = _build_official_context(Context, config)
+    # 原生Tool注册需要官方工具池；不启动Provider、平台或MCP连接。
+    context.provider_manager = SimpleNamespace(llm_tools=llm_tools)
     manager = PluginManager(context, config)
 
     def snapshot_state() -> RuntimeSnapshot:
@@ -251,6 +256,7 @@ def _build_official_runtime(
             handlers=tuple(star_handlers_registry),
             web_apis=tuple(web_api_registry),
             tasks=pending_tasks,
+            tools=tuple(llm_tools.func_list),
         )
 
     def snapshot_stars() -> tuple[object, ...]:
@@ -301,6 +307,7 @@ def _delta(before: RuntimeSnapshot, after: RuntimeSnapshot) -> RuntimeSnapshot:
     return RuntimeSnapshot(
         handlers=_added(before.handlers, after.handlers),
         web_apis=_added(before.web_apis, after.web_apis),
+        tools=_added(before.tools, after.tools),
         tasks=tuple(
             task
             for task in _added(before.tasks, after.tasks)
@@ -309,13 +316,18 @@ def _delta(before: RuntimeSnapshot, after: RuntimeSnapshot) -> RuntimeSnapshot:
     )
 
 
-def _resource_counts(snapshot: RuntimeSnapshot) -> tuple[int, int, int]:
-    return len(snapshot.handlers), len(snapshot.web_apis), len(snapshot.tasks)
+def _resource_counts(snapshot: RuntimeSnapshot) -> tuple[int, int, int, int]:
+    return (
+        len(snapshot.handlers),
+        len(snapshot.web_apis),
+        len(snapshot.tasks),
+        len(snapshot.tools),
+    )
 
 
 def _resource_summary(snapshot: RuntimeSnapshot) -> str:
-    handlers, web_apis, tasks = _resource_counts(snapshot)
-    return f"handlers={handlers}, web_apis={web_apis}, background_tasks={tasks}"
+    handlers, web_apis, tasks, tools = _resource_counts(snapshot)
+    return f"handlers={handlers}, web_apis={web_apis}, background_tasks={tasks}, tools={tools}"
 
 
 def _assert_reload_released(
@@ -326,6 +338,7 @@ def _assert_reload_released(
         handlers=_retained(loaded_resources.handlers, reloaded_state.handlers),
         web_apis=_retained(loaded_resources.web_apis, reloaded_state.web_apis),
         tasks=_retained(loaded_resources.tasks, reloaded_state.tasks),
+        tools=_retained(loaded_resources.tools, reloaded_state.tools),
     )
     if any(_resource_counts(retained)):
         raise LifecycleCheckError(
@@ -604,8 +617,8 @@ def main() -> int:
         "AstrBot plugin lifecycle passed: "
         f"astrbot={report.astrbot_version}, "
         f"plugin={report.plugin_name}, "
-        f"loaded(handlers={loaded[0]}, web_apis={loaded[1]}, tasks={loaded[2]}), "
-        f"reloaded(handlers={reloaded[0]}, web_apis={reloaded[1]}, tasks={reloaded[2]}), "
+        f"loaded(handlers={loaded[0]}, web_apis={loaded[1]}, tasks={loaded[2]}, tools={loaded[3]}), "
+        f"reloaded(handlers={reloaded[0]}, web_apis={reloaded[1]}, tasks={reloaded[2]}, tools={reloaded[3]}), "
         "reload=ok, uninstall=ok, cleanup=ok"
     )
     return 0

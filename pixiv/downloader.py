@@ -14,6 +14,8 @@ from PIL import Image, UnidentifiedImageError
 
 from astrbot.api import logger
 
+from .network import NETWORK_ERRORS, create_http_session, normalize_proxy_url
+
 LOG_PREFIX = "[GetPx]"
 MAX_DOWNLOAD_BYTES = 50 * 1024 * 1024
 MAX_PROXY_ORIGINS = 5
@@ -69,7 +71,7 @@ def _download_error_reason(exc: BaseException) -> str:
         return "timeout"
     if isinstance(exc, aiohttp.ClientResponseError):
         return f"http_{exc.status}" if exc.status else "http_error"
-    if isinstance(exc, aiohttp.ClientError):
+    if isinstance(exc, NETWORK_ERRORS):
         return "network_error"
     if isinstance(exc, ImageSizeLimitError):
         return "size_limit"
@@ -98,7 +100,7 @@ def _download_route_log_label(route: str, source: object) -> str:
         return "反代地址"
     if str(source or "").casefold() == "lolicon":
         return "图片源返回地址"
-    return "直连地址"
+    return "原始图片地址"
 
 
 def parse_proxy_origins(raw_origins: object) -> tuple[str, ...]:
@@ -191,8 +193,12 @@ def iter_download_urls(
 
 
 class ImageDownloader:
-    def __init__(self, lolicon_image_proxy_origins: object = "", *, temp_dir: Path | None = None):
+    def __init__(
+        self, lolicon_image_proxy_origins: object = "", *,
+        temp_dir: Path | None = None, proxy_url: str = "",
+    ):
         self.temp_dir = Path(temp_dir) if temp_dir is not None else None
+        self.proxy_url = normalize_proxy_url(proxy_url)
         self._session: aiohttp.ClientSession | None = None
         self._cleanup_tasks: set[asyncio.Task] = set()
         self.lolicon_image_proxy_origins = parse_proxy_origins(
@@ -206,7 +212,7 @@ class ImageDownloader:
 
     def _ensure_session(self) -> aiohttp.ClientSession:
         if self._session is None or self._session.closed:
-            self._session = aiohttp.ClientSession()
+            self._session = create_http_session(self.proxy_url)
         return self._session
 
     async def close(self):
@@ -417,6 +423,7 @@ class ImageDownloader:
                 logger.info(
                     f"{LOG_PREFIX} {log_context} 图片下载完成: "
                     f"quality={quality_label} route={route_label} "
+                    f"network_route={'proxy' if self.proxy_url else 'direct'} "
                     f"attempts={attempts} "
                     f"size={file_size / 1024:.2f}KB "
                     f"duration={int((time.monotonic() - started_at) * 1000)}ms"

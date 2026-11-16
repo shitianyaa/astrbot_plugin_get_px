@@ -7,6 +7,8 @@ import aiohttp
 
 from astrbot.api import logger
 
+from .network import create_http_session, normalize_proxy_url
+
 
 LOG_PREFIX = "[GetPx]"
 DEFAULT_API_URL = "https://api.lolicon.app/setu/v2"
@@ -19,8 +21,12 @@ class LoliconClient:
 
     exclude_ai: bool = True
     request_timeout: float = 30.0
+    proxy_url: str = field(default="", repr=False)
     _session: aiohttp.ClientSession | None = field(default=None, repr=False)
     _closed: bool = field(default=False, repr=False)
+
+    def __post_init__(self) -> None:
+        self.proxy_url = normalize_proxy_url(self.proxy_url)
 
     @property
     def available(self) -> bool:
@@ -30,7 +36,7 @@ class LoliconClient:
         if self._closed:
             raise RuntimeError("Lolicon 客户端已关闭")
         if self._session is None or self._session.closed:
-            self._session = aiohttp.ClientSession()
+            self._session = create_http_session(self.proxy_url)
         return self._session
 
     async def fetch(
@@ -51,8 +57,10 @@ class LoliconClient:
             ("excludeAI", "true" if self.exclude_ai else "false"),
         ]
         params.extend(("size", size) for size in IMAGE_SIZES)
-        if tag.strip():
-            params.append(("tag", tag.strip()))
+        terms = tag.split()
+        if len(terms) > 3:
+            raise ValueError("Lolicon AND 搜索最多支持三个条件，不能丢弃条件")
+        params.extend(("tag", term) for term in terms)
         if aspect_ratio:
             params.append(("aspectRatio", aspect_ratio))
 

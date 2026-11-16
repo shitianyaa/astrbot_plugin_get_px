@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import asyncio
 import json
 import os
 from dataclasses import dataclass
@@ -9,6 +8,9 @@ from pathlib import Path
 from typing import Any
 
 import aiohttp
+from astrbot.api import logger
+
+from ..pixiv.network import NETWORK_ERRORS, create_http_session, normalize_proxy_url
 
 
 HOLIDAY_REFRESH_DAYS = 180
@@ -25,7 +27,10 @@ class OnlineHoliday:
 
 
 class HolidayCalendar:
-    def __init__(self, data_dir: Path | str, *, plugin_version: str) -> None:
+    def __init__(
+        self, data_dir: Path | str, *, plugin_version: str, proxy_url: str = "",
+    ) -> None:
+        self.proxy_url = normalize_proxy_url(proxy_url)
         self.path = Path(data_dir) / "holiday_calendar.json"
         self.plugin_version = plugin_version
         self._state: dict[str, Any] = self._load()
@@ -62,6 +67,8 @@ class HolidayCalendar:
         self._save()
 
         years = (date.today().year, date.today().year + 1)
+        year = years[0]
+        phase = "session"
         try:
             cached_days = self._state.get("days", {})
             days: dict[str, dict[str, Any]] = {
@@ -75,8 +82,9 @@ class HolidayCalendar:
             }
             successful_years: list[int] = []
             timeout = aiohttp.ClientTimeout(total=8)
-            async with aiohttp.ClientSession(timeout=timeout) as session:
+            async with create_http_session(self.proxy_url, timeout=timeout) as session:
                 for index, year in enumerate(years):
+                    phase = "request"
                     try:
                         async with session.get(
                             HOLIDAY_SOURCE.format(year=year)
@@ -85,10 +93,18 @@ class HolidayCalendar:
                             payload = await response.json(content_type=None)
                         days.update(self._parse_year(payload, year))
                         successful_years.append(year)
-                    except (aiohttp.ClientError, ValueError, TypeError):
+                    except NETWORK_ERRORS + (ValueError, TypeError) as exc:
+                        logger.warning(
+                            f"[GetPx] 节假日年度数据更新失败: year={year} "
+                            f"phase={phase} error_type={type(exc).__name__}"
+                        )
                         if index == 0:
-                            raise
-        except (aiohttp.ClientError, asyncio.TimeoutError, ValueError, TypeError):
+                            return False
+        except NETWORK_ERRORS + (ValueError, TypeError) as exc:
+            logger.warning(
+                f"[GetPx] 节假日数据会话失败: year={year} "
+                f"phase={phase} error_type={type(exc).__name__}"
+            )
             return False
 
         self._state.update(

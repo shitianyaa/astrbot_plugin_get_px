@@ -2,10 +2,14 @@ import json
 import asyncio
 import sys
 import tempfile
+import time
 import unittest
+
 from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, patch
+
+import pytest
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 
@@ -16,6 +20,13 @@ from astrbot_plugin_get_px.checkin.artwork import (  # noqa: E402
 from astrbot_plugin_get_px.checkin.card import CardBackground  # noqa: E402
 from astrbot_plugin_get_px.pixiv.index import ImageIndexStore  # noqa: E402
 from astrbot_plugin_get_px.main import GetPxPlugin  # noqa: E402
+
+def _new_plugin():
+    from astrbot_plugin_get_px.pixiv.safety import ContentSafetyPolicy
+    plugin = object.__new__(GetPxPlugin)
+    plugin._content_safety_policy = AsyncMock(return_value=ContentSafetyPolicy())
+    return plugin
+
 
 
 class FakeEvent:
@@ -33,13 +44,17 @@ class FakePixivClient:
         self.recommended_offsets = []
         self.search_calls = []
 
-    async def recommended(self, offset: int = 0):
-        self.recommended_offsets.append(offset)
-        return list(self.pages.get(offset, []))
-
-    async def search(self, tag: str, offset: int = 0):
-        self.search_calls.append((tag, offset))
-        return list(self.search_pages.get((tag, offset), []))
+    async def query_page(self, query, continuation=None):
+        from astrbot_plugin_get_px.pixiv.client import PixivPage
+        offset = (continuation or {}).get("offset", 0)
+        if query.mode == "search":
+            self.search_calls.append((query.tag, offset))
+            pages = {position: values for (tag, position), values in self.search_pages.items() if tag == query.tag}
+        else:
+            self.recommended_offsets.append(offset)
+            pages = self.pages
+        next_positions = sorted(position for position in pages if position > offset)
+        return PixivPage(list(pages.get(offset, [])), {"offset": next_positions[0]} if next_positions else None)
 
 
 class FakeDownloader:
@@ -103,15 +118,6 @@ class CheckinBackgroundSelectionTest(unittest.IsolatedAsyncioTestCase):
             ["alpha", "beta", "gamma", "delta", "epsilon", "zeta"],
         )
 
-    def test_checkin_background_tag_candidates_are_randomized(self):
-        plugin = object.__new__(GetPxPlugin)
-        with patch(
-            "astrbot_plugin_get_px.checkin.artwork.random.shuffle",
-            side_effect=lambda tags: tags.reverse(),
-        ):
-            candidates = plugin._checkin_background_tag_candidates("alpha,beta,gamma")
-        self.assertEqual(candidates, ["gamma", "beta", "alpha"])
-
     def test_greeting_schema_defaults_to_hitokoto(self):
         schema_path = Path(__file__).resolve().parents[1] / "_conf_schema.json"
         schema = json.loads(schema_path.read_text(encoding="utf-8"))
@@ -158,7 +164,7 @@ class CheckinBackgroundSelectionTest(unittest.IsolatedAsyncioTestCase):
 
     async def test_invalid_custom_background_falls_back_to_pixiv(self):
         with tempfile.TemporaryDirectory() as tmp:
-            plugin = object.__new__(GetPxPlugin)
+            plugin = _new_plugin()
             plugin.config = {
                 "checkin_background_mode": "custom",
                 "checkin_custom_background": str(Path(tmp) / "missing.jpg"),
@@ -196,7 +202,7 @@ class CheckinBackgroundSelectionTest(unittest.IsolatedAsyncioTestCase):
         self,
     ):
         with tempfile.TemporaryDirectory() as tmp:
-            plugin = object.__new__(GetPxPlugin)
+            plugin = _new_plugin()
             plugin.config = {
                 "checkin_background_mode": "pixiv_daily",
                 "pixiv_refresh_token": "token",
@@ -243,7 +249,7 @@ class CheckinBackgroundSelectionTest(unittest.IsolatedAsyncioTestCase):
                 )
                 self.assertEqual(
                     await plugin.image_index.get_used_illust_ids(
-                        "group:20001", "pixiv:recommended"
+                        "group:20001", "pixiv:recommended", feature="checkin"
                     ),
                     set(),
                 )
@@ -254,7 +260,7 @@ class CheckinBackgroundSelectionTest(unittest.IsolatedAsyncioTestCase):
                 plugin.image_index.close()
 
     async def test_preview_background_prunes_expired_users(self):
-        plugin = object.__new__(GetPxPlugin)
+        plugin = _new_plugin()
         plugin.config = {"checkin_background_mode": "pixiv_daily"}
         plugin._checkin_preview_background_ids = {
             "expired": [("1", 0.0)],
@@ -278,7 +284,7 @@ class CheckinBackgroundSelectionTest(unittest.IsolatedAsyncioTestCase):
 
     async def test_checkin_background_tries_remaining_configured_tags(self):
         with tempfile.TemporaryDirectory() as tmp:
-            plugin = object.__new__(GetPxPlugin)
+            plugin = _new_plugin()
             plugin.config = {
                 "pixiv_refresh_token": "token",
                 "filter_manga": True,
@@ -312,12 +318,10 @@ class CheckinBackgroundSelectionTest(unittest.IsolatedAsyncioTestCase):
 
     async def test_checkin_background_skips_page_used_by_index(self):
         with tempfile.TemporaryDirectory() as tmp:
-            plugin = object.__new__(GetPxPlugin)
+            plugin = _new_plugin()
             plugin.config = {
                 "pixiv_refresh_token": "token",
                 "filter_manga": True,
-                "checkin_background_aspect_ratio": "16:9",
-                "checkin_background_aspect_tolerance": 0.25,
                 "image_quality": "large",
                 "request_timeout": 30.0,
                 "auto_downgrade_original_mb": 3.0,
@@ -354,12 +358,10 @@ class CheckinBackgroundSelectionTest(unittest.IsolatedAsyncioTestCase):
 
     async def test_checkin_background_claim_can_be_released(self):
         with tempfile.TemporaryDirectory() as tmp:
-            plugin = object.__new__(GetPxPlugin)
+            plugin = _new_plugin()
             plugin.config = {
                 "pixiv_refresh_token": "token",
                 "filter_manga": True,
-                "checkin_background_aspect_ratio": "16:9",
-                "checkin_background_aspect_tolerance": 0.25,
                 "image_quality": "large",
                 "request_timeout": 30.0,
                 "auto_downgrade_original_mb": 3.0,
@@ -377,7 +379,7 @@ class CheckinBackgroundSelectionTest(unittest.IsolatedAsyncioTestCase):
                 self.assertIsNotNone(background)
                 self.assertEqual(
                     await plugin.image_index.get_used_illust_ids(
-                        "group:20001", "pixiv:recommended"
+                        "group:20001", "pixiv:recommended", feature="checkin"
                     ),
                     {"30"},
                 )
@@ -386,7 +388,7 @@ class CheckinBackgroundSelectionTest(unittest.IsolatedAsyncioTestCase):
 
                 self.assertEqual(
                     await plugin.image_index.get_used_illust_ids(
-                        "group:20001", "pixiv:recommended"
+                        "group:20001", "pixiv:recommended", feature="checkin"
                     ),
                     set(),
                 )
@@ -399,7 +401,7 @@ class CheckinBackgroundSelectionTest(unittest.IsolatedAsyncioTestCase):
                 raise asyncio.CancelledError
 
         with tempfile.TemporaryDirectory() as tmp:
-            plugin = object.__new__(GetPxPlugin)
+            plugin = _new_plugin()
             plugin.config = {
                 "pixiv_refresh_token": "token",
                 "filter_manga": True,
@@ -417,7 +419,7 @@ class CheckinBackgroundSelectionTest(unittest.IsolatedAsyncioTestCase):
                     )
                 self.assertEqual(
                     await plugin.image_index.get_used_illust_ids(
-                        "group:20001", "pixiv:recommended"
+                        "group:20001", "pixiv:recommended", feature="checkin"
                     ),
                     set(),
                 )
@@ -426,12 +428,10 @@ class CheckinBackgroundSelectionTest(unittest.IsolatedAsyncioTestCase):
 
     async def test_landscape_only_page_advances_to_portrait_page(self):
         with tempfile.TemporaryDirectory() as tmp:
-            plugin = object.__new__(GetPxPlugin)
+            plugin = _new_plugin()
             plugin.config = {
                 "pixiv_refresh_token": "token",
                 "filter_manga": True,
-                "checkin_background_aspect_ratio": "16:9",
-                "checkin_background_aspect_tolerance": 0.25,
                 "image_quality": "large",
                 "request_timeout": 30.0,
                 "auto_downgrade_original_mb": 3.0,
@@ -460,7 +460,7 @@ class CheckinBackgroundSelectionTest(unittest.IsolatedAsyncioTestCase):
 
     async def test_pixiv_fallback_resumes_from_persisted_cursor(self):
         with tempfile.TemporaryDirectory() as tmp:
-            plugin = object.__new__(GetPxPlugin)
+            plugin = _new_plugin()
             plugin.config = {
                 "filter_manga": True,
                 "request_timeout": 30.0,
@@ -477,11 +477,8 @@ class CheckinBackgroundSelectionTest(unittest.IsolatedAsyncioTestCase):
                 }
             )
             try:
-                await plugin.image_index.advance_page_offset(
-                    "group:20001", "pixiv:recommended", 20
-                )
-                await plugin.image_index.advance_page_offset(
-                    "group:20001", "pixiv:recommended", 20
+                await plugin.image_index.save_page_cursor(
+                    "group:20001", "pixiv:recommended", {"offset": 40}, feature="checkin"
                 )
 
                 background = await plugin._download_checkin_pixiv_background(
@@ -526,7 +523,7 @@ class CheckinBackgroundSelectionTest(unittest.IsolatedAsyncioTestCase):
                 return await super().download_for_send(illust, *args, **kwargs)
 
         with tempfile.TemporaryDirectory() as tmp:
-            plugin = object.__new__(GetPxPlugin)
+            plugin = _new_plugin()
             plugin.config = {
                 "pixiv_refresh_token": "token",
                 "request_timeout": 30.0,
@@ -560,12 +557,10 @@ class CheckinBackgroundSelectionTest(unittest.IsolatedAsyncioTestCase):
 
     async def test_all_landscape_pages_use_fallback_without_downloading(self):
         with tempfile.TemporaryDirectory() as tmp:
-            plugin = object.__new__(GetPxPlugin)
+            plugin = _new_plugin()
             plugin.config = {
                 "pixiv_refresh_token": "token",
                 "filter_manga": True,
-                "checkin_background_aspect_ratio": "16:9",
-                "checkin_background_aspect_tolerance": 0.25,
                 "image_quality": "large",
                 "request_timeout": 30.0,
                 "auto_downgrade_original_mb": 3.0,
@@ -592,6 +587,200 @@ class CheckinBackgroundSelectionTest(unittest.IsolatedAsyncioTestCase):
                 self.assertEqual(plugin.downloader.illust_ids, [])
             finally:
                 plugin.image_index.close()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("tagged_used", [False, True])
+async def test_cold_checkin_tag_falls_back_to_untagged_with_same_rules(tmp_path, tagged_used):
+    from astrbot_plugin_get_px.pixiv.safety import ContentSafetyPolicy
+
+    plugin = _new_plugin()
+    plugin.config = {"checkin_background_tag": "cold", "filter_manga": True}
+    plugin._content_safety_policy.return_value = ContentSafetyPolicy(
+        custom_terms=("blocked",), blacklisted_illust_ids=("3",),
+    )
+    plugin.image_index = ImageIndexStore(tmp_path)
+    plugin.downloader = FakeDownloader()
+    plugin.client = FakePixivClient(
+        {0: [
+            _illust(1), dict(_illust(2), x_restrict=1), _illust(3),
+            _illust(4, width=1600, height=900),
+            dict(_illust(5), tags=[{"name": "blocked"}]), _illust(6),
+        ]},
+        search_pages={("cold", 0): [_illust(1)]} if tagged_used else {},
+    )
+    try:
+        await plugin.image_index.record_usage(
+            scope="group:20001", source_key="other-tag", illust_id="1", feature="checkin",
+        )
+        background = await plugin._prepare_checkin_background(
+            FakeEvent(), SimpleNamespace(date_key="2026-11-15", user_id="10001"),
+        )
+        assert background.illust_id == "6"
+        assert plugin.downloader.illust_ids == ["6"]
+        assert plugin.client.recommended_offsets == [0]
+        assert len(plugin.client.search_calls) == 1
+        assert await plugin.image_index.get_used_illust_ids("group:20001", "any", feature="checkin") == {"1", "6"}
+        assert not await plugin.image_index.get_used_illust_ids("group:20001", "any")
+        plugin._content_safety_policy.assert_awaited_once()
+    finally:
+        plugin.image_index.close()
+
+
+@pytest.mark.asyncio
+async def test_all_tags_and_untagged_fallback_remain_bounded_and_use_placeholder(tmp_path):
+    plugin = _new_plugin()
+    plugin.config = {"checkin_background_tag": "alpha,beta", "filter_manga": True}
+    plugin.image_index = ImageIndexStore(tmp_path)
+    plugin.downloader = FakeDownloader()
+    plugin.client = FakePixivClient({
+        offset: [_illust(offset + i, width=1600, height=900) for i in range(20)]
+        for offset in (0, 20, 40, 60, 80)
+    })
+    try:
+        with patch("astrbot_plugin_get_px.checkin.artwork.random.shuffle", side_effect=lambda tags: tags.reverse()):
+            background = await plugin._prepare_checkin_background(
+                FakeEvent(), SimpleNamespace(date_key="2026-11-15", user_id="10001"),
+            )
+        assert background.mode == "fallback"
+        assert plugin.client.search_calls == [("beta", 0), ("alpha", 0)]
+        assert plugin.client.recommended_offsets == [0, 20, 40, 60, 80]
+        assert not plugin.downloader.illust_ids
+        assert not await plugin.image_index.get_used_illust_ids("group:20001", "any", feature="checkin")
+    finally:
+        plugin.image_index.close()
+
+
+@pytest.mark.asyncio
+async def test_untagged_preview_keeps_recent_exclusions_without_claiming_usage(tmp_path):
+    plugin = _new_plugin()
+    plugin.config = {"checkin_background_tag": "cold", "filter_manga": True}
+    plugin.image_index = ImageIndexStore(tmp_path)
+    plugin.downloader = FakeDownloader()
+    plugin.client = FakePixivClient({0: [_illust(1), _illust(2)]})
+    plugin._checkin_preview_background_ids = {"10001": [("1", time.monotonic())]}
+    try:
+        background = await plugin._prepare_checkin_background(
+            FakeEvent(), SimpleNamespace(date_key="2026-11-15", user_id="10001"),
+            claim_usage=False, refresh_preview=True,
+        )
+        assert background.illust_id == "2"
+        assert plugin.downloader.illust_ids == ["2"]
+        assert not await plugin.image_index.get_used_illust_ids("group:20001", "any", feature="checkin")
+        assert not plugin.image_index._get_conn().execute("SELECT 1 FROM source_page_cursor").fetchone()
+    finally:
+        plugin.image_index.close()
+
+
+@pytest.mark.asyncio
+async def test_preview_normalizes_lolicon_first_page_recent_exclusions(tmp_path):
+    plugin = _new_plugin()
+    plugin.config = {"filter_manga": True}
+    plugin.image_index = ImageIndexStore(tmp_path)
+    plugin.downloader = FakeDownloader()
+    plugin.client = FakePixivClient({0: [dict(_illust(123), id="123:0", pid="123")]})
+    record = SimpleNamespace(date_key="2026-11-15", user_id="10001")
+    try:
+        first = await plugin._prepare_checkin_background(FakeEvent(), record, claim_usage=False, refresh_preview=True)
+        second = await plugin._prepare_checkin_background(FakeEvent(), record, claim_usage=False, refresh_preview=True)
+        assert first.illust_id == "123:0" and second.mode == "fallback"
+        assert plugin.downloader.illust_ids == ["123:0"]
+    finally:
+        plugin.image_index.close()
+
+
+@pytest.mark.asyncio
+async def test_checkin_empty_pages_preserve_next_position_after_batch_budget(tmp_path):
+    plugin = _new_plugin()
+    plugin.config = {"filter_manga": True}
+    plugin.image_index = ImageIndexStore(tmp_path)
+    plugin.downloader = FakeDownloader()
+    plugin.client = FakePixivClient({**{offset: [] for offset in (0, 30, 60, 90, 120)}, 150: [_illust(6)]})
+    record = SimpleNamespace(date_key="2026-11-15", user_id="10001")
+    try:
+        first = await plugin._prepare_checkin_background(FakeEvent(), record)
+        assert first.mode == "fallback"
+        assert await plugin.image_index.get_page_cursor("group:20001", "pixiv:recommended", feature="checkin") == {"offset": 150}
+        second = await plugin._prepare_checkin_background(FakeEvent(), record)
+        assert second.illust_id == "6"
+        assert plugin.client.recommended_offsets == [0, 30, 60, 90, 120, 150]
+    finally:
+        plugin.image_index.close()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("candidate_count", [1, 2])
+async def test_checkin_last_candidate_success_saves_next_page_and_terminal_reset(tmp_path, candidate_count):
+    plugin = _new_plugin()
+    plugin.config = {"filter_manga": True}
+    plugin.image_index = ImageIndexStore(tmp_path)
+    plugin.downloader = FakeDownloader()
+    plugin.downloader.download_for_send = AsyncMock(side_effect=
+        [OSError("fixture download failure")] * (candidate_count - 1)
+        + [("picked.jpg", "medium", 123)] * 2
+    )
+    plugin.client = FakePixivClient({
+        30: [_illust(value) for value in range(1, candidate_count + 1)],
+        60: [_illust(9)],
+    })
+    record = SimpleNamespace(date_key="2026-11-15", user_id="10001")
+    await plugin.image_index.save_page_cursor("group:20001", "pixiv:recommended", {"offset": 30}, feature="checkin")
+    try:
+        first = await plugin._prepare_checkin_background(FakeEvent(), record)
+        assert first.illust_id in {str(value) for value in range(1, candidate_count + 1)}
+        assert await plugin.image_index.get_page_cursor("group:20001", "pixiv:recommended", feature="checkin") == {"offset": 60}
+        second = await plugin._prepare_checkin_background(FakeEvent(), record)
+        assert second.illust_id == "9"
+        assert await plugin.image_index.get_page_cursor("group:20001", "pixiv:recommended", feature="checkin") is None
+        assert plugin.client.recommended_offsets == [30, 60]
+    finally:
+        plugin.image_index.close()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("candidate_count,success_attempt,preview", [(2, 1, False), (9, 8, False), (1, 1, True)])
+async def test_checkin_success_preserves_cursor_with_candidates_remaining_or_preview(tmp_path, candidate_count, success_attempt, preview):
+    plugin = _new_plugin()
+    plugin.config = {"filter_manga": True}
+    plugin.image_index = ImageIndexStore(tmp_path)
+    plugin.downloader = FakeDownloader()
+    plugin.downloader.download_for_send = AsyncMock(side_effect=
+        [OSError("fixture download failure")] * (success_attempt - 1)
+        + [("picked.jpg", "medium", 123)]
+    )
+    start = 0 if preview else 30
+    plugin.client = FakePixivClient({start: [_illust(value) for value in range(1, candidate_count + 1)], 60: [_illust(99)]})
+    await plugin.image_index.save_page_cursor("group:20001", "pixiv:recommended", {"offset": 30}, feature="checkin")
+    try:
+        background = await plugin._prepare_checkin_background(
+            FakeEvent(), SimpleNamespace(date_key="2026-11-15", user_id="10001"),
+            claim_usage=not preview, refresh_preview=preview,
+        )
+        assert background.mode == "pixiv_daily"
+        assert await plugin.image_index.get_page_cursor("group:20001", "pixiv:recommended", feature="checkin") == {"offset": 30}
+        assert plugin.client.recommended_offsets == [start]
+        assert plugin.downloader.download_for_send.await_count == success_attempt
+    finally:
+        plugin.image_index.close()
+
+
+@pytest.mark.asyncio
+async def test_cancelled_cursor_save_releases_downloaded_background_and_claim(tmp_path):
+    plugin = _new_plugin()
+    plugin.config = {"filter_manga": True}
+    plugin.image_index = ImageIndexStore(tmp_path)
+    plugin.client = FakePixivClient({0: [_illust(1)], 30: [_illust(2)]})
+    path = tmp_path / "picked.jpg"
+    path.write_bytes(b"fixture")
+    plugin.downloader = SimpleNamespace(download_for_send=AsyncMock(return_value=(str(path), "medium", 123)))
+    plugin._save_checkin_page_cursor = AsyncMock(side_effect=asyncio.CancelledError)
+    try:
+        with pytest.raises(asyncio.CancelledError):
+            await plugin._prepare_checkin_background(FakeEvent(), SimpleNamespace(date_key="2026-11-15", user_id="10001"))
+        assert not path.exists()
+        assert not await plugin.image_index.get_used_illust_ids("group:20001", "any", feature="checkin")
+    finally:
+        plugin.image_index.close()
 
 
 if __name__ == "__main__":

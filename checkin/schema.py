@@ -10,6 +10,37 @@ from .themes import CHECKIN_THEMES
 
 CHECKIN_DB_SCHEMA_VERSION = 2
 LEGACY_GROUP_POLICY_SCHEMA_VERSION = 3
+IMAGE_INDEX_SCHEMA_VERSION = 2
+
+
+def upgrade_image_index_schema(conn: sqlite3.Connection, db_path: Path) -> Path | None:
+    """保留已完成固定窗口切换的记录，只升级图片源续页结构。"""
+    version = int(conn.execute("PRAGMA user_version").fetchone()[0])
+    if version not in (1, IMAGE_INDEX_SCHEMA_VERSION):
+        raise RuntimeError("不支持的图片索引结构版本")
+    has_params = any(row[1] == "page_params" for row in conn.execute("PRAGMA table_info(source_page_cursor)"))
+    if version == IMAGE_INDEX_SCHEMA_VERSION:
+        if not has_params:
+            raise RuntimeError("图片索引续页结构不完整")
+        return None
+    backup_path = None
+    if not has_params:
+        backup_dir = db_path.parent / "image_index_migration_backups"
+        backup_dir.mkdir(parents=True, exist_ok=True)
+        stamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%S%fZ")
+        backup_path = backup_dir / f"image-index-v{version}-{stamp}.sqlite3"
+        with closing(sqlite3.connect(backup_path)) as target:
+            conn.backup(target)
+    conn.execute("BEGIN IMMEDIATE")
+    try:
+        if not has_params:
+            conn.execute("ALTER TABLE source_page_cursor ADD COLUMN page_params TEXT")
+        conn.execute(f"PRAGMA user_version = {IMAGE_INDEX_SCHEMA_VERSION}")
+        conn.commit()
+    except Exception:
+        conn.rollback()
+        raise
+    return backup_path
 
 
 class UnversionedCheckinDatabaseError(RuntimeError):
@@ -77,15 +108,6 @@ class SchemaMixin:
         with closing(sqlite3.connect(backup_path)) as target:
             source.backup(target)
         return backup_path
-
-    def has_legacy_group_policy_table(self) -> bool:
-        with closing(self._connect()) as conn:
-            return bool(
-                conn.execute(
-                    "SELECT 1 FROM sqlite_master "
-                    "WHERE type = 'table' AND name = 'group_content_safety'"
-                ).fetchone()
-            )
 
     def converge_legacy_group_policy_schema(self) -> dict[str, object]:
         """Back up schema3, retain its tables, and lower only ``user_version``."""

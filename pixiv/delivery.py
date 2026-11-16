@@ -177,9 +177,9 @@ def _is_file_read_error(error: Exception) -> bool:
     return isinstance(error, (FileNotFoundError, PermissionError)) or any(
         marker in text for marker in (
             "enoent", "eacces", "eperm", "no such file", "permission denied",
-            "copyfile", "文件不存在", "无法读取",
+            "copyfile", "文件不存在", "路径不存在", "无法读取",
         )
-    )
+    ) or bool(re.search(r"\b(?:file|path)\s+(?:not\s+found|does\s+not\s+exist)\b", text))
 
 
 async def send_once(event, content: list, *, context: str) -> DeliveryStatus:

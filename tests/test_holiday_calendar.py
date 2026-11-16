@@ -6,9 +6,9 @@ from unittest.mock import AsyncMock, MagicMock, patch
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
-sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 
-from checkin.holiday import HolidayCalendar
+from astrbot_plugin_get_px.checkin.holiday import HolidayCalendar
 
 
 def test_parse_and_lookup_online_holiday(tmp_path: Path) -> None:
@@ -127,7 +127,9 @@ def test_next_year_failure_does_not_discard_current_year(tmp_path: Path) -> None
     context = AsyncMock()
     context.__aenter__.return_value = session
 
-    calendar = HolidayCalendar(tmp_path, plugin_version="2.6.1")
+    calendar = HolidayCalendar(
+        tmp_path, plugin_version="2.6.1", proxy_url="socks5h://127.0.0.1:10808"
+    )
     cached_next_year_date = f"{current_year + 1}-01-02"
     calendar._state["days"] = {
         cached_next_year_date: {"name": "缓存节日", "is_off_day": True}
@@ -139,7 +141,7 @@ def test_next_year_failure_does_not_discard_current_year(tmp_path: Path) -> None
     )
     from aiohttp import ClientError
 
-    with patch("checkin.holiday.aiohttp.ClientSession", side_effect=ClientError("offline")):
+    with patch("astrbot_plugin_get_px.checkin.holiday.aiohttp.ClientSession", side_effect=ClientError("offline")):
         assert not __import__("asyncio").run(calendar.refresh_if_due())
     persisted = HolidayCalendar(tmp_path, plugin_version="2.6.1")
     assert persisted._state["plugin_version"] == "2.6.0"
@@ -147,8 +149,9 @@ def test_next_year_failure_does_not_discard_current_year(tmp_path: Path) -> None
     assert not persisted.should_refresh(now=now + timedelta(hours=1))
     assert persisted.should_refresh(now=now + timedelta(hours=25))
     calendar._state["last_attempt_at"] = (now - timedelta(hours=25)).isoformat()
-    with patch("checkin.holiday.aiohttp.ClientSession", return_value=context):
+    with patch("astrbot_plugin_get_px.checkin.holiday.create_http_session", return_value=context) as factory:
         assert __import__("asyncio").run(calendar.refresh_if_due())
+    assert factory.call_args.args == ("socks5://127.0.0.1:10808",)
     assert calendar._state["plugin_version"] == "2.6.1"
     assert calendar.lookup(f"{current_year}-01-01") is not None
     assert calendar.lookup(cached_next_year_date) is not None
@@ -156,3 +159,20 @@ def test_next_year_failure_does_not_discard_current_year(tmp_path: Path) -> None
     future = datetime(current_year + 1, 1, 1, tzinfo=timezone.utc)
     calendar._state["last_attempt_at"] = (future - timedelta(days=2)).isoformat()
     assert calendar.should_refresh(now=future)
+
+
+def test_proxy_failure_is_logged_once_without_credentials_and_retains_retry_window(tmp_path):
+    from astrbot_plugin_get_px.pixiv.network import ProxyConnectionError
+    from astrbot_plugin_get_px.checkin import holiday
+    calendar = HolidayCalendar(tmp_path, plugin_version="test", proxy_url="http://user:secret@localhost:10808")
+    session = MagicMock()
+    session.get.side_effect = ProxyConnectionError("http://user:secret@localhost:10808")
+    context = AsyncMock()
+    context.__aenter__.return_value = session
+    with patch.object(holiday, "create_http_session", return_value=context), patch.object(holiday, "logger") as logger:
+        assert not __import__("asyncio").run(calendar.refresh_if_due())
+    logger.warning.assert_called_once()
+    message = logger.warning.call_args.args[0]
+    assert f"year={datetime.now().year}" in message and "error_type=ProxyConnectionError" in message
+    assert "secret" not in message and "localhost" not in message
+    assert not calendar.should_refresh()

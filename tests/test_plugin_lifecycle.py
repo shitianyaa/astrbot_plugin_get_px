@@ -89,3 +89,18 @@ async def test_lifecycle_uses_registered_name_for_reload_and_uninstall(
         ("reload", "registered_name"),
         ("uninstall", "registered_name"),
     ]
+
+
+def test_lifecycle_detects_old_tool_instances_and_final_tool_residue():
+    tool = object()
+    baseline = RuntimeSnapshot()
+    loaded = lifecycle._delta(baseline, RuntimeSnapshot(tools=(tool,)))
+    with pytest.raises(lifecycle.LifecycleCheckError):
+        lifecycle._assert_reload_released(loaded, RuntimeSnapshot(tools=(tool,)))
+    assert (
+        lifecycle._resource_counts(
+            lifecycle._delta(baseline, RuntimeSnapshot(tools=(tool,)))
+        )[-1]
+        == 1
+    )
+    lifecycle._assert_reload_released(loaded, RuntimeSnapshot(tools=(object(),)))

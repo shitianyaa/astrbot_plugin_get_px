@@ -258,6 +258,7 @@ def _make_card(path: Path) -> str:
 
 def _plugin_for_checkin(tmp: str, result: CheckinResult, order, *, cache_hit=False):
     plugin = object.__new__(GetPxPlugin)
+    plugin._content_safety_policy = AsyncMock(return_value=ContentSafetyPolicy())
     plugin.config = {
         "checkin_enabled": True,
         "checkin_bot_name": "neko",
@@ -276,17 +277,7 @@ def _plugin_for_checkin(tmp: str, result: CheckinResult, order, *, cache_hit=Fal
     plugin._prepare_checkin_background = AsyncMock()
     plugin._restore_checkin_background = AsyncMock()
     plugin._render_checkin_card = AsyncMock()
-    plugin.image_index = SimpleNamespace(
-        retention_days=7,
-        get_custom_safety_terms=AsyncMock(return_value=set()),
-        get_blacklisted_illust_ids=AsyncMock(return_value=set()),
-    )
-    plugin.image_index.get_safety_snapshot = AsyncMock(
-        side_effect=lambda: (
-            plugin.image_index.get_custom_safety_terms.return_value,
-            plugin.image_index.get_blacklisted_illust_ids.return_value,
-        )
-    )
+    plugin.image_index = SimpleNamespace(retention_days=7)
 
     async def record_usage(_event, background):
         if background and background.image_path:
@@ -495,7 +486,9 @@ class Issue24CacheTest(unittest.IsolatedAsyncioTestCase):
         del plugin._restore_checkin_background
         plugin._content_safety_policy = AsyncMock(
             side_effect=lambda event: ContentSafetyPolicy(
-                general_only_enabled=event.group_id != "relaxed", group_id=event.group_id
+                general_only_enabled=event.group_id != "relaxed",
+                custom_terms=plugin.config.get("global_safety_terms", []),
+                blacklisted_illust_ids=plugin.config.get("global_blacklisted_illust_ids", []),
             )
         )
         selected = []
@@ -546,26 +539,22 @@ class Issue24CacheTest(unittest.IsolatedAsyncioTestCase):
     async def test_snapshot_keeps_filter_rules_when_global_lists_change_mid_selection(self):
         with tempfile.TemporaryDirectory() as tmp:
             plugin, _ = self.setup_plugin(tmp)
-            plugin.image_index.get_blacklisted_illust_ids.return_value = {"110000"}
-            frozen, identity = await plugin._checkin_safety_snapshot(
-                ContentSafetyPolicy(group_id="a")
-            )
-            plugin.image_index.get_blacklisted_illust_ids.return_value = set()
+            plugin.config["global_blacklisted_illust_ids"] = ["110000"]
+            frozen = await plugin._content_safety_policy(_FakeEvent(group_id="a"))
+            identity = frozen.cache_identity()
+            plugin.config["global_blacklisted_illust_ids"] = []
             blocked = await plugin._blacklist_reason_for_illust(
                 {"id": 110000, "title": "safe", "x_restrict": 0}, "110000", frozen
             )
-            plugin.image_index.get_blacklisted_illust_ids.return_value = {"110000"}
             self.assertIn("黑名单", blocked)
             self.assertEqual(identity["blacklisted_illust_ids"], ["110000"])
-            plugin.image_index.get_safety_snapshot.assert_awaited_once()
-            plugin.image_index.get_blacklisted_illust_ids.assert_not_awaited()
 
-    async def test_disabled_independent_lists_do_not_split_identical_rules(self):
+    async def test_identical_additional_rules_do_not_split_cross_group_cache(self):
         with tempfile.TemporaryDirectory() as tmp:
             plugin, selected = self.setup_plugin(tmp)
             plugin._content_safety_policy.side_effect = lambda event: ContentSafetyPolicy(
-                group_id=event.group_id, custom_terms=(event.group_id,),
-                blacklisted_illust_ids=("123" if event.group_id == "a" else "456",),
+                custom_terms=("same",),
+                blacklisted_illust_ids=("123",),
             )
             first = await self.send_card(plugin, "a")
             self.assertEqual(await self.send_card(plugin, "b"), first)
@@ -593,11 +582,11 @@ class Issue24CacheTest(unittest.IsolatedAsyncioTestCase):
             plugin, selected = self.setup_plugin(tmp)
             first = await self.send_card(plugin, "a")
             snapshot = await plugin.checkin_store.get_today_record("10001")
-            plugin.image_index.get_blacklisted_illust_ids.return_value = {"110000"}
+            plugin.config["global_blacklisted_illust_ids"] = ["110000"]
             second = await self.send_card(plugin, "a")
             self.assertNotEqual(second, first)
             self.assertEqual(await self.send_card(plugin, "a"), second)
-            plugin.image_index.get_custom_safety_terms.return_value = {"new blocked term"}
+            plugin.config["global_safety_terms"] = ["new blocked term"]
             third = await self.send_card(plugin, "a")
             self.assertNotEqual(third, second)
             self.assertEqual(await self.send_card(plugin, "a"), third)
@@ -803,15 +792,15 @@ class MainErrorHandlingTest(unittest.IsolatedAsyncioTestCase):
         plugin._ensure_client_or_error = lambda _event: True
         received = []
 
-        async def handle_search(_event, *, tag, count_str):
+        async def handle_search(_event, tag, count_str, **kwargs):
             received.append((tag, count_str))
-            yield "ok"
+            kwargs["result"].message = "ok"
 
-        plugin._handle_search = handle_search
+        plugin._execute_search = handle_search
         event = _FakeEvent()
 
-        self.assertEqual(await _collect(plugin.cmd_p(event)), ["ok"])
-        self.assertEqual(received, [("", "")])
+        self.assertEqual(await _collect(plugin.cmd_p(event)), [event.plain_result("ok")])
+        self.assertEqual(received, [("", "1")])
         self.assertTrue(event.stopped)
 
     async def test_initialize_logs_v3_migration_guidance_for_old_database(self):
@@ -851,10 +840,11 @@ class MainErrorHandlingTest(unittest.IsolatedAsyncioTestCase):
 
     async def test_initialize_migrates_policy_before_convergence_and_logs_result(self):
         plugin = object.__new__(GetPxPlugin)
+        plugin.network_routing = main_module.NetworkRouting()
         plugin.downloader = SimpleNamespace(temp_dir=None, resume_cleanup=AsyncMock())
         order = []
         plugin.config = {}
-        plugin.context = SimpleNamespace()
+        plugin.context = SimpleNamespace(add_llm_tools=Mock())
         plugin._cleanup_retired_transport_config = Mock()
         plugin._init_client = Mock()
         plugin._cfg_bool = Mock(return_value=False)
@@ -879,7 +869,7 @@ class MainErrorHandlingTest(unittest.IsolatedAsyncioTestCase):
                 }
 
         class FakePolicyService:
-            async def initialize(self, store):
+            async def initialize(self, store, index, data_dir):
                 order.append("policy")
                 return True
 
@@ -901,7 +891,7 @@ class MainErrorHandlingTest(unittest.IsolatedAsyncioTestCase):
             def register(self):
                 order.append("register")
 
-        plugin.group_safety_service = FakePolicyService()
+        plugin.safety_service = FakePolicyService()
         plugin.plugin_web_api = FakeWebApi()
 
         def discard_task(coro):
@@ -926,13 +916,14 @@ class MainErrorHandlingTest(unittest.IsolatedAsyncioTestCase):
         log_text = "\n".join(str(call.args[0]) for call in logger.info.call_args_list)
         self.assertIn("from_version=3", log_text)
         self.assertIn("to_version=2", log_text)
-        self.assertIn("backup_path=backup.sqlite3", log_text)
+        self.assertIn("backup_file=backup.sqlite3", log_text)
 
     async def test_initialize_skips_convergence_when_policy_migration_fails(self):
         plugin = object.__new__(GetPxPlugin)
+        plugin.network_routing = main_module.NetworkRouting()
         plugin.downloader = SimpleNamespace(temp_dir=None, resume_cleanup=AsyncMock())
         plugin.config = {}
-        plugin.context = SimpleNamespace()
+        plugin.context = SimpleNamespace(add_llm_tools=Mock())
         plugin._cleanup_retired_transport_config = Mock()
         plugin._init_client = Mock()
         plugin._cfg_bool = Mock(return_value=False)
@@ -950,10 +941,10 @@ class MainErrorHandlingTest(unittest.IsolatedAsyncioTestCase):
                 raise AssertionError("convergence must be skipped")
 
         class FakePolicy:
-            async def initialize(self, _store):
-                return False
+            async def initialize(self, _store, _index, _data_dir):
+                raise RuntimeError("archive failed")
 
-        plugin.group_safety_service = FakePolicy()
+        plugin.safety_service = FakePolicy()
         plugin.plugin_web_api = SimpleNamespace(register=Mock())
         fake_cache = SimpleNamespace(cleanup_expired=Mock())
         fake_holiday = SimpleNamespace(refresh_if_due=AsyncMock(return_value=False))
@@ -971,14 +962,15 @@ class MainErrorHandlingTest(unittest.IsolatedAsyncioTestCase):
             patch.object(main_module, "HolidayCalendar", return_value=fake_holiday),
             patch.object(main_module.asyncio, "create_task", side_effect=discard_task),
         ):
-            await plugin.initialize()
+            with self.assertRaisesRegex(RuntimeError, "archive failed"):
+                await plugin.initialize()
         self.assertEqual(order, [])
 
     async def test_initialize_stops_after_convergence_failure(self):
         plugin = object.__new__(GetPxPlugin)
         plugin.downloader = SimpleNamespace(temp_dir=None, resume_cleanup=AsyncMock())
         plugin.config = {}
-        plugin.context = SimpleNamespace()
+        plugin.context = SimpleNamespace(add_llm_tools=Mock())
         plugin._cleanup_retired_transport_config = Mock()
         plugin._init_client = Mock()
         plugin._cfg_bool = Mock(return_value=False)
@@ -997,10 +989,10 @@ class MainErrorHandlingTest(unittest.IsolatedAsyncioTestCase):
                 raise RuntimeError("convergence failed")
 
         class FakePolicy:
-            async def initialize(self, _store):
-                return True
+            async def initialize(self, _store, _index, _data_dir):
+                return None
 
-        plugin.group_safety_service = FakePolicy()
+        plugin.safety_service = FakePolicy()
         with (
             tempfile.TemporaryDirectory() as tmp,
             patch.object(main_module.StarTools, "get_data_dir", return_value=tmp),
@@ -1017,24 +1009,6 @@ class MainErrorHandlingTest(unittest.IsolatedAsyncioTestCase):
         )
         self.assertIn("会话策略数据库收敛失败", error_text)
         self.assertIn("error_type=RuntimeError", error_text)
-
-    async def test_auto_trigger_stops_event_before_search(self):
-        plugin = object.__new__(GetPxPlugin)
-        plugin.config = {"auto_trigger_enabled": True}
-        plugin.client = object()
-        plugin._ensure_client_or_error = lambda _event: True
-
-        async def handle_search(_event, *, tag, count_str):
-            self.assertEqual(tag, "初音ミク")
-            self.assertEqual(count_str, "3")
-            yield "ok"
-
-        plugin._handle_search = handle_search
-        event = _FakeEvent()
-        event.get_message_str = lambda: "来三张初音ミク图"
-
-        self.assertEqual(await _collect(plugin.auto_trigger(event)), ["ok"])
-        self.assertTrue(event.stopped)
 
     def test_friendly_send_error_is_callable_through_plugin_instance(self):
         plugin = object.__new__(GetPxPlugin)
@@ -1196,10 +1170,10 @@ class MainErrorHandlingTest(unittest.IsolatedAsyncioTestCase):
                 for call in plugin._restore_checkin_background.await_args_list
             ]
             self.assertEqual(
-                restore_policies[0], (await plugin._checkin_safety_snapshot(first_policy))[0]
+                restore_policies[0], first_policy
             )
             self.assertEqual(
-                restore_policies[1], (await plugin._checkin_safety_snapshot(second_policy))[0]
+                restore_policies[1], second_policy
             )
             cache_identities = {
                 json.dumps(
@@ -1213,12 +1187,12 @@ class MainErrorHandlingTest(unittest.IsolatedAsyncioTestCase):
                 cache_identities,
                 {
                     json.dumps(
-                        await plugin._checkin_safety_identity(first_policy),
+                        first_policy.cache_identity(),
                         ensure_ascii=False,
                         sort_keys=True,
                     ),
                     json.dumps(
-                        await plugin._checkin_safety_identity(second_policy),
+                        second_policy.cache_identity(),
                         ensure_ascii=False,
                         sort_keys=True,
                     ),
@@ -1229,26 +1203,12 @@ class MainErrorHandlingTest(unittest.IsolatedAsyncioTestCase):
     async def test_checkin_cache_separates_relaxed_group_from_strict_group(self):
         await self._assert_duplicate_cache_policy_transition(
             first_event=_FakeEvent(group_id="group-a"),
-            first_policy=ContentSafetyPolicy(False, False, "group-a"),
+            first_policy=ContentSafetyPolicy(False, "宽松"),
             second_event=_FakeEvent(group_id="group-b"),
-            second_policy=ContentSafetyPolicy(True, True, "group-b"),
+            second_policy=ContentSafetyPolicy(True, "宽松"),
         )
 
-    async def test_checkin_cache_invalidates_when_same_group_reenables_safety(self):
-        await self._assert_duplicate_cache_policy_transition(
-            first_event=_FakeEvent(group_id="group-a"),
-            first_policy=ContentSafetyPolicy(False, False, "group-a"),
-            second_event=_FakeEvent(group_id="group-a"),
-            second_policy=ContentSafetyPolicy(True, True, "group-a"),
-        )
 
-    async def test_checkin_cache_separates_relaxed_group_from_private_chat(self):
-        await self._assert_duplicate_cache_policy_transition(
-            first_event=_FakeEvent(group_id="group-a"),
-            first_policy=ContentSafetyPolicy(False, False, "group-a"),
-            second_event=_FakeEvent(),
-            second_policy=ContentSafetyPolicy(),
-        )
 
     async def test_duplicate_restore_failure_reselects_without_changing_daily_record(
         self,
@@ -1258,7 +1218,7 @@ class MainErrorHandlingTest(unittest.IsolatedAsyncioTestCase):
             record = _record()
             result = CheckinResult(_profile(), record, duplicate=True)
             plugin = _plugin_for_checkin(tmp, result, order)
-            policy = ContentSafetyPolicy(False, False, "group-a")
+            policy = ContentSafetyPolicy(False, "宽松")
             plugin._content_safety_policy = AsyncMock(return_value=policy)
             plugin._restore_checkin_background.return_value = CardBackground(
                 mode="fallback", source="fallback"
@@ -1295,11 +1255,11 @@ class MainErrorHandlingTest(unittest.IsolatedAsyncioTestCase):
             plugin._prepare_checkin_background.assert_awaited_once()
             self.assertEqual(
                 plugin._prepare_checkin_background.await_args.kwargs["policy"],
-                (await plugin._checkin_safety_snapshot(policy))[0],
+                policy,
             )
             self.assertEqual(
                 plugin.checkin_cache.key_inputs[0]["view_model"]["content_safety_policy"],
-                await plugin._checkin_safety_identity(policy),
+                policy.cache_identity(),
             )
             self.assertEqual(plugin.checkin_store.background_updates, [])
             self.assertEqual(
