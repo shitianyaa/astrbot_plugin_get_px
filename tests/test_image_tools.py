@@ -682,5 +682,5 @@ async def test_unsubmitted_requests_allow_safe_retry_without_send_or_charge(tmp_
     plugin.checkin_store.spend_coins.assert_not_awaited()
     assert not context.context.event.sent
     assert (await plugin.checkin_store.find_profile("10001")).coins == 100
-    assert plugin._fetch_source_candidates.await_count == (2 if tool else 1) * (0 if failure == "rate" else 1 if failure in ("source", "index") else 3)
+    assert plugin._fetch_source_candidates.await_count == (2 if tool else 1) * (0 if failure == "rate" else 1 if failure == "source" else 3)
     assert plugin.downloader.download_for_send.await_count == (2 if tool else 1) * int(failure == "download")

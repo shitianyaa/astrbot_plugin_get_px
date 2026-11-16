@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import json
 import time
 from datetime import datetime
 from pathlib import Path
@@ -12,11 +13,14 @@ from zoneinfo import ZoneInfo
 from astrbot.api import logger
 
 from . import usage
+try:
+    from ..checkin.schema import upgrade_image_index_schema
+except ImportError:  # Direct imports used by the test suite.
+    from checkin.schema import upgrade_image_index_schema
 
 
 LOG_PREFIX = "[GetPx]"
 SHANGHAI_TZ = ZoneInfo("Asia/Shanghai")
-MIN_RESULTS_FOR_NEXT_PAGE = 20
 _CLEANUP_THROTTLE_SECONDS = 3600  # 每小时最多清理一次旧记录
 
 
@@ -29,7 +33,11 @@ class ImageIndexStore:
         self._lock = asyncio.Lock()
         self._last_cleanup_ts: float = 0.0
         self._conn: sqlite3.Connection | None = None
-        self._init_db()
+        try:
+            self._init_db()
+        except Exception:
+            self.close()
+            raise
 
     @staticmethod
     def today_key() -> str:
@@ -110,25 +118,25 @@ class ImageIndexStore:
             )
             raise
 
-    async def get_page_offset(self, scope: str, source_key: str, *, feature: str = "normal") -> int:
+    async def get_page_cursor(self, scope: str, source_key: str, *, feature: str = "normal") -> dict | None:
         """按业务读取仍在窗口内的分页位置，不读取旧共享键。"""
         async with self._lock:
             return await asyncio.to_thread(
-                self._get_page_offset_sync, scope, source_key, feature
+                self._get_page_cursor_sync, scope, source_key, feature
             )
 
-    async def advance_page_offset(
-        self, scope: str, source_key: str, results_count: int, *, feature: str = "normal"
-    ) -> int:
-        """当前页全被用过后推进游标；若结果数明显少于正常页则重置为 0（已到底，循环）。返回新的 offset。"""
+    async def save_page_cursor(
+        self, scope: str, source_key: str, params: dict | None, *, feature: str = "normal"
+    ) -> None:
+        """保存上游真实续页参数；None 表示已到底，下次从首页开始。"""
         async with self._lock:
-            return await asyncio.to_thread(
-                self._advance_page_offset_sync, scope, source_key, results_count, feature
+            await asyncio.to_thread(
+                self._save_page_cursor_sync, scope, source_key, params, feature
             )
 
-    async def reset_page_offset(self, scope: str, source_key: str, *, feature: str = "normal") -> None:
+    async def reset_page_cursor(self, scope: str, source_key: str, *, feature: str = "normal") -> None:
         async with self._lock:
-            await asyncio.to_thread(self._reset_page_offset_sync, scope, f"{feature}:{source_key}")
+            await asyncio.to_thread(self._reset_page_cursor_sync, scope, f"{feature}:{source_key}")
 
     async def list_safety_terms(self) -> list[dict[str, str]]:
         async with self._lock:
@@ -321,6 +329,7 @@ class ImageIndexStore:
                 source_key TEXT NOT NULL,
                 page_offset INTEGER NOT NULL DEFAULT 0,
                 updated_at TEXT NOT NULL,
+                page_params TEXT,
                 PRIMARY KEY (scope, source_key)
             )
             """
@@ -332,6 +341,9 @@ class ImageIndexStore:
                 f"{LOG_PREFIX} 图片索引固定窗口切换完成: "
                 f"removed_usage_count={reset[0]} removed_cursor_count={reset[1]}"
             )
+        backup = upgrade_image_index_schema(conn, self._db_path)
+        if backup is not None:
+            logger.info(f"{LOG_PREFIX} 图片索引续页结构升级完成: version=2 backup_file={backup.name}")
 
     def _cleanup_old_days_sync(self, date_key: str, *, trigger: str) -> int:
         removed_usage, removed_cursors = usage.cleanup(self._get_conn(), date_key, self.now_iso())
@@ -351,18 +363,30 @@ class ImageIndexStore:
         self._cleanup_old_days_sync(date_key, trigger="write")
         self._last_cleanup_ts = now_ts
 
-    def _get_page_offset_sync(self, scope: str, source_key: str, feature: str = "normal") -> int:
+    @staticmethod
+    def _page_params(source_key: str, params: object) -> dict:
+        allowed = {"offset"}
+        if source_key == "pixiv:recommended":
+            allowed.update({"max_bookmark_id_for_recommend", "min_bookmark_id_for_recent_illust"})
+        if (
+            not isinstance(params, dict) or not params or set(params) - allowed
+            or any(type(value) is not int or value < 0 for value in params.values())
+        ):
+            raise ValueError("图片源续页参数无效")
+        return dict(params)
+
+    def _get_page_cursor_sync(self, scope: str, source_key: str, feature: str = "normal") -> dict | None:
         conn = self._get_conn()
-        source_key = f"{feature}:{source_key}"
+        storage_key = f"{feature}:{source_key}"
         row = conn.execute(
             """
-            SELECT page_offset, updated_at FROM source_page_cursor
+            SELECT page_offset, updated_at, page_params FROM source_page_cursor
             WHERE scope = ? AND source_key = ?
             """,
-            (scope, source_key),
+            (scope, storage_key),
         ).fetchone()
         if row is None:
-            return 0
+            return None
         page_offset = row["page_offset"]
         updated_at = row["updated_at"]
         try:
@@ -371,21 +395,22 @@ class ImageIndexStore:
                 updated = updated.replace(tzinfo=SHANGHAI_TZ)
             cutoff = usage.page_cursor_cutoff(datetime.fromisoformat(self.now_iso()))
             if updated <= cutoff:
-                self._reset_page_offset_sync(scope, source_key)
+                self._reset_page_cursor_sync(scope, storage_key)
                 logger.info(
                     f"{LOG_PREFIX} 分页位置已过期，起点归零: feature={feature} "
                     f"previous_offset={page_offset} ttl_seconds={usage.PAGE_CURSOR_WINDOW_SECONDS}"
                 )
-                return 0
+                return None
+            params = json.loads(row["page_params"]) if row["page_params"] is not None else {"offset": page_offset}
+            return self._page_params(source_key, params)
         except (ValueError, TypeError):
-            self._reset_page_offset_sync(scope, source_key)
+            self._reset_page_cursor_sync(scope, storage_key)
             logger.warning(
-                f"{LOG_PREFIX} 分页位置无效，起点归零: feature={feature} reason=invalid_timestamp"
+                f"{LOG_PREFIX} 分页位置无效，起点归零: feature={feature} reason=invalid_cursor"
             )
-            return 0
-        return page_offset
+            return None
 
-    def _reset_page_offset_sync(self, scope: str, source_key: str) -> None:
+    def _reset_page_cursor_sync(self, scope: str, source_key: str) -> None:
         conn = self._get_conn()
         conn.execute(
             "DELETE FROM source_page_cursor WHERE scope = ? AND source_key = ?",
@@ -393,33 +418,30 @@ class ImageIndexStore:
         )
         conn.commit()
 
-    def _advance_page_offset_sync(
-        self, scope: str, source_key: str, results_count: int, feature: str = "normal"
-    ) -> int:
+    def _save_page_cursor_sync(
+        self, scope: str, source_key: str, params: dict | None, feature: str = "normal"
+    ) -> None:
+        if params is not None:
+            params = self._page_params(source_key, params)
         self._maybe_cleanup_old_days_sync(self.today_key())
         now = self.now_iso()
         conn = self._get_conn()
-        current = self._get_page_offset_sync(scope, source_key, feature)
         source_key = f"{feature}:{source_key}"
-
-        # 如果结果数明显少于正常页大小，说明已到底，重置为 0
-        if results_count < MIN_RESULTS_FOR_NEXT_PAGE:
-            new_offset = 0
-        else:
-            new_offset = current + results_count
-
+        if params is None:
+            self._reset_page_cursor_sync(scope, source_key)
+            return
         conn.execute(
             """
-            INSERT INTO source_page_cursor (scope, source_key, page_offset, updated_at)
-            VALUES (?, ?, ?, ?)
+            INSERT INTO source_page_cursor (scope, source_key, page_offset, updated_at, page_params)
+            VALUES (?, ?, ?, ?, ?)
             ON CONFLICT(scope, source_key) DO UPDATE SET
                 page_offset = excluded.page_offset,
-                updated_at = excluded.updated_at
+                updated_at = excluded.updated_at,
+                page_params = excluded.page_params
             """,
-            (scope, source_key, new_offset, now),
+            (scope, source_key, params.get("offset", 0), now, json.dumps(params, sort_keys=True)),
         )
         conn.commit()
-        return new_offset
 
 
     def _list_blacklist_illusts_sync(self) -> list[dict[str, Any]]:

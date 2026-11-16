@@ -130,3 +130,13 @@ async def test_new_client_modes_dispatch_only_to_fixed_sdk_methods(query, method
             args["search_target"] == "exact_match_for_tags"
             and args["sort"] == "date_asc"
         )
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("message", ["OAuth process failed", "Rate limit exceeded", "unknown upstream failure"])
+async def test_detail_error_body_is_not_misreported_as_missing(message):
+    client = PixivClient("fixture")
+    api = SimpleNamespace(illust_detail=AsyncMock(return_value={"error": {"message": message}}))
+    client._api, client._cached_token, client._expires_at = api, "fixture", float("inf")
+    with pytest.raises(QueryError) as error:
+        await client.public_detail(42)
+    assert error.value.code == "upstream_error"

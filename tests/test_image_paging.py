@@ -72,16 +72,16 @@ async def test_stale_start_rechecks_home_once_without_changing_checkin_cursor(tm
     plugin._fetch_source_candidates = SearchMixin._fetch_source_candidates.__get__(plugin)
     plugin.image_index = ImageIndexStore(tmp_path)
     scope, key = plugin._event_scope(event), plugin._source_key("洛茜 黑丝", "pixiv")
-    await plugin.image_index.advance_page_offset(scope, key, 30)
-    await plugin.image_index.advance_page_offset(scope, key, 60, feature="checkin")
+    await plugin.image_index.save_page_cursor(scope, key, {"offset": 30})
+    await plugin.image_index.save_page_cursor(scope, key, {"offset": 60}, feature="checkin")
     plugin.client.query_page.side_effect = [PixivPage([]), PixivPage([_illust(1)])]
     try:
         with patch("astrbot_plugin_get_px.pixiv.execution.send_once", AsyncMock(return_value=DeliveryStatus.CONFIRMED)) as sender:
             assert not await collect(plugin, event, GetPxPlugin.cmd_p, "洛茜 黑丝")
         assert [call.args[1] for call in plugin.client.query_page.await_args_list] == [{"offset": 30}, {"offset": 0}]
         sender.assert_awaited_once()
-        assert await plugin.image_index.get_page_offset(scope, key) == 0
-        assert await plugin.image_index.get_page_offset(scope, key, feature="checkin") == 60
+        assert await plugin.image_index.get_page_cursor(scope, key) is None
+        assert await plugin.image_index.get_page_cursor(scope, key, feature="checkin") == {"offset": 60}
     finally:
         plugin.image_index.close()
 
@@ -93,7 +93,7 @@ async def test_empty_home_stops_retry_and_next_message_starts_at_zero(tmp_path):
     plugin._fetch_source_candidates = SearchMixin._fetch_source_candidates.__get__(plugin)
     plugin.image_index = ImageIndexStore(tmp_path)
     scope, key = plugin._event_scope(event), plugin._source_key("洛茜 黑丝", "pixiv")
-    await plugin.image_index.advance_page_offset(scope, key, 30)
+    await plugin.image_index.save_page_cursor(scope, key, {"offset": 30})
     plugin.client.query_page.return_value = PixivPage([])
     try:
         first = await collect(plugin, event, GetPxPlugin.cmd_p, "洛茜 黑丝")
@@ -114,7 +114,7 @@ async def test_home_retry_counts_towards_the_existing_batch_budget(tmp_path):
     plugin._fetch_source_candidates = SearchMixin._fetch_source_candidates.__get__(plugin)
     plugin.image_index = ImageIndexStore(tmp_path)
     scope, key = plugin._event_scope(event), plugin._source_key("洛茜 黑丝", "pixiv")
-    await plugin.image_index.advance_page_offset(scope, key, 30)
+    await plugin.image_index.save_page_cursor(scope, key, {"offset": 30})
     filtered = dict(_illust(1), x_restrict=1)
     plugin.client.query_page.side_effect = [
         PixivPage([]), PixivPage([filtered], {"offset": 30}),
@@ -124,5 +124,66 @@ async def test_home_retry_counts_towards_the_existing_batch_budget(tmp_path):
         await collect(plugin, event, GetPxPlugin.cmd_p, "洛茜 黑丝")
         assert plugin.client.query_page.await_count == 3
         plugin.downloader.download_for_send.assert_not_awaited()
+    finally:
+        plugin.image_index.close()
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("filtered", [False, True])
+async def test_exhausted_batch_budget_persists_real_next_page_across_messages(tmp_path, filtered):
+    plugin, event, _ = await command_flow(tmp_path)
+    plugin.config["preferred_image_source"] = "Pixiv"
+    plugin._fetch_source_candidates = SearchMixin._fetch_source_candidates.__get__(plugin)
+    plugin.image_index = ImageIndexStore(tmp_path)
+    async def page(query, continuation):
+        offset = continuation["offset"]
+        return PixivPage([_illust(4)]) if offset == 90 else PixivPage([dict(_illust(1), x_restrict=1)] if filtered else [], {"offset": offset + 30})
+    plugin.client.query_page.side_effect = page
+    try:
+        await collect(plugin, event, GetPxPlugin.cmd_p, "cold")
+        key = plugin._source_key("cold", "pixiv")
+        assert await plugin.image_index.get_page_cursor(plugin._event_scope(event), key) == {"offset": 90}
+        with patch("astrbot_plugin_get_px.pixiv.execution.send_once", AsyncMock(return_value=DeliveryStatus.CONFIRMED)):
+            await collect(plugin, event, GetPxPlugin.cmd_p, "cold")
+        assert [call.args[1] for call in plugin.client.query_page.await_args_list] == [{"offset": 0}, {"offset": 30}, {"offset": 60}, {"offset": 90}]
+        assert plugin.downloader.download_for_send.await_count == 1
+    finally:
+        plugin.image_index.close()
+
+
+@pytest.mark.asyncio
+async def test_recommendation_bookmark_cursor_survives_message_boundary(tmp_path):
+    plugin, event, _ = await command_flow(tmp_path)
+    plugin.config["preferred_image_source"] = "Pixiv"
+    plugin._fetch_source_candidates = SearchMixin._fetch_source_candidates.__get__(plugin)
+    plugin.image_index = ImageIndexStore(tmp_path)
+    async def page(query, continuation):
+        position = continuation.get("max_bookmark_id_for_recommend", 0)
+        return PixivPage([_illust(4)]) if position == 300 else PixivPage([], {"max_bookmark_id_for_recommend": position + 100})
+    plugin.client.query_page.side_effect = page
+    try:
+        await collect(plugin, event, GetPxPlugin.cmd_p, "")
+        expected = {"max_bookmark_id_for_recommend": 300}
+        assert await plugin.image_index.get_page_cursor(plugin._event_scope(event), "pixiv:recommended") == expected
+        with patch("astrbot_plugin_get_px.pixiv.execution.send_once", AsyncMock(return_value=DeliveryStatus.CONFIRMED)):
+            await collect(plugin, event, GetPxPlugin.cmd_p, "")
+        assert plugin.client.query_page.await_args_list[-1].args[1] == expected
+    finally:
+        plugin.image_index.close()
+
+@pytest.mark.asyncio
+async def test_full_request_keeps_current_page_when_other_candidates_remain(tmp_path):
+    plugin, event, _ = await command_flow(tmp_path)
+    plugin.config["preferred_image_source"] = "Pixiv"
+    plugin._fetch_source_candidates = SearchMixin._fetch_source_candidates.__get__(plugin)
+    plugin.image_index = ImageIndexStore(tmp_path)
+    plugin.client.query_page.return_value = PixivPage([_illust(1), _illust(2), _illust(3)], {"offset": 30})
+    try:
+        with patch("astrbot_plugin_get_px.pixiv.execution.send_once", AsyncMock(return_value=DeliveryStatus.CONFIRMED)):
+            await collect(plugin, event, GetPxPlugin.cmd_p, "cat")
+            assert await plugin.image_index.get_page_cursor(plugin._event_scope(event), plugin._source_key("cat", "pixiv")) is None
+            await collect(plugin, event, GetPxPlugin.cmd_p, "cat")
+        assert [call.args[1] for call in plugin.client.query_page.await_args_list] == [{"offset": 0}, {"offset": 0}]
+        downloaded = [call.args[0]["id"] for call in plugin.downloader.download_for_send.await_args_list]
+        assert len(set(downloaded)) == 2
     finally:
         plugin.image_index.close()

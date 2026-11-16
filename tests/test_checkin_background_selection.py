@@ -44,13 +44,17 @@ class FakePixivClient:
         self.recommended_offsets = []
         self.search_calls = []
 
-    async def recommended(self, offset: int = 0):
-        self.recommended_offsets.append(offset)
-        return list(self.pages.get(offset, []))
-
-    async def search(self, tag: str, offset: int = 0):
-        self.search_calls.append((tag, offset))
-        return list(self.search_pages.get((tag, offset), []))
+    async def query_page(self, query, continuation=None):
+        from astrbot_plugin_get_px.pixiv.client import PixivPage
+        offset = (continuation or {}).get("offset", 0)
+        if query.mode == "search":
+            self.search_calls.append((query.tag, offset))
+            pages = {position: values for (tag, position), values in self.search_pages.items() if tag == query.tag}
+        else:
+            self.recommended_offsets.append(offset)
+            pages = self.pages
+        next_positions = sorted(position for position in pages if position > offset)
+        return PixivPage(list(pages.get(offset, [])), {"offset": next_positions[0]} if next_positions else None)
 
 
 class FakeDownloader:
@@ -473,11 +477,8 @@ class CheckinBackgroundSelectionTest(unittest.IsolatedAsyncioTestCase):
                 }
             )
             try:
-                await plugin.image_index.advance_page_offset(
-                    "group:20001", "pixiv:recommended", 20, feature="checkin"
-                )
-                await plugin.image_index.advance_page_offset(
-                    "group:20001", "pixiv:recommended", 20, feature="checkin"
+                await plugin.image_index.save_page_cursor(
+                    "group:20001", "pixiv:recommended", {"offset": 40}, feature="checkin"
                 )
 
                 background = await plugin._download_checkin_pixiv_background(
@@ -618,7 +619,7 @@ async def test_cold_checkin_tag_falls_back_to_untagged_with_same_rules(tmp_path,
         assert background.illust_id == "6"
         assert plugin.downloader.illust_ids == ["6"]
         assert plugin.client.recommended_offsets == [0]
-        assert len(plugin.client.search_calls) == (5 if tagged_used else 1)
+        assert len(plugin.client.search_calls) == 1
         assert await plugin.image_index.get_used_illust_ids("group:20001", "any", feature="checkin") == {"1", "6"}
         assert not await plugin.image_index.get_used_illust_ids("group:20001", "any")
         plugin._content_safety_policy.assert_awaited_once()
@@ -667,6 +668,42 @@ async def test_untagged_preview_keeps_recent_exclusions_without_claiming_usage(t
         assert plugin.downloader.illust_ids == ["2"]
         assert not await plugin.image_index.get_used_illust_ids("group:20001", "any", feature="checkin")
         assert not plugin.image_index._get_conn().execute("SELECT 1 FROM source_page_cursor").fetchone()
+    finally:
+        plugin.image_index.close()
+
+
+@pytest.mark.asyncio
+async def test_preview_normalizes_lolicon_first_page_recent_exclusions(tmp_path):
+    plugin = _new_plugin()
+    plugin.config = {"filter_manga": True}
+    plugin.image_index = ImageIndexStore(tmp_path)
+    plugin.downloader = FakeDownloader()
+    plugin.client = FakePixivClient({0: [dict(_illust(123), id="123:0", pid="123")]})
+    record = SimpleNamespace(date_key="2026-11-15", user_id="10001")
+    try:
+        first = await plugin._prepare_checkin_background(FakeEvent(), record, claim_usage=False, refresh_preview=True)
+        second = await plugin._prepare_checkin_background(FakeEvent(), record, claim_usage=False, refresh_preview=True)
+        assert first.illust_id == "123:0" and second.mode == "fallback"
+        assert plugin.downloader.illust_ids == ["123:0"]
+    finally:
+        plugin.image_index.close()
+
+
+@pytest.mark.asyncio
+async def test_checkin_empty_pages_preserve_next_position_after_batch_budget(tmp_path):
+    plugin = _new_plugin()
+    plugin.config = {"filter_manga": True}
+    plugin.image_index = ImageIndexStore(tmp_path)
+    plugin.downloader = FakeDownloader()
+    plugin.client = FakePixivClient({**{offset: [] for offset in (0, 30, 60, 90, 120)}, 150: [_illust(6)]})
+    record = SimpleNamespace(date_key="2026-11-15", user_id="10001")
+    try:
+        first = await plugin._prepare_checkin_background(FakeEvent(), record)
+        assert first.mode == "fallback"
+        assert await plugin.image_index.get_page_cursor("group:20001", "pixiv:recommended", feature="checkin") == {"offset": 150}
+        second = await plugin._prepare_checkin_background(FakeEvent(), record)
+        assert second.illust_id == "6"
+        assert plugin.client.recommended_offsets == [0, 30, 60, 90, 120, 150]
     finally:
         plugin.image_index.close()
 

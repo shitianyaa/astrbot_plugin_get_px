@@ -267,6 +267,9 @@ class PixivClient:
         api = await self._acquire_api()
         try:
             response = await self._wait_for(api.illust_detail(illust_id), operation="作品公开查询")
+            error = response.get("error") if isinstance(response, dict) else None
+            if isinstance(error, dict) and str(error.get("message", "")).strip().casefold().replace("_", " ") == "illust not found":
+                return None
             if not isinstance(response, dict) or response.get("error") or "illust" not in response:
                 raise QueryError("upstream_error", "Pixiv 作品查询失败。")
             item = response.get("illust")

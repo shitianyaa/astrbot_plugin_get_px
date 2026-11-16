@@ -25,6 +25,9 @@ export function mountSafety({ apiGet, apiPost, escapeHtml, showToast, confirmAct
   const $ = id => document.getElementById(id);
   let settings = { safety_groups: [], global_safety_terms: [], keyword_match_mode: "宽松" };
   let draft = null, baseline = null, busy = false, trigger = null;
+  let loadSequence = 0;
+  let restoreTrigger = true;
+  let focusAfterLoad = null;
   const dialog = $("safetyGroupDialog");
   const form = $("safetyGroupForm");
   const dirty = () => draft && JSON.stringify(readDraft()) !== JSON.stringify(baseline);
@@ -43,12 +46,29 @@ export function mountSafety({ apiGet, apiPost, escapeHtml, showToast, confirmAct
     $("policyList").innerHTML = groups.map(group => `<button type="button" class="safety-group-card" data-edit-group="${escapeHtml(group.group_id)}"><strong>${escapeHtml(group.name)}</strong><span class="safety-rating ${group.allow_r18 ? "sensitive" : ""}">${group.allow_r18 ? "允许 R18" : "仅普通分级"}</span><span>${group.sessions.length} 个会话 · ${group.custom_terms.length} 个附加关键词</span><small>${group.sessions.length ? escapeHtml(group.sessions[0]) : "尚未关联会话"}</small></button>`).join("") || '<div class="empty">暂无匹配分组。未分组会话仍遵循全局规则，R18 关闭。</div>';
   }
   async function reload() {
-    settings = await apiGet("content-safety");
-    onChange(settings);
-    render();
-    return settings;
+    const sequence = ++loadSequence;
+    try {
+      const value = await apiGet("content-safety");
+      if (sequence !== loadSequence) return null;
+      settings = value;
+      onChange(settings);
+      render();
+      if (focusAfterLoad !== null) {
+        focusGroup(focusAfterLoad);
+        focusAfterLoad = null;
+      }
+      return settings;
+    } catch (error) {
+      if (sequence !== loadSequence) return null;
+      throw error;
+    }
+  }
+  function focusGroup(groupId) {
+    const card = [...$("policyList").querySelectorAll("[data-edit-group]")].find(button => button.dataset.editGroup === groupId);
+    (card || $("policyAddBtn")).focus();
   }
   function open(group, button) {
+    restoreTrigger = true;
     draft = createGroupDraft(group);
     baseline = createGroupDraft(group);
     trigger = button;
@@ -68,7 +88,7 @@ export function mountSafety({ apiGet, apiPost, escapeHtml, showToast, confirmAct
     dialog.close();
   }
   dialog.addEventListener("cancel", event => { event.preventDefault(); close(); });
-  dialog.addEventListener("close", () => { draft = baseline = null; trigger?.focus(); });
+  dialog.addEventListener("close", () => { draft = baseline = null; if (restoreTrigger) trigger?.focus(); });
   $("safetyGroupCancel").addEventListener("click", close);
   $("policyAddBtn").addEventListener("click", event => open({}, event.currentTarget));
   $("policySearch").addEventListener("input", render);
@@ -110,20 +130,22 @@ export function mountSafety({ apiGet, apiPost, escapeHtml, showToast, confirmAct
       const payload = validateGroupDraft(readDraft(), settings.safety_groups);
       if (!payload.group_id) delete payload.group_id;
       setBusy(true);
-      await apiPost("content-safety/groups/save", payload);
+      const result = await apiPost("content-safety/groups/save", payload);
+      focusAfterLoad = result.group.group_id;
       baseline = createGroupDraft(payload);
+      restoreTrigger = false;
       dialog.close();
       await reload();
       showToast("安全分组已保存");
-    } catch (error) { if (dialog.open) $("safetyGroupError").textContent = error.message; else showToast(error.message, "error"); }
+    } catch (error) { if (dialog.open) $("safetyGroupError").textContent = error.message; else { focusGroup(focusAfterLoad); showToast(error.message, "error"); } }
     finally { setBusy(false); }
   });
   $("safetyGroupDelete").addEventListener("click", async () => {
     if (busy || !await confirmAction("删除安全分组", "该组会话将恢复全局规则并关闭 R18，确认删除吗？")) return;
     setBusy(true);
-    try { await apiPost("content-safety/groups/remove", { group_id: draft.group_id }); dialog.close(); await reload(); showToast("安全分组已删除"); }
-    catch (error) { if (dialog.open) $("safetyGroupError").textContent = error.message; else showToast(error.message, "error"); }
+    try { await apiPost("content-safety/groups/remove", { group_id: draft.group_id }); focusAfterLoad = ""; restoreTrigger = false; dialog.close(); await reload(); showToast("安全分组已删除"); }
+    catch (error) { if (dialog.open) $("safetyGroupError").textContent = error.message; else { focusGroup(); showToast(error.message, "error"); } }
     finally { setBusy(false); }
   });
-  return { reload, update(value) { settings = value; render(); } };
+  return { reload };
 }

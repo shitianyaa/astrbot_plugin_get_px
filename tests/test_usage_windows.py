@@ -127,31 +127,32 @@ async def test_cleanup_preserves_checkin_while_expiring_normal_history_and_pendi
 async def test_cursor_business_isolation_and_rolling_day_expiry(store):
     scope, key = "group:1", "pixiv:search:洛茜 黑丝"
     conn = store._get_conn()
-    conn.execute("INSERT INTO source_page_cursor VALUES (?, ?, ?, ?)", (scope, key, 90, store.now_iso()))
+    conn.execute("INSERT INTO source_page_cursor (scope, source_key, page_offset, updated_at) VALUES (?, ?, ?, ?)", (scope, key, 90, store.now_iso()))
     conn.commit()
-    assert await store.get_page_offset(scope, key) == 0
-    assert await store.get_page_offset(scope, key, feature="checkin") == 0
+    assert await store.get_page_cursor(scope, key) is None
+    assert await store.get_page_cursor(scope, key, feature="checkin") is None
     await record(store)
     await record(store, feature="checkin")
-    await store.advance_page_offset(scope, key, 30)
-    await store.advance_page_offset(scope, key, 60, feature="checkin")
+    await store.save_page_cursor(scope, key, {"offset": 30})
+    await store.save_page_cursor(scope, key, {"offset": 60}, feature="checkin")
     freeze(store, "2026-11-16T00:05:00+08:00")
     assert not await store.get_used_illust_ids(scope, "any")
     assert await store.get_used_illust_ids(scope, "any", feature="checkin") == {"42"}
     for feature, expected in (("normal", 30), ("checkin", 60)):
-        assert await store.get_page_offset(scope, key, feature=feature) == expected
+        assert await store.get_page_cursor(scope, key, feature=feature) == {"offset": expected}
     freeze(store, "2026-11-16T23:54:59+08:00")
     for feature, expected in (("normal", 30), ("checkin", 60)):
-        assert await store.get_page_offset(scope, key, feature=feature) == expected
+        assert await store.get_page_cursor(scope, key, feature=feature) == {"offset": expected}
     freeze(store, "2026-11-16T23:55:00+08:00")
-    assert await store.get_page_offset(scope, key) == 0
+    assert await store.get_page_cursor(scope, key) is None
     # 推进也必须忽略过期起点；签到与普通分页共用24小时期限但不共享位置。
-    assert await store.advance_page_offset(scope, key, 30) == 30
-    assert await store.get_page_offset(scope, key, feature="checkin") == 0
-    await store.advance_page_offset(scope, key, 60, feature="checkin")
-    await store.reset_page_offset(scope, key)
-    assert await store.get_page_offset(scope, key) == 0
-    assert await store.get_page_offset(scope, key, feature="checkin") == 60
+    await store.save_page_cursor(scope, key, {"offset": 30})
+    assert await store.get_page_cursor(scope, key) == {"offset": 30}
+    assert await store.get_page_cursor(scope, key, feature="checkin") is None
+    await store.save_page_cursor(scope, key, {"offset": 60}, feature="checkin")
+    await store.reset_page_cursor(scope, key)
+    assert await store.get_page_cursor(scope, key) is None
+    assert await store.get_page_cursor(scope, key, feature="checkin") == {"offset": 60}
 
 
 @pytest.mark.asyncio
@@ -172,7 +173,7 @@ async def test_cleanup_removes_idle_expired_cursors_without_shortening_usage_win
         ("normal:valid", "2026-11-15T12:00:01+08:00"),
         ("checkin:valid", "2026-11-15T12:00:01+08:00"),
     ):
-        conn.execute("INSERT INTO source_page_cursor VALUES (?, ?, ?, ?)", ("group:2", key, 30, updated))
+        conn.execute("INSERT INTO source_page_cursor (scope, source_key, page_offset, updated_at) VALUES (?, ?, ?, ?)", ("group:2", key, 30, updated))
     conn.commit()
     freeze(store, "2026-11-16T12:00:00+08:00")
     assert await store.cleanup_old_days() == 5
@@ -187,10 +188,10 @@ async def test_cleanup_removes_idle_expired_cursors_without_shortening_usage_win
 async def test_paging_writes_trigger_throttled_cleanup_without_deleting_valid_cursors(store):
     from unittest.mock import patch
 
-    await store.advance_page_offset("group:1", "old", 30)
+    await store.save_page_cursor("group:1", "old", {"offset": 30})
     freeze(store, "2026-11-17T00:00:00+08:00")
     with patch("astrbot_plugin_get_px.pixiv.index.time.monotonic", return_value=store._last_cleanup_ts + 3600):
-        await store.advance_page_offset("group:2", "new", 30, feature="checkin")
+        await store.save_page_cursor("group:2", "new", {"offset": 30}, feature="checkin")
     assert [tuple(row) for row in store._get_conn().execute("SELECT scope, source_key FROM source_page_cursor")] == [("group:2", "checkin:new")]
 
 
@@ -231,11 +232,11 @@ async def test_first_upgrade_clears_only_image_usage_and_all_paging_keys(store, 
     await record(store, feature="checkin", identity="2")
     assert await claim(store, identity="3")
     assert await claim(store, feature="checkin_pending", identity="4")
-    await store.advance_page_offset("group:1", "pixiv:search:a", 30)
-    await store.advance_page_offset("group:1", "pixiv:search:a", 60, feature="checkin")
+    await store.save_page_cursor("group:1", "pixiv:search:a", {"offset": 30})
+    await store.save_page_cursor("group:1", "pixiv:search:a", {"offset": 60}, feature="checkin")
     await store.add_blacklist_illust(illust_id="99")
     conn = store._get_conn()
-    conn.execute("INSERT INTO source_page_cursor VALUES (?, ?, ?, ?)", (
+    conn.execute("INSERT INTO source_page_cursor (scope, source_key, page_offset, updated_at) VALUES (?, ?, ?, ?)", (
         "group:2", "pixiv:search:old", 90, store.now_iso(),
     ))
     conn.execute("CREATE TABLE content_safety_terms (term TEXT)")
@@ -276,8 +277,8 @@ async def test_config_save_and_repeated_reload_preserve_post_reset_state(store, 
     await record(store, feature="checkin", identity="2")
     assert await claim(store, identity="3")
     assert await claim(store, feature="checkin_pending", identity="4")
-    await store.advance_page_offset("group:1", "pixiv:search:a", 30)
-    await store.advance_page_offset("group:1", "pixiv:search:a", 60, feature="checkin")
+    await store.save_page_cursor("group:1", "pixiv:search:a", {"offset": 30})
+    await store.save_page_cursor("group:1", "pixiv:search:a", {"offset": 60}, feature="checkin")
     service = SessionSafetyService(config)
     await service.update_global({"global_safety_terms": ["blocked"]})
     await service.save_group({"name": "test", "sessions": ["bot:GroupMessage:1"]})
@@ -290,8 +291,8 @@ async def test_config_save_and_repeated_reload_preserve_post_reset_state(store, 
         try:
             assert await reopened.get_used_illust_ids("group:1", "any") == {"1", "3"}
             assert await reopened.get_used_illust_ids("group:1", "any", feature="checkin") == {"2", "4"}
-            assert await reopened.get_page_offset("group:1", "pixiv:search:a") == 30
-            assert await reopened.get_page_offset("group:1", "pixiv:search:a", feature="checkin") == 60
+            assert await reopened.get_page_cursor("group:1", "pixiv:search:a") == {"offset": 30}
+            assert await reopened.get_page_cursor("group:1", "pixiv:search:a", feature="checkin") == {"offset": 60}
         finally:
             reopened.close()
         store.close()
@@ -305,7 +306,7 @@ def test_one_time_reset_rolls_back_records_and_marker_on_failure(store, failure_
     conn.execute("INSERT INTO image_usage VALUES (?, ?, ?, ?, ?, ?, ?)", (
         store.today_key(), "group:1", "old", "42", "normal_pending", "user", store.now_iso(),
     ))
-    conn.execute("INSERT INTO source_page_cursor VALUES (?, ?, ?, ?)", (
+    conn.execute("INSERT INTO source_page_cursor (scope, source_key, page_offset, updated_at) VALUES (?, ?, ?, ?)", (
         "group:1", "old", 30, store.now_iso(),
     ))
     conn.execute("PRAGMA user_version = 0")
@@ -335,7 +336,7 @@ def test_one_time_reset_rolls_back_records_and_marker_on_failure(store, failure_
 @pytest.mark.asyncio
 async def test_cleanup_rolls_back_usage_when_cursor_delete_fails(store):
     await record(store)
-    await store.advance_page_offset("group:1", "old", 30)
+    await store.save_page_cursor("group:1", "old", {"offset": 30})
     freeze(store, "2026-11-17T00:00:00+08:00")
     conn = store._get_conn()
     last_cleanup = store._last_cleanup_ts

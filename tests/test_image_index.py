@@ -209,56 +209,17 @@ class ImageIndexStoreTest(unittest.IsolatedAsyncioTestCase):
 
     # ── page-cursor tests ──────────────────────────────────────────
 
-    async def test_page_offset_starts_at_zero(self):
+    async def test_page_cursor_roundtrip_and_reset(self):
         with tempfile.TemporaryDirectory() as tmp:
             store = FrozenImageIndexStore(tmp)
             try:
-                offset = await store.get_page_offset("group:1", "search:blue_archive")
-                self.assertEqual(offset, 0)
-            finally:
-                store.close()
-
-    async def test_advance_page_offset_second_page(self):
-        with tempfile.TemporaryDirectory() as tmp:
-            store = FrozenImageIndexStore(tmp)
-            try:
-                # 第一页
-                await store.advance_page_offset("group:1", "search:blue_archive", 30)
-                # 第二页
-                new_offset = await store.advance_page_offset(
-                    "group:1", "search:blue_archive", results_count=30
-                )
-                self.assertEqual(new_offset, 60)
-            finally:
-                store.close()
-
-    async def test_advance_page_offset_resets_when_below_threshold(self):
-        with tempfile.TemporaryDirectory() as tmp:
-            store = FrozenImageIndexStore(tmp)
-            try:
-                await store.advance_page_offset("group:1", "search:rare_tag", 30)
-                # 返回结果 < 20 时应重置为 0
-                new_offset = await store.advance_page_offset(
-                    "group:1", "search:rare_tag", results_count=15
-                )
-                self.assertEqual(new_offset, 0)
-            finally:
-                store.close()
-
-    async def test_page_offset_clears_after_reset(self):
-        """重置后再次查询应为 0。"""
-        with tempfile.TemporaryDirectory() as tmp:
-            store = FrozenImageIndexStore(tmp)
-            try:
-                await store.advance_page_offset("group:1", "search:tag", 30)
-                # 到底重置
-                new_offset = await store.advance_page_offset(
-                    "group:1", "search:tag", results_count=10
-                )
-                self.assertEqual(new_offset, 0)
-                # 再次查询确认
-                offset = await store.get_page_offset("group:1", "search:tag")
-                self.assertEqual(offset, 0)
+                key = "pixiv:recommended"
+                self.assertIsNone(await store.get_page_cursor("group:1", key))
+                params = {"max_bookmark_id_for_recommend": 123}
+                await store.save_page_cursor("group:1", key, params)
+                self.assertEqual(await store.get_page_cursor("group:1", key), params)
+                await store.reset_page_cursor("group:1", key)
+                self.assertIsNone(await store.get_page_cursor("group:1", key))
             finally:
                 store.close()
 

@@ -771,3 +771,32 @@ async def test_explicit_query_filtering_is_not_reported_as_missing_source(tmp_pa
     )
     assert result["status"] == "filtered"
     assert result["targets"][0]["status"] == "filtered"
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("args", [{"ratio_tolerance": 0.05}, {"orientation": "sideways"}, {"min_width": -1}])
+async def test_invalid_selection_is_a_nonretryable_request_error(tmp_path, args):
+    plugin, context, _, service = await flow(tmp_path)
+    result = await service.query(context, "artworks", {"mode": "search", "tag": "cat", **args})
+    assert result["status"] == "invalid_request" and not result["retry_allowed"]
+    plugin.client.query_page.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_missing_work_error_body_does_not_abort_later_targets(tmp_path):
+    from astrbot_plugin_get_px.pixiv.client import PixivClient
+    plugin, context, _, service = await flow(tmp_path)
+    async def detail(identity):
+        return {"error": {"message": "illust not found"}} if identity == 1 else {"illust": _illust(identity)}
+    api = SimpleNamespace(illust_detail=AsyncMock(side_effect=detail))
+    client = PixivClient("fixture")
+    client._api, client._cached_token, client._expires_at = api, "fixture", float("inf")
+    plugin.client = client
+    args = {"mode": "artwork", "targets": [{"artwork": "1"}, {"artwork": "2"}]}
+    query = await service.query(context, "artworks", args)
+    assert [record["id"] for record in query["records"]] == ["2"]
+    assert [item["status"] for item in query["targets"]] == ["not_found", "candidate"]
+    with patch("astrbot_plugin_get_px.pixiv.execution.send_once", AsyncMock(return_value=DeliveryStatus.CONFIRMED)):
+        result = await service.image(context, args)
+    assert [item["status"] for item in result["targets"]] == ["not_found", "confirmed"]
+    assert plugin.downloader.download_for_send.await_count == 1
+    assert (await plugin.checkin_store.find_profile("10001")).coins == 80

@@ -233,12 +233,16 @@ class DiscoveryService:
                 - {"limit", "include_stats"}
             ):
                 raise QueryError("invalid_request", "作品查询参数不受支持。")
+            try:
+                selection = ImageSelection.from_args(args)
+            except ValueError as exc:
+                raise QueryError("invalid_request", str(exc)) from exc
             stream = CandidateStream(
                 self.plugin,
                 event,
                 ArtworkQuery.from_args(args),
                 policy,
-                ImageSelection.from_args(args),
+                selection,
             )
         else:
             if set(args) - {"word", "user_id", "limit"} or ("word" in args) == (

@@ -112,6 +112,12 @@ class _SourcePixiv:
         self.search_calls = []
         self.recommended_calls = []
 
+    async def query_page(self, query, continuation=None):
+        from astrbot_plugin_get_px.pixiv.client import PixivPage
+        offset = (continuation or {}).get("offset", 0)
+        items = await self.search(query.tag, offset) if query.mode == "search" else await self.recommended(offset)
+        return PixivPage(items)
+
     async def search(self, tag, offset=0):
         self.search_calls.append((tag, offset))
         self.order.append("pixiv")
@@ -280,13 +286,13 @@ async def test_preferred_pixiv_random_uses_recommended_page_cursor():
     pixiv = _SourcePixiv()
     lolicon = _SourceLolicon()
     plugin = _SourceHarness(lolicon, pixiv, preferred="Pixiv")
-    index = SimpleNamespace(get_page_offset=AsyncMock(return_value=60))
+    index = SimpleNamespace(get_page_cursor=AsyncMock(return_value={"offset": 60}), reset_page_cursor=AsyncMock())
     plugin.image_index = index
     _, _, source = await plugin._fetch_source_candidates(_SourceEvent(), "")
     assert source == "pixiv:recommended"
     assert pixiv.recommended_calls == [60]
     assert lolicon.calls == []
-    index.get_page_offset.assert_awaited_once_with("group:1", source, feature="normal")
+    index.get_page_cursor.assert_awaited_once_with("group:1", source, feature="normal")
 
 
 @pytest.mark.asyncio

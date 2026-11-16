@@ -11,6 +11,7 @@ from astrbot.api import logger
 from astrbot.api.event import AstrMessageEvent
 from astrbot.core.star.star_tools import StarTools
 
+from ..pixiv.client import SourceRequest
 from .models import CheckinRecord
 from .background import (
     CHECKIN_ARTWORK_ASPECT_PARAM,
@@ -700,119 +701,64 @@ class CheckinArtworkMixin:
         selected_tag = _selected_tag
 
         source_key = ""
-        used_ids: set[str] = set(preview_excluded_ids or ())
+        used_ids: set[str] = {usage_id(value) for value in preview_excluded_ids or ()}
         used_source_key = ""
         illusts: list[dict] = []
         raw_count = 0
-        transient_offset = 0
-
-        for page_attempt in range(1, CHECKIN_BACKGROUND_PAGE_ATTEMPTS + 1):
+        request_state = SourceRequest()
+        page_attempt = 0
+        while page_attempt < CHECKIN_BACKGROUND_PAGE_ATTEMPTS:
+            retried_home = request_state.retried_first_page
             try:
                 illusts, raw_count, source_key = await self._fetch_source_candidates(
-                    event,
-                    selected_tag,
-                    count=20,
-                    offset=transient_offset if preview_nonce else 0,
+                    event, selected_tag, count=20,
                     aspect_ratio=CHECKIN_ARTWORK_ASPECT_PARAM,
-                    use_page_cursor=not preview_nonce,
-                    feature="checkin",
-                    policy=_policy,
+                    use_page_cursor=not preview_nonce, feature="checkin",
+                    policy=_policy, request_state=request_state,
                 )
-            except Exception as e:
+            except Exception as exc:
                 logger.warning(
-                    f"{LOG_PREFIX} 签到背景请求失败: "
-                    f"tag_configured={'yes' if selected_tag else 'no'} "
-                    f"error_type={type(e).__name__}"
+                    f"{LOG_PREFIX} 签到背景请求失败: tag_configured={'yes' if selected_tag else 'no'} "
+                    f"error_type={type(exc).__name__}"
                 )
                 return None
-            if preview_nonce:
-                transient_offset += raw_count
+            page_attempt += 1 + int(request_state.retried_first_page and not retried_home)
             if source_key != used_source_key:
-                used_ids = set(preview_excluded_ids or ())
-                used_ids.update(
-                    await self._checkin_background_used_ids(event, source_key)
-                )
+                used_ids = {usage_id(value) for value in preview_excluded_ids or ()}
+                used_ids.update(await self._checkin_background_used_ids(event, source_key))
                 used_source_key = source_key
-            if not illusts:
-                logger.info(
-                    f"{LOG_PREFIX} 签到背景本阶段无候选: "
-                    f"selection={'tagged' if selected_tag else 'untagged'} batch={page_attempt}"
-                )
-                return None
-
             if self._cfg_bool("filter_manga", True):
                 illusts = self._filter_manga(illusts)
             try:
                 illusts = await self._filter_blacklisted_illusts(illusts, _policy)
             except RuntimeError as exc:
                 logger.warning(
-                    f"{LOG_PREFIX} 签到背景安全检查不可用，本阶段停止选图: "
-                    f"error_type={type(exc).__name__}"
+                    f"{LOG_PREFIX} 签到背景安全检查不可用，本阶段停止选图: error_type={type(exc).__name__}"
                 )
                 return None
             illusts = filter_illusts_by_aspect_ratio(
-                illusts,
-                CHECKIN_ARTWORK_TARGET_RATIO,
-                CHECKIN_ARTWORK_TOLERANCE,
+                illusts, CHECKIN_ARTWORK_TARGET_RATIO, CHECKIN_ARTWORK_TOLERANCE,
             )
-            if not illusts:
-                if preview_nonce:
-                    continue
-                if self.image_index is None:
-                    return None
-                try:
-                    next_offset = await self.image_index.advance_page_offset(
-                        self._event_scope(event), source_key, raw_count, feature="checkin"
-                    )
-                    logger.info(
-                        f"{LOG_PREFIX} 签到背景本批筛选后为空，分页位置已更新: "
-                        f"batch={page_attempt} raw_count={raw_count} next_offset={next_offset} "
-                        f"reason=filtered_out selection={'tagged' if selected_tag else 'untagged'}"
-                    )
-                except Exception as e:
-                    logger.warning(
-                        f"{LOG_PREFIX} 签到背景分页游标更新失败: "
-                        f"error_type={type(e).__name__}"
-                    )
-                    return None
-                continue
-
-            ordered = ordered_by_unused(illusts, used_ids)
+            reason = "empty_batch" if raw_count == 0 else "filtered_out" if not illusts else "used_or_pending"
             fresh = [
-                illust
-                for illust in ordered
+                illust for illust in ordered_by_unused(illusts, used_ids)
                 if usage_id(illust.get("id")) not in used_ids
             ]
             if fresh:
                 illusts = fresh
                 break
-            if preview_nonce:
-                continue
-            if self.image_index is None:
-                logger.info(
-                    f"{LOG_PREFIX} 签到背景候选均已在去重窗口内使用，跳过图片源背景"
-                )
-                return None
-
-            try:
-                next_offset = await self.image_index.advance_page_offset(
-                    self._event_scope(event), source_key, raw_count, feature="checkin"
-                )
-                logger.info(
-                    f"{LOG_PREFIX} 签到背景本批候选处于去重窗口或占用中，分页位置已更新: "
-                    f"batch={page_attempt} raw_count={raw_count} next_offset={next_offset} "
-                    f"reason=used_or_pending selection={'tagged' if selected_tag else 'untagged'}"
-                )
-            except Exception as e:
-                logger.warning(
-                    f"{LOG_PREFIX} 签到背景分页游标更新失败: "
-                    f"error_type={type(e).__name__}"
-                )
+            if not preview_nonce and self.image_index is not None and request_state.source == "pixiv":
+                await self._save_checkin_page_cursor(event, source_key, request_state)
+            logger.info(
+                f"{LOG_PREFIX} 签到背景本批未选出可用作品: batch={page_attempt} raw_count={raw_count} "
+                f"reason={reason} has_next={'no' if request_state.exhausted else 'yes'} "
+                f"selection={'tagged' if selected_tag else 'untagged'}"
+            )
+            if request_state.exhausted:
                 return None
         else:
             logger.info(
-                f"{LOG_PREFIX} 签到背景本阶段候选批次已耗尽: "
-                f"max_batches={CHECKIN_BACKGROUND_PAGE_ATTEMPTS} "
+                f"{LOG_PREFIX} 签到背景本阶段候选批次已耗尽: max_batches={CHECKIN_BACKGROUND_PAGE_ATTEMPTS} "
                 f"selection={'tagged' if selected_tag else 'untagged'}"
             )
             return None
@@ -904,11 +850,22 @@ class CheckinArtworkMixin:
                     await self._release_checkin_background_usage(
                         event, source_key, illust_id
                     )
+        if not preview_nonce and len(ordered) <= 8 and request_state.source == "pixiv":
+            await self._save_checkin_page_cursor(event, source_key, request_state)
         logger.info(
             f"{LOG_PREFIX} 签到背景本阶段未取得可下载作品: "
             f"selection={'tagged' if selected_tag else 'untagged'} candidate_count={min(len(ordered), 8)}"
         )
         return None
+
+    async def _save_checkin_page_cursor(self, event, source_key, state):
+        if self.image_index is not None:
+            try:
+                await self.image_index.save_page_cursor(
+                    self._event_scope(event), source_key, state.next_params, feature="checkin"
+                )
+            except Exception as exc:
+                logger.warning(f"{LOG_PREFIX} 签到背景续页位置保存失败: error_type={type(exc).__name__}")
 
     def _checkin_background_tag_candidates(self, tag_config: object) -> list[str]:
         tags = self._split_config_tags(tag_config)

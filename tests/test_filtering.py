@@ -143,6 +143,6 @@ async def test_selection_leaves_pagination_to_the_execution_layer(
             event, [{"id": "1"}], 1, source_key="source", raw_count=30,
             ordered=ordered,
         ) == []
-        assert await mixin.image_index.get_page_offset("scope", "source") == 0
+        assert await mixin.image_index.get_page_cursor("scope", "source") is None
     finally:
         mixin.image_index.close()
