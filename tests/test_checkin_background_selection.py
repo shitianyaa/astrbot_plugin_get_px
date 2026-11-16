@@ -2,10 +2,14 @@ import json
 import asyncio
 import sys
 import tempfile
+import time
 import unittest
+
 from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, patch
+
+import pytest
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 
@@ -109,15 +113,6 @@ class CheckinBackgroundSelectionTest(unittest.IsolatedAsyncioTestCase):
             ),
             ["alpha", "beta", "gamma", "delta", "epsilon", "zeta"],
         )
-
-    def test_checkin_background_tag_candidates_are_randomized(self):
-        plugin = _new_plugin()
-        with patch(
-            "astrbot_plugin_get_px.checkin.artwork.random.shuffle",
-            side_effect=lambda tags: tags.reverse(),
-        ):
-            candidates = plugin._checkin_background_tag_candidates("alpha,beta,gamma")
-        self.assertEqual(candidates, ["gamma", "beta", "alpha"])
 
     def test_greeting_schema_defaults_to_hitokoto(self):
         schema_path = Path(__file__).resolve().parents[1] / "_conf_schema.json"
@@ -323,8 +318,6 @@ class CheckinBackgroundSelectionTest(unittest.IsolatedAsyncioTestCase):
             plugin.config = {
                 "pixiv_refresh_token": "token",
                 "filter_manga": True,
-                "checkin_background_aspect_ratio": "16:9",
-                "checkin_background_aspect_tolerance": 0.25,
                 "image_quality": "large",
                 "request_timeout": 30.0,
                 "auto_downgrade_original_mb": 3.0,
@@ -365,8 +358,6 @@ class CheckinBackgroundSelectionTest(unittest.IsolatedAsyncioTestCase):
             plugin.config = {
                 "pixiv_refresh_token": "token",
                 "filter_manga": True,
-                "checkin_background_aspect_ratio": "16:9",
-                "checkin_background_aspect_tolerance": 0.25,
                 "image_quality": "large",
                 "request_timeout": 30.0,
                 "auto_downgrade_original_mb": 3.0,
@@ -437,8 +428,6 @@ class CheckinBackgroundSelectionTest(unittest.IsolatedAsyncioTestCase):
             plugin.config = {
                 "pixiv_refresh_token": "token",
                 "filter_manga": True,
-                "checkin_background_aspect_ratio": "16:9",
-                "checkin_background_aspect_tolerance": 0.25,
                 "image_quality": "large",
                 "request_timeout": 30.0,
                 "auto_downgrade_original_mb": 3.0,
@@ -571,8 +560,6 @@ class CheckinBackgroundSelectionTest(unittest.IsolatedAsyncioTestCase):
             plugin.config = {
                 "pixiv_refresh_token": "token",
                 "filter_manga": True,
-                "checkin_background_aspect_ratio": "16:9",
-                "checkin_background_aspect_tolerance": 0.25,
                 "image_quality": "large",
                 "request_timeout": 30.0,
                 "auto_downgrade_original_mb": 3.0,
@@ -599,6 +586,89 @@ class CheckinBackgroundSelectionTest(unittest.IsolatedAsyncioTestCase):
                 self.assertEqual(plugin.downloader.illust_ids, [])
             finally:
                 plugin.image_index.close()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("tagged_used", [False, True])
+async def test_cold_checkin_tag_falls_back_to_untagged_with_same_rules(tmp_path, tagged_used):
+    from astrbot_plugin_get_px.pixiv.safety import ContentSafetyPolicy
+
+    plugin = _new_plugin()
+    plugin.config = {"checkin_background_tag": "cold", "filter_manga": True}
+    plugin._content_safety_policy.return_value = ContentSafetyPolicy(
+        custom_terms=("blocked",), blacklisted_illust_ids=("3",),
+    )
+    plugin.image_index = ImageIndexStore(tmp_path)
+    plugin.downloader = FakeDownloader()
+    plugin.client = FakePixivClient(
+        {0: [
+            _illust(1), dict(_illust(2), x_restrict=1), _illust(3),
+            _illust(4, width=1600, height=900),
+            dict(_illust(5), tags=[{"name": "blocked"}]), _illust(6),
+        ]},
+        search_pages={("cold", 0): [_illust(1)]} if tagged_used else {},
+    )
+    try:
+        await plugin.image_index.record_usage(
+            scope="group:20001", source_key="other-tag", illust_id="1", feature="checkin",
+        )
+        background = await plugin._prepare_checkin_background(
+            FakeEvent(), SimpleNamespace(date_key="2026-11-15", user_id="10001"),
+        )
+        assert background.illust_id == "6"
+        assert plugin.downloader.illust_ids == ["6"]
+        assert plugin.client.recommended_offsets == [0]
+        assert len(plugin.client.search_calls) == (5 if tagged_used else 1)
+        assert await plugin.image_index.get_used_illust_ids("group:20001", "any", feature="checkin") == {"1", "6"}
+        assert not await plugin.image_index.get_used_illust_ids("group:20001", "any")
+        plugin._content_safety_policy.assert_awaited_once()
+    finally:
+        plugin.image_index.close()
+
+
+@pytest.mark.asyncio
+async def test_all_tags_and_untagged_fallback_remain_bounded_and_use_placeholder(tmp_path):
+    plugin = _new_plugin()
+    plugin.config = {"checkin_background_tag": "alpha,beta", "filter_manga": True}
+    plugin.image_index = ImageIndexStore(tmp_path)
+    plugin.downloader = FakeDownloader()
+    plugin.client = FakePixivClient({
+        offset: [_illust(offset + i, width=1600, height=900) for i in range(20)]
+        for offset in (0, 20, 40, 60, 80)
+    })
+    try:
+        with patch("astrbot_plugin_get_px.checkin.artwork.random.shuffle", side_effect=lambda tags: tags.reverse()):
+            background = await plugin._prepare_checkin_background(
+                FakeEvent(), SimpleNamespace(date_key="2026-11-15", user_id="10001"),
+            )
+        assert background.mode == "fallback"
+        assert plugin.client.search_calls == [("beta", 0), ("alpha", 0)]
+        assert plugin.client.recommended_offsets == [0, 20, 40, 60, 80]
+        assert not plugin.downloader.illust_ids
+        assert not await plugin.image_index.get_used_illust_ids("group:20001", "any", feature="checkin")
+    finally:
+        plugin.image_index.close()
+
+
+@pytest.mark.asyncio
+async def test_untagged_preview_keeps_recent_exclusions_without_claiming_usage(tmp_path):
+    plugin = _new_plugin()
+    plugin.config = {"checkin_background_tag": "cold", "filter_manga": True}
+    plugin.image_index = ImageIndexStore(tmp_path)
+    plugin.downloader = FakeDownloader()
+    plugin.client = FakePixivClient({0: [_illust(1), _illust(2)]})
+    plugin._checkin_preview_background_ids = {"10001": [("1", time.monotonic())]}
+    try:
+        background = await plugin._prepare_checkin_background(
+            FakeEvent(), SimpleNamespace(date_key="2026-11-15", user_id="10001"),
+            claim_usage=False, refresh_preview=True,
+        )
+        assert background.illust_id == "2"
+        assert plugin.downloader.illust_ids == ["2"]
+        assert not await plugin.image_index.get_used_illust_ids("group:20001", "any", feature="checkin")
+        assert not plugin.image_index._get_conn().execute("SELECT 1 FROM source_page_cursor").fetchone()
+    finally:
+        plugin.image_index.close()
 
 
 if __name__ == "__main__":

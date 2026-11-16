@@ -4,6 +4,7 @@ from datetime import datetime, timedelta
 
 NORMAL_WINDOW_SECONDS = 600
 CHECKIN_WINDOW_DAYS = 2
+PAGE_CURSOR_WINDOW_SECONDS = 24 * 60 * 60
 
 
 def reset_legacy_state_once(conn) -> tuple[int, int] | None:
@@ -31,6 +32,10 @@ def window_start(now: datetime, feature: str) -> datetime:
     if feature == "normal":
         return now - timedelta(seconds=NORMAL_WINDOW_SECONDS)
     raise ValueError("未知图片业务类别")
+
+
+def page_cursor_cutoff(now: datetime) -> datetime:
+    return now - timedelta(seconds=PAGE_CURSOR_WINDOW_SECONDS)
 
 
 def usage_id(value: object) -> str:
@@ -128,15 +133,20 @@ def release(conn, date_key, scope, identity, feature, owner=""):
         raise
 
 
-def cleanup(conn, date_key, now):
+def cleanup(conn, date_key, now) -> tuple[int, int]:
     cutoff = window_start(datetime.fromisoformat(now), "normal").isoformat(timespec="seconds")
     try:
         cursor = conn.execute(
             "DELETE FROM image_usage WHERE date_key < ? OR (feature IN ('normal', 'normal_pending') AND sent_at <= ?)",
             (cutoff_day(date_key), cutoff),
         )
+        removed_usage = max(0, cursor.rowcount)
+        cursor = conn.execute(
+            "DELETE FROM source_page_cursor WHERE updated_at <= ?",
+            (page_cursor_cutoff(datetime.fromisoformat(now)).isoformat(timespec="seconds"),),
+        )
         conn.commit()
-        return max(0, cursor.rowcount)
+        return removed_usage, max(0, cursor.rowcount)
     except Exception:
         conn.rollback()
         raise

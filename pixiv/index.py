@@ -39,11 +39,6 @@ class ImageIndexStore:
     def now_iso() -> str:
         return datetime.now(SHANGHAI_TZ).isoformat(timespec="seconds")
 
-    @staticmethod
-    def _now_dt() -> datetime:
-        """返回当前上海时间，可被子类覆写以冻结时间。"""
-        return datetime.now(SHANGHAI_TZ)
-
     def _get_conn(self) -> sqlite3.Connection:
         """获取持久数据库连接；如已关闭则自动重建。"""
         if self._conn is None:
@@ -66,9 +61,8 @@ class ImageIndexStore:
 
     async def cleanup_old_days(self, *, trigger: str = "manual") -> int:
         async with self._lock:
-            removed = await asyncio.to_thread(self._cleanup_old_days_sync, self.today_key())
+            removed = await asyncio.to_thread(self._cleanup_old_days_sync, self.today_key(), trigger=trigger)
             self._last_cleanup_ts = time.monotonic()
-        logger.info(f"{LOG_PREFIX} 图片去重索引清理完成: trigger={trigger} removed_count={removed}")
         return removed
 
     async def get_used_illust_ids(self, scope: str, source_key: str, *, feature: str = "normal", ignore_history: bool = False) -> set[str]:
@@ -339,21 +333,23 @@ class ImageIndexStore:
                 f"removed_usage_count={reset[0]} removed_cursor_count={reset[1]}"
             )
 
-    def _cleanup_old_days_sync(self, date_key: str) -> int:
-        return usage.cleanup(self._get_conn(), date_key, self.now_iso())
+    def _cleanup_old_days_sync(self, date_key: str, *, trigger: str) -> int:
+        removed_usage, removed_cursors = usage.cleanup(self._get_conn(), date_key, self.now_iso())
+        removed = removed_usage + removed_cursors
+        if removed or trigger != "write":
+            logger.info(
+                f"{LOG_PREFIX} 图片索引过期记录清理完成: trigger={trigger} "
+                f"removed_usage_count={removed_usage} removed_cursor_count={removed_cursors}"
+            )
+        return removed
 
     def _maybe_cleanup_old_days_sync(self, date_key: str) -> None:
         """每小时最多清理一次，避免写操作频繁触发 DELETE。"""
         now_ts = time.monotonic()
         if now_ts - self._last_cleanup_ts < _CLEANUP_THROTTLE_SECONDS:
             return
-        removed = self._cleanup_old_days_sync(date_key)
+        self._cleanup_old_days_sync(date_key, trigger="write")
         self._last_cleanup_ts = now_ts
-        if removed > 0:
-            logger.info(
-                f"{LOG_PREFIX} 已清理过期图片去重索引: "
-                f"trigger=write removed_count={removed}"
-            )
 
     def _get_page_offset_sync(self, scope: str, source_key: str, feature: str = "normal") -> int:
         conn = self._get_conn()
@@ -373,12 +369,19 @@ class ImageIndexStore:
             updated = datetime.fromisoformat(updated_at)
             if updated.tzinfo is None:
                 updated = updated.replace(tzinfo=SHANGHAI_TZ)
-            cutoff = usage.window_start(datetime.fromisoformat(self.now_iso()), feature)
-            if updated < cutoff or (feature == "normal" and updated == cutoff):
+            cutoff = usage.page_cursor_cutoff(datetime.fromisoformat(self.now_iso()))
+            if updated <= cutoff:
                 self._reset_page_offset_sync(scope, source_key)
+                logger.info(
+                    f"{LOG_PREFIX} 分页位置已过期，起点归零: feature={feature} "
+                    f"previous_offset={page_offset} ttl_seconds={usage.PAGE_CURSOR_WINDOW_SECONDS}"
+                )
                 return 0
         except (ValueError, TypeError):
             self._reset_page_offset_sync(scope, source_key)
+            logger.warning(
+                f"{LOG_PREFIX} 分页位置无效，起点归零: feature={feature} reason=invalid_timestamp"
+            )
             return 0
         return page_offset
 
@@ -393,6 +396,7 @@ class ImageIndexStore:
     def _advance_page_offset_sync(
         self, scope: str, source_key: str, results_count: int, feature: str = "normal"
     ) -> int:
+        self._maybe_cleanup_old_days_sync(self.today_key())
         now = self.now_iso()
         conn = self._get_conn()
         current = self._get_page_offset_sync(scope, source_key, feature)

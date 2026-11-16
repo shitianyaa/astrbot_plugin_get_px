@@ -8,9 +8,9 @@
 | --- | --- | --- | --- |
 | `pixiv_refresh_token` | `string` | 空 | 使用 Pixiv 作为首选或回退时需要填写；留空直接使用 Lolicon |
 | `preferred_image_source` | `enum` | `Lolicon` | 下拉选择 `Lolicon` / `Pixiv`；首选请求失败或无结果时尝试另一源 |
-| `lolicon_exclude_ai` | `bool` | `true` | 仅向 Lolicon API 传递 excludeAI=true/false；R18 与普通混合由当前会话强制普通分级决定 |
+| `lolicon_exclude_ai` | `bool` | `true` | 仅向 Lolicon API 传递 excludeAI=true/false；是否允许混合 R18 由当前会话安全分组的 allow_r18 决定，未分组默认关闭 |
 | `lolicon_image_proxy_origins` | `text` | 空 | 每行一个 http(s) origin，最多 5 个按序尝试；仅改写允许列表内 Pixiv 图片主机 |
-| `max_count` | `int` | `5` | 命令和模型工具的单次数量上限，范围 1–20；普通模型取图省略 count 时取 1 张，指定作品按目标数执行，默认值不覆盖已保存的配置 |
+| `max_count` | `int` | `5` | 单次命令或同条模型消息累计发图上限，范围 1–20；普通模型取图省略 count 时取 1 张，指定作品按目标数执行，默认值不覆盖已保存的配置 |
 | `p_coin_cost` | `int` | `20` | 命令和模型工具共用的每张金币，范围 0–200；签到关闭或单价为0时免费；收费时正常返回与发送超时均扣费，下载／构建失败及其他发送异常不扣费 |
 | `image_quality` | `enum` | `original` | `original`/`large`/`medium`；固定所选画质，超限／不可用时换作品 |
 | `auto_downgrade_original_mb` | `float` | `10.0` | 图片大小上限（MiB），适用于所选画质，范围 0–25；0 关闭软上限；保留旧键并沿用已有数值 |
@@ -56,7 +56,7 @@ Lolicon API 返回作品信息和各档图片 URL，插件筛选后直接下载�
 | `safety_groups` | `template_list` | `[]` | 名称、完整 UMO 列表、允许 R18、附加关键词 |
 | `safety_rules_version` | `int` | `0` | 隐藏迁移版本；初始化完成后为 1，防止旧库规则复活 |
 
-`content_dedupe` 是沿用的内部配置键；本组不再提供去重选项。普通取图的历史、占用和分页状态采用10分钟窗口，签到背景对应状态独立保留最近2个北京时间自然日；同会话按作品页合并跨标签、图源和入口的记录。分页业务键独立，不复用旧共享游标；到期读取即失效，无需重载或清库。详见[缓存与去重](cache-and-dedupe.md)。
+`content_dedupe` 是沿用的内部配置键；本组不再提供去重选项。普通取图的历史和占用采用10分钟窗口，签到背景对应记录独立保留最近2个北京时间自然日；同会话按作品页合并跨标签、图源和入口的记录。分页业务键独立，统一保留滚动24小时，不复用旧共享游标；到期读取即失效，无需重载或清库。详见[缓存与去重](cache-and-dedupe.md)。
 
 ## 3. 万象画卷联动（`checkin_omnidraw`）
 
@@ -84,7 +84,7 @@ Lolicon API 返回作品信息和各档图片 URL，插件筛选后直接下载�
 | `checkin_ai_greeting_timeout` | `float` | `8.0` | AI 问候超时，1–30 秒 |
 | `checkin_hitokoto_timeout` | `float` | `5.0` | 一言请求超时，1–15 秒 |
 | `checkin_background_mode` | `enum` | `pixiv_daily` | `pixiv_daily`(每日自动选背景)/`custom`(固定背景文件) |
-| `checkin_background_tag` | `string` | 空 | 多标签随机排列逐个尝试，同会话签到背景历史跨标签共享；留空按所选优先级请求 Lolicon 随机或 Pixiv 推荐作品 |
+| `checkin_background_tag` | `string` | 空 | 多标签随机排列逐个尝试，全部无可用背景后再做一轮无标签随机／推荐兜底；留空直接进入随机／推荐，同会话签到背景历史跨标签共享，兜底不放宽筛选和去重 |
 | `checkin_custom_background` | `string` | 空 | 管理员本地背景路径，推荐 3:4 竖图 |
 
 ## 5. 签到商店与定价（`checkin_shop`）

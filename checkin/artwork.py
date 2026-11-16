@@ -681,6 +681,8 @@ class CheckinArtworkMixin:
         if _selected_tag is None:
             tag_config = self._cfg_str("checkin_background_tag", "")
             for selected_tag in self._checkin_background_tag_candidates(tag_config):
+                if not selected_tag and tag_config.strip():
+                    logger.info(f"{LOG_PREFIX} 签到标签未取得背景，尝试随机推荐: fallback=untagged")
                 background = await self._download_checkin_pixiv_background(
                     event,
                     record,
@@ -732,6 +734,10 @@ class CheckinArtworkMixin:
                 )
                 used_source_key = source_key
             if not illusts:
+                logger.info(
+                    f"{LOG_PREFIX} 签到背景本阶段无候选: "
+                    f"selection={'tagged' if selected_tag else 'untagged'} batch={page_attempt}"
+                )
                 return None
 
             if self._cfg_bool("filter_manga", True):
@@ -740,7 +746,7 @@ class CheckinArtworkMixin:
                 illusts = await self._filter_blacklisted_illusts(illusts, _policy)
             except RuntimeError as exc:
                 logger.warning(
-                    f"{LOG_PREFIX} 签到背景安全检查不可用，使用占位图: "
+                    f"{LOG_PREFIX} 签到背景安全检查不可用，本阶段停止选图: "
                     f"error_type={type(exc).__name__}"
                 )
                 return None
@@ -755,11 +761,13 @@ class CheckinArtworkMixin:
                 if self.image_index is None:
                     return None
                 try:
-                    await self.image_index.advance_page_offset(
+                    next_offset = await self.image_index.advance_page_offset(
                         self._event_scope(event), source_key, raw_count, feature="checkin"
                     )
                     logger.info(
-                        f"{LOG_PREFIX} 签到背景第 {page_attempt} 页无符合 3:4 的竖向作品\uff0c切换下一页"
+                        f"{LOG_PREFIX} 签到背景本批筛选后为空，分页位置已更新: "
+                        f"batch={page_attempt} raw_count={raw_count} next_offset={next_offset} "
+                        f"reason=filtered_out selection={'tagged' if selected_tag else 'untagged'}"
                     )
                 except Exception as e:
                     logger.warning(
@@ -787,11 +795,13 @@ class CheckinArtworkMixin:
                 return None
 
             try:
-                await self.image_index.advance_page_offset(
+                next_offset = await self.image_index.advance_page_offset(
                     self._event_scope(event), source_key, raw_count, feature="checkin"
                 )
                 logger.info(
-                    f"{LOG_PREFIX} 签到背景第 {page_attempt} 页候选均已使用\uff0c切换下一页"
+                    f"{LOG_PREFIX} 签到背景本批候选处于去重窗口或占用中，分页位置已更新: "
+                    f"batch={page_attempt} raw_count={raw_count} next_offset={next_offset} "
+                    f"reason=used_or_pending selection={'tagged' if selected_tag else 'untagged'}"
                 )
             except Exception as e:
                 logger.warning(
@@ -801,7 +811,9 @@ class CheckinArtworkMixin:
                 return None
         else:
             logger.info(
-                f"{LOG_PREFIX} 签到背景连续 {CHECKIN_BACKGROUND_PAGE_ATTEMPTS} 页无可用竖向作品"
+                f"{LOG_PREFIX} 签到背景本阶段候选批次已耗尽: "
+                f"max_batches={CHECKIN_BACKGROUND_PAGE_ATTEMPTS} "
+                f"selection={'tagged' if selected_tag else 'untagged'}"
             )
             return None
 
@@ -843,7 +855,7 @@ class CheckinArtworkMixin:
                 )
                 if not claimed:
                     logger.debug(
-                        f"{LOG_PREFIX} 签到背景跳过\uff1a作品 {illust_id} 已被其他签到占用"
+                        f"{LOG_PREFIX} 签到背景候选未取得占用: illust_id={illust_id} reason=claim_rejected"
                     )
                     continue
             title = illust.get("title", "无标题")
@@ -869,9 +881,10 @@ class CheckinArtworkMixin:
                     file_size=file_size,
                 )
                 background_ready = True
-                logger.debug(
+                logger.info(
                     f"{LOG_PREFIX} 签到背景选择完成: mode=pixiv_daily "
                     f"source={source_key.partition(':')[0] or 'unknown'} "
+                    f"selection={'tagged' if selected_tag else 'untagged'} "
                     f"illust_id={illust_id} quality={actual_q} file_size={file_size}"
                 )
                 return background
@@ -891,6 +904,10 @@ class CheckinArtworkMixin:
                     await self._release_checkin_background_usage(
                         event, source_key, illust_id
                     )
+        logger.info(
+            f"{LOG_PREFIX} 签到背景本阶段未取得可下载作品: "
+            f"selection={'tagged' if selected_tag else 'untagged'} candidate_count={min(len(ordered), 8)}"
+        )
         return None
 
     def _checkin_background_tag_candidates(self, tag_config: object) -> list[str]:
@@ -899,7 +916,7 @@ class CheckinArtworkMixin:
             return [""]
         candidates = list(tags)
         random.shuffle(candidates)
-        return candidates
+        return candidates + [""]
 
     async def _claim_checkin_background_usage(
         self, event: AstrMessageEvent, source_key: str, illust_id: str

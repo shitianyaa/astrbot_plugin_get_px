@@ -170,6 +170,7 @@ class SearchMixin:
                         illusts = await client.recommended(offset=page_offset)
                     logger.info(
                         f"{LOG_PREFIX} Pixiv 分页候选获取完成: feature={feature} "
+                        f"query_mode={'search' if tag else 'recommended'} "
                         f"offset={page_offset} candidate_count={len(illusts)}"
                     )
                     at_end = request_state.exhausted if request_state is not None else not illusts
@@ -205,13 +206,14 @@ class SearchMixin:
                             request_state.exhausted = False
                     return illusts, len(illusts), source_key
                 logger.info(
-                    f"{LOG_PREFIX} 图片源未返回候选: source={source} "
+                    f"{LOG_PREFIX} 图片源未返回候选: source={source} feature={feature} "
+                    f"tag_configured={'yes' if tag else 'no'} "
                     f"fallback_allowed={'yes' if fallback_allowed else 'no'}"
                 )
             except Exception as exc:
                 logger.warning(
                     f"{LOG_PREFIX} 图片源请求失败: "
-                    f"source={source} tag_configured={'yes' if tag else 'no'} "
+                    f"source={source} feature={feature} tag_configured={'yes' if tag else 'no'} "
                     f"fallback_allowed={'yes' if fallback_allowed else 'no'} "
                     f"error_type={type(exc).__name__}"
                 )

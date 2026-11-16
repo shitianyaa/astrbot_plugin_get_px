@@ -17,7 +17,6 @@ def freeze(store, value):
     now = datetime.fromisoformat(value)
     store.today_key = lambda: now.date().isoformat()
     store.now_iso = lambda: now.isoformat(timespec="seconds")
-    store._now_dt = lambda: now
 
 
 @pytest.fixture
@@ -125,26 +124,74 @@ async def test_cleanup_preserves_checkin_while_expiring_normal_history_and_pendi
 
 
 @pytest.mark.asyncio
-async def test_cursor_windows_are_separate_and_ignore_legacy_shared_offsets(store):
+async def test_cursor_business_isolation_and_rolling_day_expiry(store):
     scope, key = "group:1", "pixiv:search:洛茜 黑丝"
     conn = store._get_conn()
     conn.execute("INSERT INTO source_page_cursor VALUES (?, ?, ?, ?)", (scope, key, 90, store.now_iso()))
     conn.commit()
     assert await store.get_page_offset(scope, key) == 0
     assert await store.get_page_offset(scope, key, feature="checkin") == 0
+    await record(store)
+    await record(store, feature="checkin")
     await store.advance_page_offset(scope, key, 30)
     await store.advance_page_offset(scope, key, 60, feature="checkin")
-    assert await store.get_page_offset(scope, key) == 30
-    assert await store.get_page_offset(scope, key, feature="checkin") == 60
-    freeze(store, "2026-11-16T00:04:59+08:00")
-    assert await store.get_page_offset(scope, key) == 30
     freeze(store, "2026-11-16T00:05:00+08:00")
+    assert not await store.get_used_illust_ids(scope, "any")
+    assert await store.get_used_illust_ids(scope, "any", feature="checkin") == {"42"}
+    for feature, expected in (("normal", 30), ("checkin", 60)):
+        assert await store.get_page_offset(scope, key, feature=feature) == expected
+    freeze(store, "2026-11-16T23:54:59+08:00")
+    for feature, expected in (("normal", 30), ("checkin", 60)):
+        assert await store.get_page_offset(scope, key, feature=feature) == expected
+    freeze(store, "2026-11-16T23:55:00+08:00")
     assert await store.get_page_offset(scope, key) == 0
-    # 推进也必须忽略过期起点，不能从失效位置继续累加。
+    # 推进也必须忽略过期起点；签到与普通分页共用24小时期限但不共享位置。
     assert await store.advance_page_offset(scope, key, 30) == 30
-    assert await store.get_page_offset(scope, key, feature="checkin") == 60
-    freeze(store, "2026-11-17T00:00:00+08:00")
     assert await store.get_page_offset(scope, key, feature="checkin") == 0
+    await store.advance_page_offset(scope, key, 60, feature="checkin")
+    await store.reset_page_offset(scope, key)
+    assert await store.get_page_offset(scope, key) == 0
+    assert await store.get_page_offset(scope, key, feature="checkin") == 60
+
+
+@pytest.mark.asyncio
+async def test_cleanup_removes_idle_expired_cursors_without_shortening_usage_windows(store):
+    freeze(store, "2026-11-16T11:50:00+08:00")
+    await record(store, identity="1")
+    await record(store, feature="checkin", identity="2")
+    assert await claim(store, identity="3")
+    assert await claim(store, feature="checkin_pending", identity="4")
+    freeze(store, "2026-11-16T11:59:59+08:00")
+    await record(store, identity="5")
+    assert await claim(store, identity="6")
+    conn = store._get_conn()
+    for key, updated in (
+        ("normal:expired", "2026-11-15T12:00:00+08:00"),
+        ("checkin:expired", "2026-11-15T12:00:00+08:00"),
+        ("old-shared", "2026-11-14T12:00:00+08:00"),
+        ("normal:valid", "2026-11-15T12:00:01+08:00"),
+        ("checkin:valid", "2026-11-15T12:00:01+08:00"),
+    ):
+        conn.execute("INSERT INTO source_page_cursor VALUES (?, ?, ?, ?)", ("group:2", key, 30, updated))
+    conn.commit()
+    freeze(store, "2026-11-16T12:00:00+08:00")
+    assert await store.cleanup_old_days() == 5
+    assert await store.cleanup_old_days() == 0
+    assert {row[0] for row in conn.execute("SELECT source_key FROM source_page_cursor")} == {"normal:valid", "checkin:valid"}
+    assert await store.get_used_illust_ids("group:1", "any") == {"5", "6"}
+    assert await store.get_used_illust_ids("group:1", "any", feature="checkin") == {"2", "4"}
+    assert not await claim(store, identity="6", ignore_history=True)
+
+
+@pytest.mark.asyncio
+async def test_paging_writes_trigger_throttled_cleanup_without_deleting_valid_cursors(store):
+    from unittest.mock import patch
+
+    await store.advance_page_offset("group:1", "old", 30)
+    freeze(store, "2026-11-17T00:00:00+08:00")
+    with patch("astrbot_plugin_get_px.pixiv.index.time.monotonic", return_value=store._last_cleanup_ts + 3600):
+        await store.advance_page_offset("group:2", "new", 30, feature="checkin")
+    assert [tuple(row) for row in store._get_conn().execute("SELECT scope, source_key FROM source_page_cursor")] == [("group:2", "checkin:new")]
 
 
 @pytest.mark.asyncio
@@ -283,3 +330,29 @@ def test_one_time_reset_rolls_back_records_and_marker_on_failure(store, failure_
     assert conn.execute("SELECT COUNT(*) FROM source_page_cursor").fetchone()[0] == 1
     assert usage.reset_legacy_state_once(conn) == (1, 1)
     assert usage.reset_legacy_state_once(conn) is None
+
+
+@pytest.mark.asyncio
+async def test_cleanup_rolls_back_usage_when_cursor_delete_fails(store):
+    await record(store)
+    await store.advance_page_offset("group:1", "old", 30)
+    freeze(store, "2026-11-17T00:00:00+08:00")
+    conn = store._get_conn()
+    last_cleanup = store._last_cleanup_ts
+
+    def authorize(action, name, *_):
+        if action == sqlite3.SQLITE_DELETE and name == "source_page_cursor":
+            return sqlite3.SQLITE_DENY
+        return sqlite3.SQLITE_OK
+
+    conn.set_authorizer(authorize)
+    try:
+        with pytest.raises(sqlite3.DatabaseError):
+            await store.cleanup_old_days()
+    finally:
+        conn.set_authorizer(None)
+    assert not conn.in_transaction
+    assert conn.execute("SELECT COUNT(*) FROM image_usage").fetchone()[0] == 1
+    assert conn.execute("SELECT COUNT(*) FROM source_page_cursor").fetchone()[0] == 1
+    assert store._last_cleanup_ts == last_cleanup
+    assert await store.cleanup_old_days() == 2
