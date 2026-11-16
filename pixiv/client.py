@@ -65,6 +65,40 @@ def parse_continuation(value: object, endpoint: str, allowed: set[str]) -> dict 
         raise QueryError("upstream_error", "图片源未返回可使用的分页参数。")
     return result
 
+
+def _probe_next_page(value, endpoint):
+    """只记录续页形状，不输出地址、参数值或响应原文。"""
+    summary = {"next_type": type(value).__name__, "has_next_url": bool(value)}
+    if not isinstance(value, str) or not value:
+        return json.dumps(summary, ensure_ascii=True)
+    try:
+        parsed, expected = urlsplit(value), urlsplit(endpoint)
+        summary["host_matches"] = parsed.netloc == expected.netloc
+        summary["path_matches"] = parsed.path == expected.path
+        params = parse_qs(parsed.query, keep_blank_values=True, max_num_fields=4096)
+        known = {
+            "offset", "viewed", "bookmark_illust_ids", "seed_illust_ids",
+            "max_bookmark_id_for_recommend", "min_bookmark_id_for_recent_illust",
+            "content_type", "filter", "include_ranking_label", "include_ranking_illusts",
+            "include_privacy_policy", "illust_id", "user_id", "word", "sort", "search_target",
+        }
+        fields = {}
+        unknown = 0
+        for key, values in params.items():
+            name = re.sub(r"\[[0-9]*\]$", "", key)
+            if name not in known:
+                unknown += 1
+                continue
+            shape = "empty" if any(not value for value in values) else "digits" if all(value.isascii() and value.isdigit() for value in values) else "text"
+            entry = fields.setdefault(name, {"count": 0, "shapes": []})
+            entry["count"] += len(values)
+            if shape not in entry["shapes"]:
+                entry["shapes"].append(shape)
+        summary.update(fields=fields, unknown_fields=unknown)
+    except ValueError:
+        summary["parse_failed"] = True
+    return json.dumps(summary, ensure_ascii=True, sort_keys=True)
+
 LOG_PREFIX = "[GetPx]"
 
 # Pixiv access_token 有效期约 3600 秒，提前 10 分钟刷新避免临界过期
@@ -240,21 +274,16 @@ class PixivClient:
         if continuation and set(continuation) - {key.removesuffix("[]") for key in allowed}:
             raise QueryError("invalid_request", "分页参数与接口不匹配。")
         api = await self._acquire_api()
-        probe = ""
+        probe = (
+            f"probe_id={time.monotonic_ns()} source=pixiv endpoint={name} "
+            f"sdk_version={version('pixivpy-async')} "
+            f"network_route={urlsplit(self.proxy_url).scheme or 'direct'}"
+        )
+        phase = "request"
+        started = time.monotonic()
+        logger.info(f"{LOG_PREFIX} 查询探针请求: {probe} "
+                    f"cursor_keys={','.join(sorted(continuation or {})) or 'none'}")
         try:
-            if name == "search_illust":
-                search_params = {
-                    key: params.get(key)
-                    for key in ("word", "search_target", "sort", "start_date", "end_date")
-                }
-                search_params["offset"] = (continuation or {}).get("offset", 0)
-                probe = (
-                    f"probe_id={time.monotonic_ns()} source=pixiv "
-                    f"sdk_version={version('pixivpy-async')} "
-                    f"network_route={urlsplit(self.proxy_url).scheme or 'direct'} "
-                    f"query={json.dumps(search_params, ensure_ascii=True)}"
-                )
-                logger.info(f"{LOG_PREFIX} 搜索探针请求: {probe}")
             method, endpoint = getattr(api.api, "illust_recommended_auth" if name == "illust_recommended" else name)
             if name == "illust_related" and continuation and "viewed" in continuation:
                 # SDK 的关联方法未暴露 viewed；仍只请求固定关联接口。
@@ -270,20 +299,41 @@ class PixivClient:
             response = await self._wait_for(
                 request, operation="公开查询"
             )
+            phase = "response_validation"
+            items = response.get(field) if isinstance(response, dict) else None
+            error = response.get("error") if isinstance(response, dict) else None
+            error_text = str(error).casefold() if error else ""
+            error_kind = (
+                "auth_hint" if any(word in error_text for word in ("oauth", "invalid_grant", "authentication", "access token")) else
+                "rate_limit_hint" if any(word in error_text for word in ("rate limit", "rate_limit", "too many", "429")) else
+                "other" if error else "none"
+            )
+            logger.info(
+                f"{LOG_PREFIX} 查询探针响应: {probe} response_type={type(response).__name__} "
+                f"items_type={type(items).__name__} candidate_count={len(items) if isinstance(items, list) else 0} "
+                f"upstream_error={error_kind} "
+                f"cursor={_probe_next_page(response.get('next_url') if isinstance(response, dict) else None, endpoint)}"
+            )
             if not isinstance(response, dict) or response.get("error") or not isinstance(response.get(field), list):
                 raise QueryError("upstream_error", "Pixiv 查询失败或响应结构无效。")
             if any(not isinstance(item, dict) for item in response[field]):
                 raise QueryError("upstream_error", "Pixiv 候选结构无效。")
+            phase = "pagination"
             page = PixivPage(response[field], parse_continuation(response.get("next_url"), endpoint, allowed))
-            if probe:
-                logger.info(
-                    f"{LOG_PREFIX} 搜索探针返回: {probe} "
-                    f"candidate_count={len(page.items)} has_next={'yes' if page.next_params is not None else 'no'}"
-                )
+            logger.info(
+                f"{LOG_PREFIX} 查询探针完成: {probe} candidate_count={len(page.items)} "
+                f"has_next={'yes' if page.next_params is not None else 'no'} "
+                f"duration_ms={int((time.monotonic() - started) * 1000)}"
+            )
             return page
         except Exception as exc:
-            if probe:
-                logger.warning(f"{LOG_PREFIX} 搜索探针失败: {probe} error_type={type(exc).__name__}")
+            code = exc.code if isinstance(exc, QueryError) and exc.code in {"invalid_request", "upstream_error"} else "none"
+            status = getattr(exc, "status", None)
+            logger.warning(
+                f"{LOG_PREFIX} 查询探针失败: {probe} phase={phase} error_type={type(exc).__name__} "
+                f"error_code={code} http_status={status if type(status) is int and 100 <= status <= 599 else 'unknown'} "
+                f"duration_ms={int((time.monotonic() - started) * 1000)}"
+            )
             raise
         finally:
             await self._release_api()
