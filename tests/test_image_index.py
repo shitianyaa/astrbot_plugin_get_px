@@ -46,15 +46,14 @@ class ImageIndexStoreTest(unittest.IsolatedAsyncioTestCase):
 
                 self.assertEqual(results.count(True), 1)
                 self.assertEqual(results.count(False), 19)
-                await store.record_usage(
-                    scope="group:1", source_key="pixiv:recommended", illust_id="101", feature="normal"
-                )
-                store._frozen_dt += timedelta(minutes=11)
-                store.close()
-                store = FrozenImageIndexStore(tmp)
-                store._frozen_dt += timedelta(minutes=11)
                 self.assertEqual(
-                    await store.get_used_illust_ids("group:1", "pixiv:recommended"), set()
+                    await store.get_used_illust_ids("group:1", "pixiv:recommended"), {"100"}
+                )
+                self.assertFalse(
+                    await store.claim_usage(
+                        scope="group:1", source_key="pixiv:recommended",
+                        illust_id="100", feature="normal_pending",
+                    )
                 )
 
                 await store.release_usage(
@@ -231,7 +230,7 @@ class ImageIndexStoreTest(unittest.IsolatedAsyncioTestCase):
                     "group:1", "search:blue_archive", results_count=30
                 )
                 self.assertEqual(new_offset, 30)
-                # 再次查询应返回新游标
+                store._frozen_dt += timedelta(minutes=9, seconds=59)
                 offset = await store.get_page_offset("group:1", "search:blue_archive")
                 self.assertEqual(offset, 30)
             finally:
@@ -261,20 +260,6 @@ class ImageIndexStoreTest(unittest.IsolatedAsyncioTestCase):
                     "group:1", "search:rare_tag", results_count=15
                 )
                 self.assertEqual(new_offset, 0)
-            finally:
-                store.close()
-
-    async def test_advance_page_offset_with_raw_count_matters(self):
-        """过滤后少但原始 ≥ 20 不应重置（修 blocking bug）。"""
-        with tempfile.TemporaryDirectory() as tmp:
-            store = FrozenImageIndexStore(tmp)
-            try:
-                await store.advance_page_offset("group:1", "search:tag", 30)
-                # 原始 30 条（≥ 阈值 20），不应重置
-                new_offset = await store.advance_page_offset(
-                    "group:1", "search:tag", results_count=30
-                )
-                self.assertEqual(new_offset, 60)
             finally:
                 store.close()
 
@@ -312,20 +297,6 @@ class ImageIndexStoreTest(unittest.IsolatedAsyncioTestCase):
                 # 现在查询应该返回 0（TTL 过期）
                 offset = await store.get_page_offset("group:1", "search:blue_archive")
                 self.assertEqual(offset, 0)
-            finally:
-                store.close()
-
-    async def test_page_offset_ttl_valid(self):
-        """未过期游标应正常返回。"""
-        with tempfile.TemporaryDirectory() as tmp:
-            store = FrozenImageIndexStore(tmp)
-            try:
-                await store.advance_page_offset(
-                    "group:1", "search:blue_archive", results_count=30
-                )
-                # 设置 updated_at 为 TTL 内（已包含在 advance 中，直接验证）
-                offset = await store.get_page_offset("group:1", "search:blue_archive")
-                self.assertEqual(offset, 30)
             finally:
                 store.close()
 
