@@ -48,7 +48,7 @@ def test_query_contract_rejects_mismatched_or_unsafe_input(args):
 def test_upstream_cursor_cannot_select_arbitrary_endpoint(url):
     with pytest.raises(QueryError):
         parse_continuation(
-            url, "https://app-api.pixiv.net/v1/search/illust", {"offset"}
+            url, "https://app-api.pixiv.net/v1/search/illust", "search_illust"
         )
 
 
