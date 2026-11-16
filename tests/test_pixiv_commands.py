@@ -48,6 +48,7 @@ def test_command_text_preserves_conditions_and_page_semantics(mode, text, expect
     ("auto", "白子 0"),
     ("auto", "名" * 49), ("artwork", ""),
     ("artwork", "https://example.com/artworks/42"),
+    ("artwork", "https://["),
     ("artwork", "42 0"), ("artwork", "42 1 2"),
     ("ranking", ""), ("ranking", "热门 2"), ("ranking", "周 -1"),
 ])

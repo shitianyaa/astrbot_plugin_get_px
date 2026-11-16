@@ -11,7 +11,7 @@ from .search_result import SearchResult
 from .execution import SearchExecution
 from .selection import ImageSelection
 from .catalog import CandidateStream
-from .query import ArtworkQuery
+from .query import ArtworkQuery, QueryError
 from .client import SourceRequest
 
 
@@ -99,124 +99,76 @@ class SearchMixin:
         request_state: SourceRequest | None = None,
     ) -> tuple[list[dict], int, str]:
         """按首选图片源顺序取图，请求失败或无结果时尝试另一源。"""
+        state = request_state if request_state is not None else SourceRequest()
         preferred = self._cfg_str("preferred_image_source", "Lolicon").lower()
         if preferred not in ("lolicon", "pixiv"):
-            logger.warning(
-                f"{LOG_PREFIX} 首选图片源配置无效，使用默认顺序: preferred_source=lolicon"
-            )
+            logger.warning(f"{LOG_PREFIX} 首选图片源配置无效，使用默认顺序: preferred_source=lolicon")
             preferred = "lolicon"
         sources = ("pixiv", "lolicon") if preferred == "pixiv" else ("lolicon", "pixiv")
-        if request_state is not None and request_state.source:
-            sources = (request_state.source,)
-        if (
-            getattr(self, "lolicon_client", None) is None
-            and getattr(self, "client", None) is None
-        ):
+        if state.source:
+            sources = (state.source,)
+        if getattr(self, "lolicon_client", None) is None and getattr(self, "client", None) is None:
             self._init_client()
         for source_index, source in enumerate(sources):
             fallback_allowed = source_index + 1 < len(sources)
             source_key = self._source_key(tag, source)
             if source == "pixiv" and not tag:
                 source_key = "pixiv:recommended"
-            client = getattr(
-                self, "lolicon_client" if source == "lolicon" else "client", None
-            )
+            client = getattr(self, "lolicon_client" if source == "lolicon" else "client", None)
             if client is None or (source == "lolicon" and not client.available):
                 logger.debug(f"{LOG_PREFIX} 图片源不可用，跳过请求: source={source}")
                 continue
             try:
                 if source == "lolicon":
-                    if tag:
-                        illusts = await client.search(
-                            tag,
-                            count=count,
-                            aspect_ratio=aspect_ratio,
-                            r18=0 if policy.general_only_enabled else 2,
-                        )
-                    else:
-                        illusts = await client.random(
-                            count=count,
-                            aspect_ratio=aspect_ratio,
-                            r18=0 if policy.general_only_enabled else 2,
-                        )
+                    method = client.search if tag else client.random
+                    illusts = await method(
+                        *((tag,) if tag else ()), count=count, aspect_ratio=aspect_ratio,
+                        r18=0 if policy.general_only_enabled else 2,
+                    )
+                    state.next_params, state.exhausted = None, False
                 else:
-                    page_offset = offset
-                    if (
-                        use_page_cursor
-                        and page_offset == 0
-                        and self.image_index is not None
-                        and (request_state is None or not request_state.source)
-                    ):
+                    continuation = state.next_params if state.source else {"offset": offset}
+                    if use_page_cursor and not state.source and offset == 0 and self.image_index is not None:
                         try:
-                            page_offset = await self.image_index.get_page_offset(
+                            continuation = await self.image_index.get_page_cursor(
                                 self._event_scope(event), source_key, feature=feature
-                            )
+                            ) or {"offset": 0}
                         except Exception as exc:
-                            logger.warning(
-                                f"{LOG_PREFIX} 读取 Pixiv 分页游标失败: "
-                                f"error_type={type(exc).__name__}"
-                            )
-                    if request_state is not None:
-                        query = ArtworkQuery(mode="search" if tag else "recommended", tag=tag)
-                        continuation = request_state.next_params if request_state.source else {"offset": page_offset}
-                        page = await client.query_page(query, continuation)
-                        illusts = page.items
-                        request_state.next_params = page.next_params
-                        request_state.exhausted = page.next_params is None
-                        page_offset = int((continuation or {}).get("offset", 0))
-                    elif tag:
-                        illusts = await client.search(tag, offset=page_offset)
-                    else:
-                        illusts = await client.recommended(offset=page_offset)
+                            logger.warning(f"{LOG_PREFIX} 读取 Pixiv 分页游标失败: error_type={type(exc).__name__}")
+                    query = ArtworkQuery(mode="search" if tag else "recommended", tag=tag)
+                    page = await client.query_page(query, continuation)
+                    illusts = page.items
+                    state.next_params, state.exhausted = page.next_params, page.next_params is None
                     logger.info(
                         f"{LOG_PREFIX} Pixiv 分页候选获取完成: feature={feature} "
-                        f"offset={page_offset} candidate_count={len(illusts)}"
+                        f"query_mode={query.mode} offset={(continuation or {}).get('offset', 'none')} "
+                        f"cursor_keys={','.join((continuation or {}).keys()) or 'none'} "
+                        f"candidate_count={len(illusts)} has_next={'yes' if page.next_params is not None else 'no'}"
                     )
-                    at_end = request_state.exhausted if request_state is not None else not illusts
-                    if use_page_cursor and page_offset > 0 and at_end:
+                    if use_page_cursor and not illusts and any((continuation or {}).values()) and state.exhausted:
                         if self.image_index is not None:
-                            await self.image_index.reset_page_offset(
-                                self._event_scope(event), source_key, feature=feature
-                            )
-                        # 仅首次起点查空时回首页；真实续页到底后留待下一请求。
-                        if not illusts and (request_state is None or not request_state.source):
-                            logger.info(
-                                f"{LOG_PREFIX} Pixiv 起始空页已回到首页: "
-                                f"feature={feature} previous_offset={page_offset}"
-                            )
-                            if request_state is not None:
-                                request_state.retried_first_page = True
-                                page = await client.query_page(query, {"offset": 0})
-                                illusts = page.items
-                                request_state.next_params = page.next_params
-                                request_state.exhausted = page.next_params is None
-                            elif tag:
-                                illusts = await client.search(tag, offset=0)
-                            else:
-                                illusts = await client.recommended(offset=0)
-                            logger.info(
-                                f"{LOG_PREFIX} Pixiv 首页重查完成: feature={feature} "
-                                f"offset=0 candidate_count={len(illusts)}"
-                            )
-                if illusts or (request_state is not None and source == "pixiv" and request_state.next_params is not None):
-                    if request_state is not None:
-                        request_state.source = source
-                        if source == "lolicon":
-                            request_state.exhausted = False
+                            await self.image_index.reset_page_cursor(self._event_scope(event), source_key, feature=feature)
+                        if not state.source:
+                            logger.info(f"{LOG_PREFIX} Pixiv 起始空页已回到首页: feature={feature}")
+                            state.retried_first_page = True
+                            page = await client.query_page(query, {"offset": 0})
+                            illusts = page.items
+                            state.next_params, state.exhausted = page.next_params, page.next_params is None
+                            logger.info(f"{LOG_PREFIX} Pixiv 首页重查完成: feature={feature} offset=0 candidate_count={len(illusts)}")
+                if illusts or (source == "pixiv" and state.next_params is not None):
+                    state.source = source
                     return illusts, len(illusts), source_key
                 logger.info(
-                    f"{LOG_PREFIX} 图片源未返回候选: source={source} "
-                    f"fallback_allowed={'yes' if fallback_allowed else 'no'}"
+                    f"{LOG_PREFIX} 图片源未返回候选: source={source} feature={feature} "
+                    f"tag_configured={'yes' if tag else 'no'} fallback_allowed={'yes' if fallback_allowed else 'no'}"
                 )
             except Exception as exc:
                 logger.warning(
-                    f"{LOG_PREFIX} 图片源请求失败: "
-                    f"source={source} tag_configured={'yes' if tag else 'no'} "
-                    f"fallback_allowed={'yes' if fallback_allowed else 'no'} "
+                    f"{LOG_PREFIX} 图片源请求失败: source={source} feature={feature} "
+                    f"tag_configured={'yes' if tag else 'no'} fallback_allowed={'yes' if fallback_allowed else 'no'} "
                     f"error_type={type(exc).__name__}"
                 )
-        if request_state is not None:
-            request_state.exhausted = True
+        state.exhausted = True
         return [], 0, source_key
 
     async def _record_image_usage(
@@ -285,7 +237,7 @@ class SearchMixin:
             if query is not None and query.mode != "auto"
             else None
         )
-        return await SearchExecution(
+        execution = SearchExecution(
             self,
             event,
             tag,
@@ -297,4 +249,18 @@ class SearchMixin:
             selection=selection,
             candidate_stream=candidate_stream,
             rate_limit_checked=rate_limit_checked,
-        ).run()
+        )
+        if not self._p_charging_active():
+            return await execution.run()
+        users = getattr(self, "_paid_image_users", None)
+        if users is None:
+            users = self._paid_image_users = set()
+        user_id = str(event.get_sender_id() or "")
+        if user_id in users:
+            raise QueryError("busy", "当前已有一笔收费取图正在执行，请稍后另发消息再试。")
+        # 检查和登记之间没有 await；标记覆盖余额预检到结算清理完成。
+        users.add(user_id)
+        try:
+            return await execution.run()
+        finally:
+            users.discard(user_id)

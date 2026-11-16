@@ -46,7 +46,10 @@ def positive_id(value: object, *, artwork: bool = False) -> int:
         return value
     if isinstance(value, str):
         if artwork and value.startswith("https://"):
-            parsed = urlsplit(value)
+            try:
+                parsed = urlsplit(value)
+            except ValueError as exc:
+                raise QueryError("invalid_request", "需要正整数 ID 或标准 Pixiv 作品链接。") from exc
             match = re.fullmatch(
                 r"/(?:[a-z]{2}/)?artworks/([1-9][0-9]*)/?", parsed.path
             )

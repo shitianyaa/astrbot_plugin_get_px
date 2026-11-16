@@ -159,3 +159,20 @@ def test_next_year_failure_does_not_discard_current_year(tmp_path: Path) -> None
     future = datetime(current_year + 1, 1, 1, tzinfo=timezone.utc)
     calendar._state["last_attempt_at"] = (future - timedelta(days=2)).isoformat()
     assert calendar.should_refresh(now=future)
+
+
+def test_proxy_failure_is_logged_once_without_credentials_and_retains_retry_window(tmp_path):
+    from astrbot_plugin_get_px.pixiv.network import ProxyConnectionError
+    from astrbot_plugin_get_px.checkin import holiday
+    calendar = HolidayCalendar(tmp_path, plugin_version="test", proxy_url="http://user:secret@localhost:10808")
+    session = MagicMock()
+    session.get.side_effect = ProxyConnectionError("http://user:secret@localhost:10808")
+    context = AsyncMock()
+    context.__aenter__.return_value = session
+    with patch.object(holiday, "create_http_session", return_value=context), patch.object(holiday, "logger") as logger:
+        assert not __import__("asyncio").run(calendar.refresh_if_due())
+    logger.warning.assert_called_once()
+    message = logger.warning.call_args.args[0]
+    assert f"year={datetime.now().year}" in message and "error_type=ProxyConnectionError" in message
+    assert "secret" not in message and "localhost" not in message
+    assert not calendar.should_refresh()

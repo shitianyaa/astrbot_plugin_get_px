@@ -335,21 +335,13 @@ class SearchExecution:
                         raw_count=self.raw_count,
                     )
                 if not self.queue:
+                    await self._save_next_page()
                     if self.batch_attempts >= SEARCH_BATCH_ATTEMPTS or (
                         self.candidate_stream is not None
                         and self.candidate_stream.exhausted
                     ) or (self.candidate_stream is None and self.source_request.exhausted):
                         break
                     try:
-                        if (
-                            self.plugin.image_index is not None
-                            and self.candidate_stream is None
-                        ):
-                            await self.plugin.image_index.advance_page_offset(
-                                self.plugin._event_scope(self.event),
-                                self.source_key,
-                                self.raw_count,
-                            )
                         fetch = (
                             self._fetch_batch()
                             if self.candidate_stream is not None
@@ -468,7 +460,22 @@ class SearchExecution:
                             phase="release_usage",
                             delivery_status="not_submitted",
                         )
+        if not self.queue and all(str(item.get("id") or "") in self.attempted_ids for item in self.illusts):
+            await self._save_next_page()
         return True
+
+    async def _save_next_page(self):
+        if (
+            self.plugin.image_index is not None and self.candidate_stream is None
+            and self.source_request.source == "pixiv"
+        ):
+            try:
+                await self.plugin.image_index.save_page_cursor(
+                    self.plugin._event_scope(self.event), self.source_key,
+                    self.source_request.next_params,
+                )
+            except Exception as exc:
+                logger.warning(f"{LOG_PREFIX} 保存图片源续页位置失败: error_type={type(exc).__name__}")
 
     async def _pick_candidates(self, items, amount, *, raw_count=0):
         """等待去重占用结果，再记录本次待清理状态。"""
