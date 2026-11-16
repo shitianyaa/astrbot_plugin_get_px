@@ -1,15 +1,14 @@
 from __future__ import annotations
 
 import asyncio
-import re
 import time
 from dataclasses import dataclass, field
-from urllib.parse import parse_qs, urlsplit
 
 from astrbot.api import logger
 
 from .query import ArtworkQuery, QueryError
 from .network import normalize_proxy_url
+from .pagination import parse_continuation, validate_continuation
 
 
 @dataclass
@@ -27,41 +26,6 @@ class SourceRequest:
     exhausted: bool = False
     retried_first_page: bool = False
 
-
-def parse_continuation(value: object, endpoint: str, allowed: set[str]) -> dict | None:
-    if not value:
-        return None
-    if not isinstance(value, str):
-        raise QueryError("upstream_error", "图片源返回的续页信息无效。")
-    parsed, expected = urlsplit(value), urlsplit(endpoint)
-    if (parsed.scheme != "https" or parsed.netloc != expected.netloc
-            or parsed.path != expected.path or parsed.fragment):
-        raise QueryError("upstream_error", "图片源返回的续页地址不符合接口约定。")
-    params = parse_qs(parsed.query)
-    result = {}
-    for key in allowed:
-        values = params.get(key)
-        if key.endswith("[]"):
-            indexed = sorted(
-                (int(match[1]), group)
-                for name, group in params.items()
-                if (match := re.fullmatch(re.escape(key[:-2]) + r"\[([0-9]{1,4})\]", name))
-            )
-            if indexed:
-                if values is not None or len(indexed) > 1024 or any(
-                    index != position or len(group) != 1
-                    for position, (index, group) in enumerate(indexed)
-                ):
-                    raise QueryError("upstream_error", "图片源返回的分页数组无效。")
-                values = [group[0] for _, group in indexed]
-        if values is None:
-            continue
-        if not values or any(not v.isdigit() or len(v) > 20 for v in values):
-            raise QueryError("upstream_error", "图片源返回的分页参数无效。")
-        result[key.removesuffix("[]")] = [int(v) for v in values] if key.endswith("[]") else int(values[0])
-    if not result:
-        raise QueryError("upstream_error", "图片源未返回可使用的分页参数。")
-    return result
 
 LOG_PREFIX = "[GetPx]"
 
@@ -230,13 +194,11 @@ class PixivClient:
         return await self._public_page("search_user", {"word": word}, continuation, field="user_previews")
 
     async def _public_page(self, name, params, continuation, *, field="illusts") -> PixivPage:
-        allowed = {"offset"}
-        if name == "illust_related":
-            allowed.update({"seed_illust_ids[]", "viewed[]"})
-        if name == "illust_recommended":
-            allowed.update({"max_bookmark_id_for_recommend", "min_bookmark_id_for_recent_illust"})
-        if continuation and set(continuation) - {key.removesuffix("[]") for key in allowed}:
-            raise QueryError("invalid_request", "分页参数与接口不匹配。")
+        if continuation is not None:
+            try:
+                continuation = validate_continuation(name, continuation)
+            except ValueError as exc:
+                raise QueryError("invalid_request", "分页参数与接口不匹配。") from exc
         api = await self._acquire_api()
         try:
             method, endpoint = getattr(api.api, "illust_recommended_auth" if name == "illust_recommended" else name)
@@ -258,7 +220,7 @@ class PixivClient:
                 raise QueryError("upstream_error", "Pixiv 查询失败或响应结构无效。")
             if any(not isinstance(item, dict) for item in response[field]):
                 raise QueryError("upstream_error", "Pixiv 候选结构无效。")
-            return PixivPage(response[field], parse_continuation(response.get("next_url"), endpoint, allowed))
+            return PixivPage(response[field], parse_continuation(response.get("next_url"), endpoint, name))
         finally:
             await self._release_api()
 

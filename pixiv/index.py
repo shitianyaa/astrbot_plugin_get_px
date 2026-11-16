@@ -13,6 +13,7 @@ from zoneinfo import ZoneInfo
 from astrbot.api import logger
 
 from . import usage
+from .pagination import validate_continuation
 try:
     from ..checkin.schema import upgrade_image_index_schema
 except ImportError:  # Direct imports used by the test suite.
@@ -365,15 +366,8 @@ class ImageIndexStore:
 
     @staticmethod
     def _page_params(source_key: str, params: object) -> dict:
-        allowed = {"offset"}
-        if source_key == "pixiv:recommended":
-            allowed.update({"max_bookmark_id_for_recommend", "min_bookmark_id_for_recent_illust"})
-        if (
-            not isinstance(params, dict) or not params or set(params) - allowed
-            or any(type(value) is not int or value < 0 for value in params.values())
-        ):
-            raise ValueError("图片源续页参数无效")
-        return dict(params)
+        method = "illust_recommended" if source_key == "pixiv:recommended" else "search_illust"
+        return validate_continuation(method, params)
 
     def _get_page_cursor_sync(self, scope: str, source_key: str, feature: str = "normal") -> dict | None:
         conn = self._get_conn()
