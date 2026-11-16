@@ -474,21 +474,23 @@ async def test_repeated_cancellation_waits_for_started_settlement(tmp_path):
 
 @pytest.mark.asyncio
 async def test_current_group_rules_and_count_limit_are_authoritative(tmp_path):
-    from astrbot_plugin_get_px.group_safety import GroupSafetyService
+    from astrbot_plugin_get_px.group_safety import SessionSafetyService
     from astrbot_plugin_get_px.pixiv.filters import FiltersMixin
     from test_group_safety_config import Config
 
     plugin, context, _ = await setup_flow(tmp_path, items=1)
     service = ImageToolService(plugin)
-    plugin.group_safety_service = GroupSafetyService(Config({}))
-    await plugin.group_safety_service.upsert_group_policy(
-        "group:1", general_only_enabled=False, builtin_terms_enabled=False,
-        custom_terms=[], blacklisted_illust_ids=[]
-    )
+    plugin.safety_service = SessionSafetyService(Config(content_dedupe={}))
+    await plugin.safety_service.save_group({
+        "name": "插画", "sessions": [context.context.event.unified_msg_origin],
+        "allow_r18": True, "custom_terms": []
+    })
+    await plugin.safety_service.update_global({"keyword_match_mode": "严格"})
     plugin._content_safety_policy = lambda event: FiltersMixin._content_safety_policy(plugin, event)
     state = await service.get_context(context, {})
-    assert state["allow_r18"] and not state["builtin_terms_enabled"]
-    context.context.event.get_group_id = lambda: "other"
+    assert state["allow_r18"] and state["keyword_match_mode"] == "严格"
+    assert "builtin_terms_enabled" not in state and "safety_groups" not in state
+    context.context.event.unified_msg_origin = "bot-b:GroupMessage:1"
     assert not (await service.get_context(context, {}))["allow_r18"]
     plugin.config["max_count"] = 1
     with patch("astrbot_plugin_get_px.pixiv.execution.send_once",

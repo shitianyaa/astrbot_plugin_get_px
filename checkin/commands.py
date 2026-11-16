@@ -242,8 +242,8 @@ class CheckinCommandMixin:
         background: CardBackground | None = None
         card_path = ""
         preview_tier = self._configured_checkin_render_tier()
-        policy = await self._content_safety_policy(event)
         try:
+            policy = await self._content_safety_policy(event)
             background = await self._prepare_checkin_background(
                 event,
                 record,
@@ -687,8 +687,8 @@ class CheckinCommandMixin:
         render_spec = get_checkin_render_tier(self._configured_checkin_render_tier())
         background_quality = render_spec.background_quality
         output_width, output_height = calendar_output_size(render_spec.name)
-        policy = await self._content_safety_policy(event)
         try:
+            policy = await self._content_safety_policy(event)
             # key 与渲染共用事件快照，包含自定义事件及在线节假日的实际内容。
             raw_events = await self._collect_calendar_raw_events(target_month)
             if cache is not None:

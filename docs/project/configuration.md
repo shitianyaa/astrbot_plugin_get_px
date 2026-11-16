@@ -11,12 +11,12 @@
 | `lolicon_exclude_ai` | `bool` | `true` | 仅向 Lolicon API 传递 excludeAI=true/false；R18 与普通混合由当前会话强制普通分级决定 |
 | `lolicon_image_proxy_origins` | `text` | 空 | 每行一个 http(s) origin，最多 5 个按序尝试；仅改写允许列表内 Pixiv 图片主机 |
 | `max_count` | `int` | `5` | 命令和模型工具的单次数量上限，范围 1–20；普通模型取图省略 count 时取 1 张，指定作品按目标数执行，默认值不覆盖已保存的配置 |
-| `p_coin_cost` | `int` | `20` | 命令和模型工具共用的每张金币，范围 0–200；0 免费；正常返回与发送超时均扣费，下载／构建失败及其他发送异常不扣费 |
+| `p_coin_cost` | `int` | `20` | 命令和模型工具共用的每张金币，范围 0–200；签到关闭或单价为0时免费；收费时正常返回与发送超时均扣费，下载／构建失败及其他发送异常不扣费 |
 | `image_quality` | `enum` | `original` | `original`/`large`/`medium`；固定所选画质，超限／不可用时换作品 |
 | `auto_downgrade_original_mb` | `float` | `10.0` | 图片大小上限（MiB），适用于所选画质，范围 0–25；0 关闭软上限；保留旧键并沿用已有数值 |
 | `forward_threshold` | `int` | `1` | 命令使用；模型工具仅 send_mode=auto 时使用。下载张数严格大于此值时合并转发（仅 aiocqhttp）；0 始终合并，范围 0–20 |
 
-`preferred_image_source` 保存并重载后生效，普通发图、签到背景与日历背景共用请求顺序。Lolicon 有标签时搜索、无标签时随机；Pixiv 有标签时搜索、无标签时推荐。无 Pixiv token 时直接使用 Lolicon；两源均失败或无结果时按各入口现有失败路径处理。单张候选被过滤、去重或下载失败不直接触发换源；普通发图耗尽本批可用候选后按相同优先级补取，请求失败或空结果时仍可回退另一源；有效缓存及已保存背景继续复用，不因切换优先级强制重选。无效选项记录日志并使用默认 Lolicon 优先。
+`preferred_image_source` 保存并重载后生效，普通发图、签到背景与日历背景共用初始请求顺序。Lolicon 有标签时搜索、无标签时随机；Pixiv 有标签时搜索、无标签时推荐。无 Pixiv token 时直接使用 Lolicon；首次请求失败或无结果时尝试可用的另一源。普通取图选定来源后，本请求内保持该来源，Pixiv 沿真实游标续查，Lolicon 有限重抽；单张候选被过滤、去重或下载失败不直接触发换源。有效缓存及已保存背景继续复用，不因切换优先级强制重选。无效选项记录日志并使用默认 Lolicon 优先。
 
 普通发图先用同批剩余候选补足张数，每次请求最多取 3 批、实际尝试 20 张作品，同一作品 ID 不重复下载。大小等于上限可发送；超限、所选画质地址缺失或下载失败则换图，不尝试其他画质。反代与源地址重试保持同一画质。跳过候选清理文件并释放临时占用，最终按实际发送调用结果结算；不足时发送已找到的图片。签到和日历仍使用独立画质规则，不应用此软上限。
 
@@ -45,16 +45,18 @@ Lolicon API 返回作品信息和各档图片 URL，插件筛选后直接下载�
 
 地区建议来自 [Pixiv.cat 反代说明](https://pixiv.cat/reverseproxy.html)；[木辛木杉服务](https://i.muxmus.com/) 提醒节制使用、不要用于爬虫。公共服务可能限速或停服，请使用可信服务；旧教程中的 `i.yuki.sh` [已停止服务](https://blog.yuki.sh/posts/599ec3ed8eda/)。
 
-## 2. 图片筛选与去重（`content_dedupe`）
+## 2. 图片筛选与安全策略（`content_dedupe`）
 
 | 字段 | 类型 | 默认值 | 说明 |
 | --- | --- | --- | --- |
 | `filter_manga` | `bool` | `true` | 过滤 Pixiv 结果中的 manga；Lolicon 返回按插画处理 |
-| `group_content_safety_policies` | `template_list` | `[]` | 群聊内容安全策略：强制普通分级、内置安全词开关、独立自定义屏蔽词与独立作品 ID 黑名单，按群 ID 生效；建议在管理中心维护 |
-| `private_content_safety_policies` | `template_list` | `[]` | 私聊内容安全策略：字段同群聊策略，按用户 ID 独立生效；建议在管理中心维护 |
-| `group_content_safety_policies_migrated` | `bool` | `false` | 会话策略迁移标记（隐藏） |
+| `global_safety_terms` | `list` | `[]` | 全局屏蔽关键词；与分组关键词叠加 |
+| `keyword_match_mode` | `string` | `宽松` | 下拉选择宽松／严格，对所有关键词生效 |
+| `global_blacklisted_illust_ids` | `list` | `[]` | 每项一个正整数 ID 字符串，所有会话生效；同 PID 分页图片也拦截 |
+| `safety_groups` | `template_list` | `[]` | 名称、完整 UMO 列表、允许 R18、附加关键词 |
+| `safety_rules_version` | `int` | `0` | 隐藏迁移版本；初始化完成后为 1，防止旧库规则复活 |
 
-图片去重采用固定业务窗口，不再提供 `dedupe_days`：普通取图滚动10分钟，签到背景最近2个北京时间自然日，历史相互独立；同会话按作品页合并跨标签、图源和入口的记录。JPEG、日历和预览缓存有效期不变。
+`content_dedupe` 是沿用的内部配置键；本组不再提供去重选项。图片去重采用固定业务窗口：普通取图滚动10分钟，签到背景最近2个北京时间自然日，历史相互独立；同会话按作品页合并跨标签、图源和入口的记录。详见[缓存与去重](cache-and-dedupe.md)。
 
 ## 3. 万象画卷联动（`checkin_omnidraw`）
 
@@ -82,7 +84,7 @@ Lolicon API 返回作品信息和各档图片 URL，插件筛选后直接下载�
 | `checkin_ai_greeting_timeout` | `float` | `8.0` | AI 问候超时，1–30 秒 |
 | `checkin_hitokoto_timeout` | `float` | `5.0` | 一言请求超时，1–15 秒 |
 | `checkin_background_mode` | `enum` | `pixiv_daily` | `pixiv_daily`(每日自动选背景)/`custom`(固定背景文件) |
-| `checkin_background_tag` | `string` | 空 | 多标签随机排列逐个尝试，使用记录按最终标签隔离；留空按所选优先级请求 Lolicon 随机或 Pixiv 推荐作品 |
+| `checkin_background_tag` | `string` | 空 | 多标签随机排列逐个尝试，同会话签到背景历史跨标签共享；留空按所选优先级请求 Lolicon 随机或 Pixiv 推荐作品 |
 | `checkin_custom_background` | `string` | 空 | 管理员本地背景路径，推荐 3:4 竖图 |
 
 ## 5. 签到商店与定价（`checkin_shop`）
@@ -100,8 +102,8 @@ Lolicon API 返回作品信息和各档图片 URL，插件筛选后直接下载�
 | --- | --- | --- | --- |
 | `network_proxy_url` | `string` | 空 | 插件自有请求的出站代理，支持 HTTP／SOCKS5；留空直连，不读取环境代理 |
 | `network_proxy_mode` | `enum` | `全部走代理` | 可选 `Lolicon API 不走代理`，仅豁免元数据 API，图片仍走代理 |
-| `request_timeout` | `float` | `30.0` | 单张图片下载最大等待，5–120 秒 |
-| `rate_limit_seconds` | `int` | `3` | 同一用户两次请求最小间隔，0 禁用，0–60 秒 |
+| `request_timeout` | `float` | `30.0` | 上游查询和单张下载的超时基准，5–120 秒；累计选图预算及框架超时另行约束 |
+| `rate_limit_seconds` | `int` | `3` | 同一用户取图消息最小间隔，0 禁用，0–60 秒；公开查询单独限频，同条模型消息后续任务共享首次准入 |
 | `webui_font_source` | `enum` | `mirror` | 插件管理中心 Google Fonts 加载方式：`mirror`(国内镜像)/`official`/`none` |
 
 ### 出站代理
@@ -122,21 +124,27 @@ Lolicon API 返回作品信息和各档图片 URL，插件筛选后直接下载�
 
 ## 会话内容安全策略
 
-群聊和私聊策略均为配置文件中的模板列表，可在插件配置页或管理中心按群 ID / 用户 ID 独立添加、编辑、删除。每条策略包含普通分级、内置安全词、独立自定义屏蔽词和独立作品 ID 黑名单。
-独立屏蔽词按保留标点的词条分别保存，例如 `r18g` 与 `r-18g` 是两个词条；全角/半角及大小写等价项会判重，过滤匹配仍忽略常见分隔符。
+安全配置统一位于 `content_dedupe`；配置页与 Pages 修改同一份配置，不再从 SQLite 读取运行时关键词／黑名单。
 
-| 启用内置安全词 | 生效规则 |
-| --- | --- |
-| 开启 | 内置安全词 + 内容安全页全局自定义屏蔽词/作品黑名单；忽略当前会话的两份独立列表。 |
-| 关闭 | 停止以上三类全局约束；仅使用当前会话独立自定义屏蔽词和独立作品 ID 黑名单。 |
+每个 `safety_groups` 条目包含 `name`、`sessions`、`allow_r18=false`、`custom_terms=[]`。隐藏 `group_id` 由服务生成并持久化，只用于稳定编辑身份。`sessions` 使用 `/sid` 返回的完整 `平台实例:消息类型:会话ID`；一个 UMO 只能归属一个分组，不猜测裸群号／用户号对应哪个 Bot。
 
-独立列表支持分别应用到所有群聊策略、所有私聊策略或全部策略；批量操作只覆盖对应字段，并在一次保存中完成，失败时回滚。缺少会话上下文、策略不存在或读取异常时严格启用普通分级和内置安全词。
+管理中心新建、编辑共用居中弹窗，会话和附加词按行输入，R18 默认关闭。窄屏可滚动，操作栏保留在底部；保存失败保留草稿，放弃未保存修改前确认。
+
+- 未分组或无会话上下文：全局规则＋R18 关闭。有效分组：全局词＋组词，全局作品 ID 黑名单始终生效。
+- 只有一个全局匹配模式。宽松匹配完整原标签与翻译标签；严格另外匹配标题子串。查询词在宽松模式完整匹配、严格模式按子串预检；均不执行正则／通配符、不检查简介。
+- NFKC、casefold、首尾空白规范化；词内空格、连字符等分隔符不删除。关键词最多 64 字符；作品 ID 必须为 ASCII 正整数文本，前导零归一化。
+- 分组 R18 开启表示允许混合分级候选，不是只检索 R18。分级、词、ID 同时校验；规则读取／校验失败拒绝请求。
+- 旧群／私聊编辑和批量复制 API 已删除。保存失败恢复内存配置及列表引用，后续请求不使用未保存草稿。
 
 ## 升级基线
 
 v3.8.8 移除固定句式发图及 `auto_trigger_enabled` 开关，旧键由 AstrBot 按 schema 在加载时清除。聊天取图改用模型原生工具；消息需进入模型对话且工具可用，不使用模型时仍可用 `/p`。纯文本「签到」保留。
 
-v3.8.7 的配置升级基线为已成功完成迁移的 v3.8.0，配置只保留六个分组。顶层旧扁平兼容键、`content_dedupe.dedupe_ttl_hours`、`content_dedupe.dedupe_days_migrated` 和 `runtime._grouped_config_migrated` 已移除；正式字段的默认值与策略模板不变。`group_content_safety_policies_migrated` 仍用于 SQLite 旧群策略迁移，不能作为无用标记删除。
+配置升级基线仍为已完成迁移的 v3.8.0，顶层仅保留六个正式分组。旧小时去重与扁平配置迁移不恢复。`content_dedupe` 中隐藏保留旧 `group_content_safety_policies`、`private_content_safety_policies` 和旧迁移标记，仅供归档；旧模板和运行逻辑已删除。不能先删桥接键：AstrBot 在插件初始化前会裁剪 schema 外字段。
+
+首次初始化按内容哈希原子写入 `safety_legacy_backups/legacy-<sha256>.json` 并读回核对，归档旧配置、历史数据库策略、全局词及作品元信息。核对成功才保存版本 1 并清空旧配置列表；失败停止加载，不猜 UMO 或继承旧 R18。旧全局人工词与作品 ID 合并进新配置，旧局部列表只归档。版本 1 后不再读旧来源，删除的新规则不会重载复活。SQLite 历史策略表保留为只读历史，schema3 在配置保存后经备份收敛回 v2，不删除签到／金币／去重数据。
+
+管理中心数据导出包含 `checkin`、`safety`、`blacklist_metadata` 和 `legacy_safety_archives`，不包含凭据。导入包只恢复签到并提前创建回滚备份；当前安全配置及旧档案均不导入。旧签到 JSON 仍可导入，旧安全档案不能单独恢复。
 
 升级前备份插件配置 JSON 和数据目录。早于 v3.8.0 的版本须先安装 v3.8.0、成功启动，并确认自定义值及群／私聊策略已保存到对应分组后再升级。仅存在于顶层的值不属于支持范围；AstrBot 4.27.3 在插件初始化前删除 schema 外的键，插件无法在裁剪后找回旧值。若来自 v2.8.x 或已有数据但数据库无 schema 版本号，先使用 v3.0.0 完成签到数据迁移，再经过 v3.8.0 完成配置迁移。不要先升级再依赖回退旧版本恢复配置。
 
@@ -150,13 +158,13 @@ v3.8.7 的配置升级基线为已成功完成迁移的 v3.8.0，配置只保留
 - `content_dedupe.dedupe_days` 已从 schema 移除，框架加载时裁剪旧键；运行时不再读取旧值。历史行沿用原表并按新窗口筛选，不新增数据库 schema。
 - `image_quality` 不影响签到背景，签到卡/日历背景画质由 `checkin_card_quality_tier` 独立控制。
 - `pixiv_refresh_token` 留空时跳过 Pixiv，仅请求 Lolicon；失败或无结果时不再有可用回退源。
-- schema 顶层仅定义六个正式分组，不再复制隐藏兼容键。策略服务只读写 `content_dedupe` 的正式模板；分组中的空列表不得恢复已停用的顶层策略。
+- schema 顶层仅定义六个正式分组。安全服务只读写 `content_dedupe`；嵌套旧桥接键仅归档，空列表不恢复已停用的顶层策略。
 
 ## 模型取图参数
 
 `/p` 统一随机及组合搜索，复用图源优先级；`/pd` 指定作品单页、`/pr` 榜单固定使用 Pixiv。三者和模型工具共用领域执行，沿用命令账单与合并阈值，不新增配置。`/ps` 已移除。
 
-v3.8.8 新增的出站代理配置由管理员设置，不暴露为模型工具参数。原生工具沿用 `max_count`、`p_coin_cost`、`checkin_enabled`、图源、画质、大小上限和现有群聊／私聊安全策略。模式、目标、数量、发送及筛选参数仅作用于本次工具调用，完整约束见 [随包 Skill](../../skills/get-px-image/SKILL.md)。默认 `single`；`auto` 才使用 `forward_threshold`，`forward` 仍受 OneBot 平台能力限制。
+v3.8.8 新增的出站代理配置由管理员设置，不暴露为模型工具参数。原生工具沿用 `max_count`、`p_coin_cost`、`checkin_enabled`、图源、画质、大小上限和当前完整 UMO 安全分组。模式、目标、数量、发送及筛选参数仅作用于本次工具调用，完整约束见 [随包 Skill](../../skills/get-px-image/SKILL.md)。默认 `single`；`auto` 才使用 `forward_threshold`，`forward` 仍受 OneBot 平台能力限制。
 
 模型工具数量结果中，`requested_count` 是请求数量，`effective_count` 是应用配置及余额限制后的执行数量，`max_count` 是本次读取的上限，`count_limits` 列出 `max_count`／`balance`（可同时存在）。缩减原因通过 `notice` 说明；实际候选不足另由 `message` 说明，均不代表标签失效。搜索日志分别记录原始请求数、实际执行数与配置上限。
 

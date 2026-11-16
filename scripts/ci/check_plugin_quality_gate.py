@@ -30,6 +30,7 @@ def main() -> int:
             "compileall",
             "-q",
             "main.py",
+            "group_safety.py",
             "checkin",
             "pixiv",
             "tools",
@@ -39,6 +40,8 @@ def main() -> int:
         ),
         (python, "-m", "json.tool", "_conf_schema.json"),
         ("node", "--check", "pages/pluginCenter/app.js"),
+        ("node", "--check", "pages/pluginCenter/safety.mjs"),
+        ("node", "--test", "tests/js/safety.test.mjs"),
         (python, "-m", "pytest", "-v", "tests"),
     )
     for command in checks:

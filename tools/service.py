@@ -7,7 +7,7 @@ import math
 import time
 
 from astrbot.api import logger
-from astrbot.core.platform.message_session import MessageSession
+from ..group_safety import normalize_session
 
 from ..pixiv.constants import MAX_IMAGE_COUNT
 from ..pixiv.selection import ImageSelection, SELECTION_PARAMETERS
@@ -17,19 +17,6 @@ from .definitions import MAX_TOOL_TAG_LENGTH
 from .requests import EventRequests
 from .images import GetPxImageTool, GetPxContextTool
 from .discovery import GetPxArtworksTool, GetPxUsersTool
-
-
-def normalize_session(value: object) -> str:
-    if (
-        not isinstance(value, str)
-        or not value.strip()
-        or any(ord(char) < 32 for char in value)
-    ):
-        raise ValueError("会话必须为完整 UMO")
-    session = MessageSession.from_str(value.strip())
-    if not session.platform_id.strip() or not session.session_id.strip():
-        raise ValueError("会话必须包含平台实例和会话 ID")
-    return str(session)
 
 
 class ImageToolService:
@@ -275,7 +262,7 @@ class ImageToolService:
                 ),
                 "forward_threshold": self.plugin._forward_threshold(),
                 "allow_r18": not policy.general_only_enabled,
-                "builtin_terms_enabled": policy.builtin_terms_enabled,
+                "keyword_match_mode": policy.match_mode,
                 "capabilities": {
                     "configured_sources": ["lolicon"]
                     + (

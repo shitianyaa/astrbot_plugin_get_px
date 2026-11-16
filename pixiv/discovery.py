@@ -86,14 +86,10 @@ class DiscoveryService:
         self.last_request.clear()
 
     async def binding(self, event, policy):
-        terms = await self.plugin._safety_terms(policy)
-        blocked = await self.plugin._blacklisted_illust_ids(policy)
         identity = (
             event.unified_msg_origin,
             event.get_sender_id(),
             policy.cache_identity(),
-            sorted(terms),
-            sorted(blocked),
             self.plugin._cfg_bool("filter_manga", True),
             self.plugin._cfg_str("pixiv_refresh_token", ""),
             self.plugin._cfg_str("preferred_image_source", "Lolicon"),

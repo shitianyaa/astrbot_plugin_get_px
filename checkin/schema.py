@@ -78,15 +78,6 @@ class SchemaMixin:
             source.backup(target)
         return backup_path
 
-    def has_legacy_group_policy_table(self) -> bool:
-        with closing(self._connect()) as conn:
-            return bool(
-                conn.execute(
-                    "SELECT 1 FROM sqlite_master "
-                    "WHERE type = 'table' AND name = 'group_content_safety'"
-                ).fetchone()
-            )
-
     def converge_legacy_group_policy_schema(self) -> dict[str, object]:
         """Back up schema3, retain its tables, and lower only ``user_version``."""
         with closing(self._connect()) as conn:

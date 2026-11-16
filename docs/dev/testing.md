@@ -1,5 +1,15 @@
 # 测试与回归检查
 
+## 测试原则
+
+只保留值得长期维护的功能与边界测试；短期诊断、历史修复过程和文案快照不进入长期测试集。测试按领域组织，优先复用现有场景覆盖行为、数据安全、单位切换和异常分类。
+
+- UI布局、CSS取值、类名、固定帮助图高度与中文提示由人工／浏览器检查，不通过源码字符串快照锁定。
+- 前端长期测试保留打包资源、相对桥接路径、草稿深拷贝和 UMO 单组边界；页面读写与错误交互由浏览器检查，不保留旧作用域批量复制状态机或布局快照。
+- 模板保留自包含、资源可解码性和渲染画布边界，不绑定字体名字或页面区域类名。
+- 当前仍支持的旧数据库迁移、备份及回滚是长期数据安全边界，不能因为名称包含旧版本就删除。
+- 共用场景能覆盖同一功能时合并，独立调用路径、失败时点与安全边界不因相似命名删掉。
+
 ## 基础命令
 
 | 场景 | 工作目录 | 命令 |
@@ -7,6 +17,7 @@
 | Python 语法检查 | 插件目录 | `python -m compileall -q main.py checkin pixiv tools plugin_api scripts/ci tests` |
 | JSON schema 检查 | 插件目录 | `python -m json.tool _conf_schema.json` |
 | JavaScript 语法检查 | 插件目录 | `node --check pages/pluginCenter/app.js` |
+| 管理页状态测试 | 插件目录 | `node --test tests/js/safety.test.mjs` |
 | pytest 全部测试 | 插件目录 | `python -m pytest -v tests` |
 | pytest 快速测试 | 插件目录 | `python -m pytest -q tests` |
 | pytest 特定模块 | 插件目录 | `python -m pytest tests/test_checkin_*.py -v` |
@@ -18,7 +29,7 @@
 
 ## PR 快速 CI
 
-PR 快速 CI（`AstrBot Plugin Quality Gate`，`.github/workflows/plugin-quality-gate.yml`）在 Ubuntu + Python 3.12 下安装最新正式版 AstrBot，通过 `scripts/ci/check_plugin_quality_gate.py` 执行 Python 编译检查、JSON schema 检查、前端 JavaScript 语法检查和全量 `python -m pytest -v tests`；同一个检查脚本也可以在本地执行。生命周期检查脚本只服务于独立的 `AstrBot Plugin Lifecycle` CI。
+PR 快速 CI（`AstrBot Plugin Quality Gate`，`.github/workflows/plugin-quality-gate.yml`）在 Ubuntu + Python 3.12 下安装最新正式版 AstrBot，通过 `scripts/ci/check_plugin_quality_gate.py` 执行 Python 编译检查、JSON schema 检查、前端 JavaScript/ES module 语法、分组草稿 JS 测试和全量 `python -m pytest -v tests`；同一个检查脚本也可以在本地执行。生命周期检查脚本只服务于独立的 `AstrBot Plugin Lifecycle` CI。
 
 本地等价质量门禁（在已安装项目依赖、`pytest`、`pytest-asyncio` 和 Node.js 的环境中执行）：
 
@@ -50,7 +61,7 @@ python scripts/ci/check_plugin_lifecycle.py \
 | Python 业务逻辑 | 语法检查、相关测试 | 命令路径手工验证 | 不要只跑被改函数附近的测试。 |
 | 签到卡片渲染 | 语法检查、相关测试 | `/签到` 手工生成卡片 | 关注 T2I、主题、背景选择。 |
 | 配置 schema | 语法检查、JSON 格式检查 | README 与配置文档同步核对 | 旧配置是否还能被容忍。 |
-| 发图逻辑 | 语法检查、相关测试 | `/p 标签 2`、`/p 2`；开启自动触发后发送「来张图」 | 固定画质、大小筛选、换图补足、去重、过滤。 |
+| 发图逻辑 | 语法检查、相关测试 | `/p 标签 2`、`/p 2`、`/pd 作品ID`、`/pr 周 2`；模型对话中确认原生工具调用 | 固定画质、大小筛选、换图补足、去重、过滤。 |
 | 下载器 | 语法检查、下载器测试 | 实际下载验证 | 同画质反代轮换、大小边界、背景画质回退。 |
 | 前端页面 | JavaScript 语法检查 | 打开 Plugin Pages 验证 | API 调用、数据展示、操作反馈。 |
 
@@ -146,7 +157,8 @@ python -m pytest tests/test_command_registration.py -v
 
 ```bash
 node --check pages/pluginCenter/app.js
-# 手工验证：打开 Plugin Pages 管理中心
+node --test tests/js/safety.test.mjs
+# 手工验证：页面加载、导航、草稿确认、读写、重置与移动端
 ```
 
 ## 出站代理验证
@@ -260,7 +272,7 @@ python -m pytest -q tests/test_checkin_cache.py tests/test_checkin_calendar.py t
 
 ## 配置升级回归
 
-运行 `python -m pytest -q tests/test_config_upgrade.py tests/test_group_safety_config.py tests/test_checkin_group_safety.py`。`tests/fixtures/config_v3_8_0_grouped.json` 是按 v3.8.0 分组格式构造的合成配置，不含用户数据。使用已安装 AstrBot 的真实 `AstrBotConfig` 加载、裁剪、保存、重载，核对六组自定义值、首选图源默认与保存重载、旧 Lolicon 地址裁剪、去重天数、群／私聊独立列表与元数据保留，确认分组空列表不复活顶层旧策略，以及新安装默认值正常。
+运行 `python -m pytest -q tests/test_config_upgrade.py tests/test_group_safety_config.py tests/test_checkin_group_safety.py`。`tests/fixtures/config_v3_8_0_grouped.json` 是按 v3.8.0 分组格式构造的合成配置，不含用户数据。使用已安装 AstrBot 的真实 `AstrBotConfig` 加载、裁剪、保存、重载，核对六组自定义值、首选图源默认与保存重载、旧 Lolicon 地址裁剪、去重天数、隐藏旧列表原样归档、全局人工规则保留、完整 UMO 单组归属、保存／归档失败不清配置，确认旧词在版本 1 重载时不会复活，以及新安装默认值正常。
 
 这些用例不调用 v3.8.0 的旧迁移代码，不证明更早版本可直接升级；它们验证已完成分组迁移的配置与当前 schema 的兼容性。本机验证框架为 AstrBot 4.27.3，不替代生产升级或其他框架版本验证。
 
@@ -298,7 +310,7 @@ python -m pytest -q tests/test_checkin_cache.py tests/test_checkin_calendar.py t
 
 扩展取图还覆盖关联种子与结果尺寸分离、Lolicon具体页码和未知总页数、非首张的实际文件尺寸校验，以及指定详情过滤状态。
 
-`tests/test_filtering.py` 使用真实 SQLite 索引覆盖随机选图与上游顺序的独立开关、开启／关闭去重，以及整页已用时仅普通模式推进命令游标；明确 Pixiv 模式不得推进命令游标。
+`tests/test_filtering.py` 使用真实 SQLite 索引覆盖随机选图与上游顺序选择，以及指定作品忽略完成历史的内部路径；普通取图固定启用10分钟窗口。选图层不推进分页，`test_image_paging.py` 验证执行层沿真实 Pixiv 游标补取，避免重复推进。
 
 ## 公开作品热度
 
@@ -307,3 +319,14 @@ python -m pytest -q tests/test_checkin_cache.py tests/test_checkin_calendar.py t
 工具入口、共享参数及执行编排分别位于 tools/images.py、tools/discovery.py、tools/definitions.py 和 tools/service.py；发图执行位于 pixiv/execution.py。现有测试的发送与时钟替身注入执行模块，工具服务直接从 tools/service.py 导入，不保留旧路径别名。结构整理复用现有领域回归，不新增拆分专用用例。
 
 模型多任务回归复用 tests/test_public_discovery.py 和 tests/test_image_tools.py 的领域场景，验证同消息三个不同角色、统一发送准入、并发总名额与余额、未提交后重试、送达未知只阻止同任务重试，以及换查询条件不续期。模型任务协调位于 tools/requests.py，结果投影位于 tools/results.py，领域发送和结算继续独立验证。
+多图时间预算回归用模拟时钟验证 1／5／20 张及 5／30 秒超时配置不会被固定 90 秒截断；超限拒绝测试走真实下载器并验证清理及错误类型分类。
+
+## 安全分组与管理页
+
+- `tests/test_filtering.py`：宽松／严格、完整翻译标签、标题与简介边界、规范化、R18／关键词／PID 同快照生效、规则故障拒绝。
+- `tests/test_group_safety_config.py`、`test_config_upgrade.py`、`test_checkin_group_safety.py`：完整 UMO 隔离、重复归属拒绝、真实 AstrBot 配置加载、旧库原始词保留、原子归档核对、失败不清与幂等、SQLite 备份／回滚和签到历史保留。
+- `tests/test_main_error_handling.py`、`test_checkin_calendar.py`：实际规则变化使缓存失效、进行中快照不受配置并发变化影响；相同规则可复用。
+- `tests/test_plugin_management_api.py`、`test_checkin_backup_web.py`：配置／Pages 同源、辅助信息不决定黑名单、数据包无凭据、导入只恢复签到、原回滚保护。
+- `node --test tests/js/safety.test.mjs`：草稿深拷贝、R18 默认关闭、UMO 单组验证。旧状态机与专属测试已删除，不保留布局／台词／历史实现身份快照。
+- 页面接线及视觉用浏览器验证：新建、编辑、保存失败、草稿关闭确认、重复 UMO、删除、模式／全局词、导出；桌面与移动端检查弹窗溢出、焦点和滚动。离线 bridge 验证不等于真实 AstrBot 页面鉴权或 QQ 端到端。
+- `test_pixiv_commands.py` 以真实分组服务验证公开查询与指令／工具发送：全局与组词叠加、同群号跨 Bot 隔离，以及查询后规则变更在下载前拒绝并且不扣费。公开查询的旧游标在规则变化后失效，包括同事件的已缓存页面。

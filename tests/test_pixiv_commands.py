@@ -86,6 +86,56 @@ async def collect(plugin, event, method, text=GreedyStr):
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("entry", ["command", "tool"])
+async def test_named_groups_filter_queries_and_recheck_rules_before_send(tmp_path, entry):
+    from astrbot_plugin_get_px.group_safety import SessionSafetyService
+    from astrbot_plugin_get_px.pixiv.filters import FiltersMixin
+    from test_group_safety_config import Config
+
+    plugin, context, _, service = await flow(tmp_path, items=1)
+    plugin._handle_pixiv_command = PixivCommandMixin._handle_pixiv_command.__get__(plugin)
+    plugin._ensure_client_or_error = lambda event: True
+    event = context.context.event
+    event.stop_event = Mock()
+    plugin.safety_service = SessionSafetyService(Config(content_dedupe={}))
+    plugin._content_safety_policy = lambda event: FiltersMixin._content_safety_policy(plugin, event)
+    await plugin.safety_service.update_global({
+        "global_safety_terms": ["global"], "global_blacklisted_illust_ids": ["5"]
+    })
+    await plugin.safety_service.save_group({
+        "name": "插画", "sessions": [event.unified_msg_origin],
+        "allow_r18": True, "custom_terms": ["local"]
+    })
+    items = [_illust(i) for i in range(1, 6)]
+    items[0]["tags"] = [{"name": "local"}]
+    items[1]["tags"] = [{"name": "global"}]
+    items[2]["x_restrict"] = 1
+    plugin.client.query_page.return_value = PixivPage(items)
+    plugin.client.public_detail.side_effect = lambda identity: items[int(identity) - 1]
+    first = await service.query(context, "artworks", {"mode": "ranking"})
+    assert [record["id"] for record in first["records"]] == ["3", "4"]
+    event.unified_msg_origin = "bot-b:GroupMessage:1"
+    other = await service.query(context, "artworks", {"mode": "ranking"})
+    assert [record["id"] for record in other["records"]] == ["1", "4"]
+    event.unified_msg_origin = "bot-a:GroupMessage:1"
+    # 查询不预留旧策略；两个发送入口都须重新检查。
+    await plugin.safety_service.change_global_item("global_blacklisted_illust_ids", "3")
+
+    async def send_target(identity):
+        if entry == "tool":
+            return await service.image(context, {"mode": "artwork", "targets": [{"artwork": identity}]})
+        return [result async for result in plugin._handle_pixiv_command(event, "artwork", identity)]
+
+    with patch("astrbot_plugin_get_px.pixiv.execution.send_once", AsyncMock(return_value=DeliveryStatus.CONFIRMED)) as send:
+        await send_target("3")
+        send.assert_not_awaited()
+        plugin.downloader.download_for_send.assert_not_awaited()
+        await send_target("4")
+    send.assert_awaited_once()
+    assert (await plugin.checkin_store.find_profile("10001")).coins == 80
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize("forward", [False, True])
 @pytest.mark.parametrize("method,text,mode,expected", [
     (GetPxPlugin.cmd_p, "白子 蔚蓝档案 2", "auto", "白子 蔚蓝档案"),

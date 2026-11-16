@@ -46,6 +46,8 @@ class FakeEvent:
 
 def make_plugin(data_dir: str) -> GetPxPlugin:
     plugin = object.__new__(GetPxPlugin)
+    from astrbot_plugin_get_px.pixiv.safety import ContentSafetyPolicy
+    plugin._content_safety_policy = AsyncMock(return_value=ContentSafetyPolicy())
     plugin.checkin_store = CheckinStore(data_dir)
     return plugin
 

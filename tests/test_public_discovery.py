@@ -153,8 +153,6 @@ async def test_unknown_task_blocks_only_its_own_repeat(tmp_path):
 async def flow(tmp_path, items=10):
     plugin, context, paths = await setup_flow(tmp_path, items=items)
     for name in (
-        "_safety_terms",
-        "_blacklisted_illust_ids",
         "_blocked_query_term",
         "_filter_blacklisted_illusts",
         "_pick_illusts",
@@ -592,7 +590,12 @@ async def test_real_sdk_executor_exposes_query_tools_as_text(tmp_path):
 
 @pytest.mark.asyncio
 async def test_cursor_expiry_and_actual_rules_are_checked_even_for_event_memo(tmp_path):
+    from astrbot_plugin_get_px.group_safety import SessionSafetyService
+    from test_group_safety_config import Config
+
     plugin, context, _, service = await flow(tmp_path)
+    plugin.safety_service = SessionSafetyService(Config(content_dedupe={}))
+    plugin._content_safety_policy = lambda event: FiltersMixin._content_safety_policy(plugin, event)
     first = await service.query(context, "artworks", {"mode": "ranking", "limit": 1})
     token = next_cursor(first)
     await service.query(context, "artworks", {"cursor": token})
@@ -601,12 +604,10 @@ async def test_cursor_expiry_and_actual_rules_are_checked_even_for_event_memo(tm
         "status"
     ] == "cursor_invalid"
     fresh = await service.query(context, "artworks", {"mode": "ranking", "limit": 2})
-    plugin.image_index = ImageIndexStore(tmp_path)
-    await plugin.image_index.add_safety_term("new-block")
+    await plugin.safety_service.change_global_item("global_safety_terms", "new-block")
     assert (await service.query(context, "artworks", {"cursor": next_cursor(fresh)}))[
         "status"
     ] == "cursor_invalid"
-    plugin.image_index.close()
 
 
 @pytest.mark.asyncio
