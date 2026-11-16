@@ -145,10 +145,10 @@ class SearchMixin:
                         f"cursor_keys={','.join((continuation or {}).keys()) or 'none'} "
                         f"candidate_count={len(illusts)} has_next={'yes' if page.next_params is not None else 'no'}"
                     )
-                    if use_page_cursor and any((continuation or {}).values()) and state.exhausted:
+                    if use_page_cursor and not illusts and any((continuation or {}).values()) and state.exhausted:
                         if self.image_index is not None:
                             await self.image_index.reset_page_cursor(self._event_scope(event), source_key, feature=feature)
-                        if not illusts and not state.source:
+                        if not state.source:
                             logger.info(f"{LOG_PREFIX} Pixiv 起始空页已回到首页: feature={feature}")
                             state.retried_first_page = True
                             page = await client.query_page(query, {"offset": 0})

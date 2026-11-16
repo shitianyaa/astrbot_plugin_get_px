@@ -708,5 +708,80 @@ async def test_checkin_empty_pages_preserve_next_position_after_batch_budget(tmp
         plugin.image_index.close()
 
 
+@pytest.mark.asyncio
+@pytest.mark.parametrize("candidate_count", [1, 2])
+async def test_checkin_last_candidate_success_saves_next_page_and_terminal_reset(tmp_path, candidate_count):
+    plugin = _new_plugin()
+    plugin.config = {"filter_manga": True}
+    plugin.image_index = ImageIndexStore(tmp_path)
+    plugin.downloader = FakeDownloader()
+    plugin.downloader.download_for_send = AsyncMock(side_effect=
+        [OSError("fixture download failure")] * (candidate_count - 1)
+        + [("picked.jpg", "medium", 123)] * 2
+    )
+    plugin.client = FakePixivClient({
+        30: [_illust(value) for value in range(1, candidate_count + 1)],
+        60: [_illust(9)],
+    })
+    record = SimpleNamespace(date_key="2026-11-15", user_id="10001")
+    await plugin.image_index.save_page_cursor("group:20001", "pixiv:recommended", {"offset": 30}, feature="checkin")
+    try:
+        first = await plugin._prepare_checkin_background(FakeEvent(), record)
+        assert first.illust_id in {str(value) for value in range(1, candidate_count + 1)}
+        assert await plugin.image_index.get_page_cursor("group:20001", "pixiv:recommended", feature="checkin") == {"offset": 60}
+        second = await plugin._prepare_checkin_background(FakeEvent(), record)
+        assert second.illust_id == "9"
+        assert await plugin.image_index.get_page_cursor("group:20001", "pixiv:recommended", feature="checkin") is None
+        assert plugin.client.recommended_offsets == [30, 60]
+    finally:
+        plugin.image_index.close()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("candidate_count,success_attempt,preview", [(2, 1, False), (9, 8, False), (1, 1, True)])
+async def test_checkin_success_preserves_cursor_with_candidates_remaining_or_preview(tmp_path, candidate_count, success_attempt, preview):
+    plugin = _new_plugin()
+    plugin.config = {"filter_manga": True}
+    plugin.image_index = ImageIndexStore(tmp_path)
+    plugin.downloader = FakeDownloader()
+    plugin.downloader.download_for_send = AsyncMock(side_effect=
+        [OSError("fixture download failure")] * (success_attempt - 1)
+        + [("picked.jpg", "medium", 123)]
+    )
+    start = 0 if preview else 30
+    plugin.client = FakePixivClient({start: [_illust(value) for value in range(1, candidate_count + 1)], 60: [_illust(99)]})
+    await plugin.image_index.save_page_cursor("group:20001", "pixiv:recommended", {"offset": 30}, feature="checkin")
+    try:
+        background = await plugin._prepare_checkin_background(
+            FakeEvent(), SimpleNamespace(date_key="2026-11-15", user_id="10001"),
+            claim_usage=not preview, refresh_preview=preview,
+        )
+        assert background.mode == "pixiv_daily"
+        assert await plugin.image_index.get_page_cursor("group:20001", "pixiv:recommended", feature="checkin") == {"offset": 30}
+        assert plugin.client.recommended_offsets == [start]
+        assert plugin.downloader.download_for_send.await_count == success_attempt
+    finally:
+        plugin.image_index.close()
+
+
+@pytest.mark.asyncio
+async def test_cancelled_cursor_save_releases_downloaded_background_and_claim(tmp_path):
+    plugin = _new_plugin()
+    plugin.config = {"filter_manga": True}
+    plugin.image_index = ImageIndexStore(tmp_path)
+    plugin.client = FakePixivClient({0: [_illust(1)], 30: [_illust(2)]})
+    path = tmp_path / "picked.jpg"
+    path.write_bytes(b"fixture")
+    plugin.downloader = SimpleNamespace(download_for_send=AsyncMock(return_value=(str(path), "medium", 123)))
+    plugin._save_checkin_page_cursor = AsyncMock(side_effect=asyncio.CancelledError)
+    try:
+        with pytest.raises(asyncio.CancelledError):
+            await plugin._prepare_checkin_background(FakeEvent(), SimpleNamespace(date_key="2026-11-15", user_id="10001"))
+        assert not path.exists()
+        assert not await plugin.image_index.get_used_illust_ids("group:20001", "any", feature="checkin")
+    finally:
+        plugin.image_index.close()
+
+
 if __name__ == "__main__":
     unittest.main()

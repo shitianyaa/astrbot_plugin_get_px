@@ -806,6 +806,7 @@ class CheckinArtworkMixin:
                     continue
             title = illust.get("title", "无标题")
             background_ready = False
+            path = ""
             try:
                 path, actual_q, file_size = await self.downloader.download_for_send(
                     illust,
@@ -826,6 +827,8 @@ class CheckinArtworkMixin:
                     quality=actual_q,
                     file_size=file_size,
                 )
+                if not preview_nonce and idx == len(ordered) and request_state.source == "pixiv":
+                    await self._save_checkin_page_cursor(event, source_key, request_state)
                 background_ready = True
                 logger.info(
                     f"{LOG_PREFIX} 签到背景选择完成: mode=pixiv_daily "
@@ -846,10 +849,12 @@ class CheckinArtworkMixin:
                     f"error_type={type(e).__name__}"
                 )
             finally:
-                if claimed and not background_ready:
-                    await self._release_checkin_background_usage(
-                        event, source_key, illust_id
-                    )
+                if not background_ready:
+                    cleanup(path)
+                    if claimed:
+                        await self._release_checkin_background_usage(
+                            event, source_key, illust_id
+                        )
         if not preview_nonce and len(ordered) <= 8 and request_state.source == "pixiv":
             await self._save_checkin_page_cursor(event, source_key, request_state)
         logger.info(

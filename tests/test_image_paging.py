@@ -187,3 +187,30 @@ async def test_full_request_keeps_current_page_when_other_candidates_remain(tmp_
         assert len(set(downloaded)) == 2
     finally:
         plugin.image_index.close()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("start,tag", [
+    ({"offset": 90}, "cat"),
+    ({"max_bookmark_id_for_recommend": 900}, ""),
+])
+async def test_terminal_page_keeps_start_until_all_candidates_are_consumed(tmp_path, start, tag):
+    plugin, event, _ = await command_flow(tmp_path)
+    plugin.config["preferred_image_source"] = "Pixiv"
+    plugin._fetch_source_candidates = SearchMixin._fetch_source_candidates.__get__(plugin)
+    plugin.image_index = ImageIndexStore(tmp_path)
+    scope = plugin._event_scope(event)
+    key = plugin._source_key(tag, "pixiv") if tag else "pixiv:recommended"
+    await plugin.image_index.save_page_cursor(scope, key, start)
+    plugin.client.query_page.return_value = PixivPage([_illust(1), _illust(2), _illust(3)])
+    try:
+        with patch("astrbot_plugin_get_px.pixiv.execution.send_once", AsyncMock(return_value=DeliveryStatus.CONFIRMED)):
+            assert not await collect(plugin, event, GetPxPlugin.cmd_p, tag)
+            assert await plugin.image_index.get_page_cursor(scope, key) == start
+            await collect(plugin, event, GetPxPlugin.cmd_p, f"{tag} 3".strip())
+            assert await plugin.image_index.get_page_cursor(scope, key) is None
+        assert [call.args[1] for call in plugin.client.query_page.await_args_list] == [start, start]
+        downloaded = [call.args[0]["id"] for call in plugin.downloader.download_for_send.await_args_list]
+        assert set(downloaded) == {"1", "2", "3"}
+    finally:
+        plugin.image_index.close()
