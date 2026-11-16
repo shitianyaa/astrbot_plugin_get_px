@@ -6,6 +6,23 @@ NORMAL_WINDOW_SECONDS = 600
 CHECKIN_WINDOW_DAYS = 2
 
 
+def reset_legacy_state_once(conn) -> tuple[int, int] | None:
+    """图片索引的 user_version=0 表示尚未完成固定窗口切换。"""
+    try:
+        conn.execute("BEGIN IMMEDIATE")
+        if conn.execute("PRAGMA user_version").fetchone()[0] != 0:
+            conn.commit()
+            return None
+        removed_usage = conn.execute("DELETE FROM image_usage").rowcount
+        removed_cursors = conn.execute("DELETE FROM source_page_cursor").rowcount
+        conn.execute("PRAGMA user_version = 1")
+        conn.commit()
+        return removed_usage, removed_cursors
+    except Exception:
+        conn.rollback()
+        raise
+
+
 def window_start(now: datetime, feature: str) -> datetime:
     if feature == "checkin":
         return (now - timedelta(days=CHECKIN_WINDOW_DAYS - 1)).replace(

@@ -332,6 +332,12 @@ class ImageIndexStore:
             """
         )
         conn.commit()
+        reset = usage.reset_legacy_state_once(conn)
+        if reset is not None:
+            logger.info(
+                f"{LOG_PREFIX} 图片索引固定窗口切换完成: "
+                f"removed_usage_count={reset[0]} removed_cursor_count={reset[1]}"
+            )
 
     def _cleanup_old_days_sync(self, date_key: str) -> int:
         return usage.cleanup(self._get_conn(), date_key, self.now_iso())

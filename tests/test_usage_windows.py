@@ -2,7 +2,9 @@
 
 import asyncio
 from datetime import datetime
+import json
 from pathlib import Path
+import sqlite3
 import sys
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
@@ -89,7 +91,7 @@ async def test_explicit_history_exception_does_not_ignore_another_page_pending(s
 
 
 @pytest.mark.asyncio
-async def test_existing_records_are_read_without_rewriting_the_database(store):
+async def test_post_reset_records_with_legacy_source_keys_still_dedupe(store):
     conn = store._get_conn()
     conn.execute("INSERT INTO image_usage VALUES (?, ?, ?, ?, ?, ?, ?)", (
         store.today_key(), "group:1", "pixiv:search:old-hash", "42:0", "normal", "user", store.now_iso(),
@@ -172,3 +174,112 @@ async def test_expired_request_cannot_release_a_new_owners_claim(store, old_clea
     assert not await claim(store, owner="third-request", ignore_history=True)
     await store.release_usage(scope="group:1", source_key="any", illust_id="42", feature="normal_pending", owner="second-request")
     assert await claim(store, owner="third-request", ignore_history=True)
+
+
+@pytest.mark.asyncio
+async def test_first_upgrade_clears_only_image_usage_and_all_paging_keys(store, tmp_path):
+    from astrbot_plugin_get_px.checkin import CheckinStore
+
+    await record(store, identity="1")
+    await record(store, feature="checkin", identity="2")
+    assert await claim(store, identity="3")
+    assert await claim(store, feature="checkin_pending", identity="4")
+    await store.advance_page_offset("group:1", "pixiv:search:a", 30)
+    await store.advance_page_offset("group:1", "pixiv:search:a", 60, feature="checkin")
+    await store.add_blacklist_illust(illust_id="99")
+    conn = store._get_conn()
+    conn.execute("INSERT INTO source_page_cursor VALUES (?, ?, ?, ?)", (
+        "group:2", "pixiv:search:old", 90, store.now_iso(),
+    ))
+    conn.execute("CREATE TABLE content_safety_terms (term TEXT)")
+    conn.execute("INSERT INTO content_safety_terms VALUES ('legacy-rule')")
+    conn.execute("PRAGMA user_version = 0")  # 模拟尚未切换固定窗口的安装。
+    conn.commit()
+    store.close()
+    card = tmp_path / "checkin_card_cache" / "card.jpg"
+    card.parent.mkdir()
+    card.write_bytes(b"cached-card")
+    checkin = CheckinStore(tmp_path)
+    await checkin.get_profile("user")
+    await checkin.update_checkin_member(
+        user_id="user", coins=123, affection=0, total_days=7, streak_days=2,
+    )
+    profile = await checkin.find_profile("user")
+    reopened = ImageIndexStore(tmp_path)
+    try:
+        conn = reopened._get_conn()
+        assert conn.execute("SELECT COUNT(*) FROM image_usage").fetchone()[0] == 0
+        assert conn.execute("SELECT COUNT(*) FROM source_page_cursor").fetchone()[0] == 0
+        assert [item["illust_id"] for item in await reopened.list_blacklist_illusts()] == ["99"]
+        assert conn.execute("SELECT term FROM content_safety_terms").fetchone()[0] == "legacy-rule"
+        assert await checkin.find_profile("user") == profile
+        assert card.read_bytes() == b"cached-card"
+    finally:
+        reopened.close()
+
+
+@pytest.mark.asyncio
+async def test_config_save_and_repeated_reload_preserve_post_reset_state(store, tmp_path):
+    from astrbot.api import AstrBotConfig
+    from astrbot_plugin_get_px.group_safety import SessionSafetyService
+
+    schema = json.loads((Path(__file__).resolve().parents[1] / "_conf_schema.json").read_text(encoding="utf-8"))
+    config = AstrBotConfig(config_path=str(tmp_path / "config.json"), schema=schema)
+    await record(store, identity="1")
+    await record(store, feature="checkin", identity="2")
+    assert await claim(store, identity="3")
+    assert await claim(store, feature="checkin_pending", identity="4")
+    await store.advance_page_offset("group:1", "pixiv:search:a", 30)
+    await store.advance_page_offset("group:1", "pixiv:search:a", 60, feature="checkin")
+    service = SessionSafetyService(config)
+    await service.update_global({"global_safety_terms": ["blocked"]})
+    await service.save_group({"name": "test", "sessions": ["bot:GroupMessage:1"]})
+    config.save_config()
+    assert await store.get_used_illust_ids("group:1", "any") == {"1", "3"}
+    # 重建索引连接对应重载／进程重启；同时打开第二连接也不能清除新记录。
+    for _ in range(2):
+        reopened = ImageIndexStore(tmp_path)
+        freeze(reopened, store.now_iso())
+        try:
+            assert await reopened.get_used_illust_ids("group:1", "any") == {"1", "3"}
+            assert await reopened.get_used_illust_ids("group:1", "any", feature="checkin") == {"2", "4"}
+            assert await reopened.get_page_offset("group:1", "pixiv:search:a") == 30
+            assert await reopened.get_page_offset("group:1", "pixiv:search:a", feature="checkin") == 60
+        finally:
+            reopened.close()
+        store.close()
+
+
+@pytest.mark.parametrize("failure_at", ["cursor", "marker"])
+def test_one_time_reset_rolls_back_records_and_marker_on_failure(store, failure_at):
+    from astrbot_plugin_get_px.pixiv import usage
+
+    conn = store._get_conn()
+    conn.execute("INSERT INTO image_usage VALUES (?, ?, ?, ?, ?, ?, ?)", (
+        store.today_key(), "group:1", "old", "42", "normal_pending", "user", store.now_iso(),
+    ))
+    conn.execute("INSERT INTO source_page_cursor VALUES (?, ?, ?, ?)", (
+        "group:1", "old", 30, store.now_iso(),
+    ))
+    conn.execute("PRAGMA user_version = 0")
+    conn.commit()
+
+    def authorize(action, name, value, *_):
+        if failure_at == "cursor" and action == sqlite3.SQLITE_DELETE and name == "source_page_cursor":
+            return sqlite3.SQLITE_DENY
+        if failure_at == "marker" and action == sqlite3.SQLITE_PRAGMA and name == "user_version" and value is not None:
+            return sqlite3.SQLITE_DENY
+        return sqlite3.SQLITE_OK
+
+    conn.set_authorizer(authorize)
+    try:
+        with pytest.raises(sqlite3.DatabaseError):
+            usage.reset_legacy_state_once(conn)
+    finally:
+        conn.set_authorizer(None)
+    assert not conn.in_transaction
+    assert conn.execute("PRAGMA user_version").fetchone()[0] == 0
+    assert conn.execute("SELECT COUNT(*) FROM image_usage").fetchone()[0] == 1
+    assert conn.execute("SELECT COUNT(*) FROM source_page_cursor").fetchone()[0] == 1
+    assert usage.reset_legacy_state_once(conn) == (1, 1)
+    assert usage.reset_legacy_state_once(conn) is None
