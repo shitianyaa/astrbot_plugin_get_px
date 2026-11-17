@@ -15,7 +15,7 @@ from quart import jsonify, request, send_file
 
 try:
     from ..checkin import load_checkin_snapshot_json
-    from ..pixiv.downloader import cleanup, format_log_size, pick_image_url_exact
+    from ..pixiv.downloader import cleanup, pick_image_url_exact
     from ..pixiv.safety import matched_illustration_term, normalize_illust_ids
     from ..group_safety import TERMS_KEY, IDS_KEY
     from .web_api_compat import unregister_web_apis
@@ -23,7 +23,7 @@ try:
 except ImportError:
     # Direct imports used by the test suite.
     from checkin import load_checkin_snapshot_json
-    from pixiv.downloader import cleanup, format_log_size, pick_image_url_exact
+    from pixiv.downloader import cleanup, pick_image_url_exact
     from pixiv.safety import matched_illustration_term, normalize_illust_ids
     from group_safety import TERMS_KEY, IDS_KEY
     from plugin_api.web_api_compat import unregister_web_apis
@@ -382,7 +382,7 @@ class PluginWebApi:
             except Exception as exc:
                 logger.warning(
                     f"{self.log_prefix} 黑名单作品信息获取失败: "
-                    f"illust_id={illust_id} error_type={type(exc).__name__}"
+                    f"illust_id={illust_id} error={type(exc).__name__}"
                 )
         try:
             await self.plugin.safety_service.change_global_item(IDS_KEY, illust_id)
@@ -450,7 +450,7 @@ class PluginWebApi:
         except Exception as exc:
             logger.warning(
                 f"{self.log_prefix} 黑名单缩略图获取失败: "
-                f"illust_id={illust_id} error_type={type(exc).__name__}"
+                f"illust_id={illust_id} error={type(exc).__name__}"
             )
         finally:
             cleanup(temp_path)
@@ -463,7 +463,7 @@ class PluginWebApi:
         except Exception as exc:
             logger.warning(
                 f"{self.log_prefix} 黑名单缩略图安全检查失败: "
-                f"error_type={type(exc).__name__}"
+                f"error={type(exc).__name__}"
             )
             return False
         return not matched_illustration_term(illust, policy)
@@ -549,8 +549,8 @@ class PluginWebApi:
                 return jsonify({"success": False, "error": "只支持 JSON 备份文件"}), 400
             raw = await self.plugin._read_uploaded_file_bytes(upload)
             logger.info(
-                f"{self.log_prefix} 签到 JSON 备份请求已接收: "
-                f"size={format_log_size(len(raw))}"
+                f"{self.log_prefix} 开始导入签到 JSON 备份: "
+                f"size_bytes={len(raw)}"
             )
             parsed = json.loads(raw.decode("utf-8-sig"))
             if isinstance(parsed, dict) and parsed.get("kind") == "plugin_data_export":
@@ -573,7 +573,7 @@ class PluginWebApi:
             )
             logger.warning(
                 f"{self.log_prefix} 现有签到数据已由 JSON 备份覆盖: "
-                f"users={result['users']} records={result['records']}"
+                f"users={result['users']}, records={result['records']}"
             )
             return jsonify(
                 {
@@ -616,9 +616,8 @@ class PluginWebApi:
             payload = await request.get_json(silent=True)
             if not isinstance(payload, dict) or not isinstance(payload.get("groups"), dict):
                 raise ValueError("设置内容格式不正确")
-            # 令牌清除走独立字段，空文本本身只表示保持不变。
             save_settings(
-                self.plugin, payload["groups"], payload.get("clear_secrets") or ()
+                self.plugin, payload["groups"], payload.get("clear_secrets", ())
             )
             return jsonify({"success": True, "reload_required": True})
         except ValueError as exc:

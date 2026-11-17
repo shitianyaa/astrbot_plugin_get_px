@@ -10,10 +10,15 @@ from typing import Any, Sequence
 
 from astrbot.api import logger
 
+try:
+    from ..pixiv.network import normalize_proxy_url
+except ImportError:
+    from pixiv.network import normalize_proxy_url
+
 
 SCHEMA_PATH = Path(__file__).resolve().parents[1] / "_conf_schema.json"
 LOG_PREFIX = "[GetPx]"
-SECRET_KEYS = frozenset({"pixiv_refresh_token"})
+SECRET_KEYS = frozenset({"pixiv_refresh_token", "network_proxy_url"})
 PROVIDER_SPECIAL = "select_provider"
 FONT_SOURCES = {
     "mirror": {
@@ -215,7 +220,9 @@ def _validate_value(
         if not value.strip():
             # 空文本代表“保持不变”，清除必须走独立字段，避免误清已存令牌。
             raise ValueError(f"{label}留空表示保持不变；如需删除请勾选清除")
-        return value.strip()
+        return (
+            normalize_proxy_url(value) if key == "network_proxy_url" else value.strip()
+        )
     if kind == "bool":
         valid = isinstance(value, bool)
     elif kind == "int":
@@ -261,11 +268,11 @@ def _normalize_clear_secrets(clear_secrets: Any) -> list[str]:
     if clear_secrets is None:
         return []
     if isinstance(clear_secrets, str) or not isinstance(clear_secrets, (list, tuple)):
-        raise ValueError("清除令牌的请求格式不正确")
+        raise ValueError("清除凭据的请求格式不正确")
     cleared: list[str] = []
     for key in clear_secrets:
         if not isinstance(key, str) or key not in SECRET_KEYS:
-            raise ValueError("只能清除本页支持的令牌项")
+            raise ValueError("只能清除本页支持的凭据项")
         if key not in cleared:
             cleared.append(key)
     return cleared
@@ -308,9 +315,9 @@ def save_settings(plugin: Any, patch: Any, clear_secrets: Any = ()) -> None:
             )
     for key in cleared:
         if key not in secret_groups:
-            raise ValueError("只能清除本页支持的令牌项")
+            raise ValueError("只能清除本页支持的凭据项")
         if any(key in values for values in validated.values()):
-            raise ValueError("同一个令牌不能同时替换和清除")
+            raise ValueError("同一个凭据不能同时替换和清除")
         validated.setdefault(secret_groups[key], {})[key] = ""
 
     config = getattr(plugin, "config", None)

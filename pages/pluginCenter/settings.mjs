@@ -415,7 +415,7 @@ export function createSettingsPage({ bridge, notify, navigate, confirm, onSaved 
       }
       updateChrome();
     });
-    clearLabel.append(clear, element("span", "", "清除已保存的令牌"));
+    clearLabel.append(clear, element("span", "", field.key === "network_proxy_url" ? "清除代理地址（重载后直连）" : "清除已保存的令牌"));
     row.append(clearLabel);
     return row;
   }

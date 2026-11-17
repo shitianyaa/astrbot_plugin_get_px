@@ -4,10 +4,28 @@ import asyncio
 import time
 from dataclasses import dataclass, field
 
-import aiohttp
 from astrbot.api import logger
 
-from .pagination import PixivPage, parse_pixiv_page
+from .query import ArtworkQuery, QueryError
+from .network import normalize_proxy_url
+from .pagination import parse_continuation, validate_continuation
+
+
+@dataclass
+class PixivPage:
+    items: list[dict]
+    next_params: dict | None = None
+
+
+@dataclass
+class SourceRequest:
+    """普通抽图的一次请求选定来源后，沿真实游标续查；Lolicon仅有限重抽。"""
+
+    source: str = ""
+    next_params: dict | None = None
+    exhausted: bool = False
+    retried_first_page: bool = False
+
 
 LOG_PREFIX = "[GetPx]"
 
@@ -29,6 +47,7 @@ class PixivClient:
     refresh_token: str
     request_timeout: float = 30.0
     close_timeout: float = 5.0
+    proxy_url: str = field(default="", repr=False)
 
     _api: object = field(default=None, repr=False)
     _cached_token: str = field(default="", repr=False)
@@ -39,6 +58,7 @@ class PixivClient:
     _closed: bool = field(default=False, repr=False)
 
     def __post_init__(self) -> None:
+        self.proxy_url = normalize_proxy_url(self.proxy_url)
         self._idle = asyncio.Condition(self._lock)
 
     async def ensure_logged_in(self):
@@ -63,7 +83,7 @@ class PixivClient:
                 "未安装 pixivpy-async，请运行: pip install pixivpy-async"
             )
 
-        api = AppPixivAPI()
+        api = AppPixivAPI(proxy=self.proxy_url or None, env=False)
         try:
             await self._wait_for(
                 api.login(refresh_token=self.refresh_token),
@@ -104,10 +124,10 @@ class PixivClient:
         """幂等请求失败时做一次轻量重试，缓解瞬时网络抖动。"""
         try:
             return await self._wait_for(factory(), operation=operation)
-        except (TimeoutError, aiohttp.ClientError) as exc:
+        except Exception as exc:
             if self._closed:
                 raise
-            logger.info(
+            logger.warning(
                 f"{LOG_PREFIX} Pixiv {operation}失败，1 秒后重试: "
                 f"error_type={type(exc).__name__}"
             )
@@ -116,38 +136,32 @@ class PixivClient:
                 raise RuntimeError("Pixiv 客户端已关闭") from exc
             return await self._wait_for(factory(), operation=operation)
 
-    async def search(self, tag: str, offset: int = 0, *, continuation: dict | None = None,
-                     portrait: bool = False) -> PixivPage:
-        api = await self._acquire_api()
-        try:
-            page_offset = continuation.get("offset", 0) if continuation is not None else offset
-            def factory():
-                if portrait:
-                    params = {"word": tag, "search_target": "partial_match_for_tags",
-                              "sort": "date_desc", "filter": "for_ios",
-                              "offset": page_offset, "ratio_pattern": "portrait"}
-                    return api.requests_(
-                        method="GET", url="https://app-api.pixiv.net/v1/search/illust",
-                        params=params, auth=True,
-                    )
-                return api.search_illust(
-                    tag, search_target="partial_match_for_tags", sort="date_desc", offset=page_offset,
-                )
-            resp = await self._wait_for_with_retry(factory, operation="搜索请求")
-        finally:
-            await self._release_api()
-        return parse_pixiv_page(resp, recommended=False, tag=tag)
-
-    async def recommended(self, offset: int = 0, *, continuation: dict | None = None) -> PixivPage:
+    async def search(self, tag: str, offset: int = 0) -> list[dict]:
         api = await self._acquire_api()
         try:
             resp = await self._wait_for_with_retry(
-                lambda: api.illust_recommended(**(continuation if continuation is not None else {"offset": offset})),
+                lambda: api.search_illust(
+                    tag,
+                    search_target="partial_match_for_tags",
+                    sort="date_desc",
+                    offset=offset,
+                ),
+                operation="搜索请求",
+            )
+        finally:
+            await self._release_api()
+        return list(resp.get("illusts") or [])
+
+    async def recommended(self, offset: int = 0) -> list[dict]:
+        api = await self._acquire_api()
+        try:
+            resp = await self._wait_for_with_retry(
+                lambda: api.illust_recommended(offset=offset),
                 operation="推荐作品请求",
             )
         finally:
             await self._release_api()
-        return parse_pixiv_page(resp, recommended=True)
+        return list(resp.get("illusts") or [])
 
     async def illust_detail(self, illust_id: int) -> dict | None:
         api = await self._acquire_api()
@@ -161,6 +175,85 @@ class PixivClient:
             if _is_missing_illust_error(e):
                 return None
             raise
+        finally:
+            await self._release_api()
+
+    async def query_page(self, query: ArtworkQuery, continuation: dict | None = None) -> PixivPage:
+        routes = {
+            "search": ("search_illust", {"word": query.tag, "search_target": query.search_target,
+                       "sort": query.sort, "start_date": query.start_date, "end_date": query.end_date}),
+            "recommended": ("illust_recommended", {}),
+            "ranking": ("illust_ranking", {"mode": query.ranking_mode, "date": query.date}),
+            "author": ("user_illusts", {"user_id": query.user_id, "type": "illust"}),
+            "related": ("illust_related", {"illust_id": query.illust_id}),
+        }
+        name, params = routes[query.mode]
+        return await self._public_page(name, params, continuation)
+
+    async def users_page(self, word: str, continuation: dict | None = None) -> PixivPage:
+        return await self._public_page("search_user", {"word": word}, continuation, field="user_previews")
+
+    async def _public_page(self, name, params, continuation, *, field="illusts") -> PixivPage:
+        if continuation is not None:
+            try:
+                continuation = validate_continuation(name, continuation)
+            except ValueError as exc:
+                raise QueryError("invalid_request", "分页参数与接口不匹配。") from exc
+        api = await self._acquire_api()
+        try:
+            method, endpoint = getattr(api.api, "illust_recommended_auth" if name == "illust_recommended" else name)
+            if name == "illust_related" and continuation and "viewed" in continuation:
+                # SDK 的关联方法未暴露 viewed；仍只请求固定关联接口。
+                query_params = dict(params, filter="for_ios")
+                for key, value in continuation.items():
+                    if isinstance(value, list):
+                        query_params.update({f"{key}[{index}]": item for index, item in enumerate(value)})
+                    else:
+                        query_params[key] = value
+                request = api.requests_(method=method, url=endpoint, params=query_params)
+            else:
+                request = getattr(api, name)(**params, **(continuation or {}))
+            response = await self._wait_for(
+                request, operation="公开查询"
+            )
+            if not isinstance(response, dict) or response.get("error") or not isinstance(response.get(field), list):
+                raise QueryError("upstream_error", "Pixiv 查询失败或响应结构无效。")
+            if any(not isinstance(item, dict) for item in response[field]):
+                raise QueryError("upstream_error", "Pixiv 候选结构无效。")
+            return PixivPage(response[field], parse_continuation(response.get("next_url"), endpoint, name))
+        finally:
+            await self._release_api()
+
+    async def public_detail(self, illust_id: int) -> dict | None:
+        """新查询入口不把认证或上游错误当作作品不存在。"""
+        api = await self._acquire_api()
+        try:
+            response = await self._wait_for(api.illust_detail(illust_id), operation="作品公开查询")
+            error = response.get("error") if isinstance(response, dict) else None
+            if isinstance(error, dict) and str(error.get("message", "")).strip().casefold().replace("_", " ") == "illust not found":
+                return None
+            if not isinstance(response, dict) or response.get("error") or "illust" not in response:
+                raise QueryError("upstream_error", "Pixiv 作品查询失败。")
+            item = response.get("illust")
+            if item is not None and (not isinstance(item, dict) or str(item.get("id")) != str(illust_id)):
+                raise QueryError("upstream_error", "Pixiv 作品详情结构无效。")
+            return item
+        except Exception as exc:
+            if _is_missing_illust_error(exc):
+                return None
+            raise
+        finally:
+            await self._release_api()
+
+    async def public_user(self, user_id: int) -> dict:
+        api = await self._acquire_api()
+        try:
+            response = await self._wait_for(api.user_detail(user_id), operation="作者公开查询")
+            if (not isinstance(response, dict) or response.get("error")
+                    or not isinstance(response.get("user"), dict)
+                    or str(response["user"].get("id")) != str(user_id)):
+                raise QueryError("upstream_error", "Pixiv 作者查询失败或响应结构无效。")
+            return response["user"]
         finally:
             await self._release_api()
 

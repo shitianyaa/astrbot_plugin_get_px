@@ -85,8 +85,8 @@ class OmnidrawBridge:
             meta = self._context.get_registered_star(self._plugin_name)
         except Exception as exc:
             logger.warning(
-                f"{LOG_PREFIX} 万象画卷插件状态查询失败: "
-                f"error_type={type(exc).__name__}"
+                f"{LOG_PREFIX} 查询万象画卷插件状态失败: "
+                f"error_type={type(exc).__name__} reason={exc}"
             )
             return None
         primary = (
@@ -103,8 +103,8 @@ class OmnidrawBridge:
                 stars = list(get_all() or [])
             except Exception as exc:
                 logger.warning(
-                    f"{LOG_PREFIX} 万象画卷插件列表读取失败: "
-                    f"error_type={type(exc).__name__}"
+                    f"{LOG_PREFIX} 枚举万象画卷插件列表失败: "
+                    f"error_type={type(exc).__name__} reason={exc}"
                 )
                 stars = []
             seen: set[int] = {id(primary)} if primary is not None else set()
@@ -124,13 +124,9 @@ class OmnidrawBridge:
         return primary
 
     def _incompatible(self, exc: BaseException | None = None) -> OmnidrawStatus:
-        member = next((name for name in (
-            "_normalize_usage_stats", "_usage_lock", "_daily_image_limit",
-            "_persist_usage_stats", "_usage_stats",
-        ) if exc is not None and name in str(exc)), "unknown")
+        reason = f" reason={exc}" if exc is not None else ""
         logger.info(
-            f"{LOG_PREFIX} 万象画卷私有成员接口不可用: reason=private_api_unavailable "
-            f"member={member} error_type={type(exc).__name__ if exc is not None else 'none'}"
+            f"{LOG_PREFIX} 万象画卷版本过旧或不兼容，生图额度功能不可用{reason}"
         )
         return OmnidrawStatus(installed=True, compatible=False)
 
@@ -150,7 +146,7 @@ class OmnidrawBridge:
         except Exception as exc:
             logger.warning(
                 f"{LOG_PREFIX} 万象画卷状态读取失败: "
-                f"error_type={type(exc).__name__}"
+                f"error_type={type(exc).__name__} reason={exc}"
             )
             return self._incompatible(exc)
         blocked_ids = _config_id_set(getattr(config, "blocked_users", ""))
@@ -190,14 +186,14 @@ class OmnidrawBridge:
             )
         except (AttributeError, TypeError) as exc:
             logger.warning(
-                f"{LOG_PREFIX} 生图额度发放失败: reason=private_api_unavailable "
-                f"user_id={user_id} error_type={type(exc).__name__}"
+                f"{LOG_PREFIX} 生图额度发放失败(私有成员): "
+                f"user_id={user_id} reason={exc}"
             )
             return self._incompatible(exc)
         except Exception as exc:
             logger.warning(
                 f"{LOG_PREFIX} 生图额度发放失败: "
-                f"user_id={user_id} error_type={type(exc).__name__}"
+                f"user_id={user_id} error_type={type(exc).__name__} reason={exc}"
             )
             return OmnidrawStatus(message="发放失败，请稍后再试")
 
@@ -255,14 +251,14 @@ class OmnidrawBridge:
             )
         except (AttributeError, TypeError) as exc:
             logger.warning(
-                f"{LOG_PREFIX} 签到联动额度发放失败: reason=private_api_unavailable "
-                f"user_id={user_id} error_type={type(exc).__name__}"
+                f"{LOG_PREFIX} 签到联动额度发放失败(私有成员): "
+                f"user_id={user_id} reason={exc}"
             )
             return self._incompatible(exc)
         except Exception as exc:
             logger.warning(
                 f"{LOG_PREFIX} 签到联动额度发放失败: "
-                f"user_id={user_id} error_type={type(exc).__name__}"
+                f"user_id={user_id} error_type={type(exc).__name__} reason={exc}"
             )
             return OmnidrawStatus(message="发放失败，请稍后再试")
 
@@ -330,21 +326,22 @@ class OmnidrawBridge:
             return
         if not status.compatible:
             logger.info(
-                f"{LOG_PREFIX} 万象画卷联动不可用: reason=private_api_unavailable"
+                f"{LOG_PREFIX} 检测到万象画卷，但版本过旧，生图额度功能不可用"
             )
             return
         if not status.daily_limit_enabled:
             logger.info(
-                f"{LOG_PREFIX} 万象画卷联动状态已读取: daily_limit_enabled=no quota_shop=hidden"
+                f"{LOG_PREFIX} 检测到万象画卷：未启用每日生图限制，"
+                "签到商店不展示生图额度商品，启用后自动展示"
             )
             return
         if status.checkin_enabled:
             logger.info(
-                f"{LOG_PREFIX} 万象画卷联动状态已读取: daily_limit_enabled=yes "
-                "checkin_enabled=yes quota_shop=available"
+                f"{LOG_PREFIX} 检测到万象画卷已开启签到领额度，"
+                "本插件 /签到 将自动发放金币与生图额度"
+                "（万象画卷的 /签到 已被 stop_event 屏蔽，无需手动禁用）"
             )
         else:
             logger.info(
-                f"{LOG_PREFIX} 万象画卷联动状态已读取: daily_limit_enabled=yes "
-                "checkin_enabled=no quota_shop=available"
+                f"{LOG_PREFIX} 检测到万象画卷：签到商店已展示生图额度商品"
             )

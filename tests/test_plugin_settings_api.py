@@ -170,6 +170,9 @@ def test_every_visible_grouped_schema_item_is_edited_or_delegated():
         {"content_dedupe": {"safety_groups": []}},
         {"checkin_basic": {"checkin_avatar_enabled": "yes"}},
         {"content_dedupe": {"dedupe_days": 8}},
+        {"pixiv_source": {"auto_trigger_enabled": True}},
+        {"runtime": {"network_proxy_url": "http://user:password@proxy.invalid"}},
+        {"runtime": {"network_proxy_mode": "invalid"}},
         {"checkin_basic": {"checkin_ai_greeting_timeout": float("nan")}},
         {"checkin_basic": {"checkin_greeting_mode": "invalid"}},
         {"checkin_basic": {"checkin_hitokoto_categories": ["invalid"]}},
@@ -276,21 +279,21 @@ async def test_settings_api_registers_get_and_update_without_changing_font_contr
 
 
 def test_slider_bounds_are_inclusive_and_rejected_patches_change_nothing():
-    target = plugin(Config(content_dedupe={"dedupe_days": 3}, unrelated={"keep": 1}))
+    target = plugin(Config(pixiv_source={"max_count": 3}, unrelated={"keep": 1}))
     before = deepcopy(target.config)
     with pytest.raises(ValueError):
         save_settings(
             target,
             {
-                "content_dedupe": {"dedupe_days": 8},
+                "pixiv_source": {"max_count": 21},
                 "checkin_basic": {"checkin_enabled": False},
             },
         )
     assert target.config == before and target.config.saves == 0
-    save_settings(target, {"content_dedupe": {"dedupe_days": 0}})
-    assert target.config["content_dedupe"]["dedupe_days"] == 0
-    save_settings(target, {"content_dedupe": {"dedupe_days": 7}})
-    assert target.config["content_dedupe"]["dedupe_days"] == 7
+    save_settings(target, {"pixiv_source": {"max_count": 1}})
+    assert target.config["pixiv_source"]["max_count"] == 1
+    save_settings(target, {"pixiv_source": {"max_count": 20}})
+    assert target.config["pixiv_source"]["max_count"] == 20
 
 
 def test_step_is_validated_relative_to_min_and_legacy_values_survive():
@@ -381,7 +384,37 @@ def test_real_astrbot_config_persists_partial_settings_and_never_exposes_token(
     assert reloaded["checkin_basic"]["checkin_enabled"] is False
     assert reloaded["pixiv_source"]["max_count"] == 9
 
+    proxy_url = "socks5h://fixture-user:fixture-password@proxy.invalid:1080"
+    save_settings(
+        target,
+        {
+            "runtime": {
+                "network_proxy_url": proxy_url,
+                "network_proxy_mode": "Lolicon API 不走代理",
+            }
+        },
+    )
+    reloaded = AstrBotConfig(
+        config_path=str(tmp_path / "plugin.json"), schema=deepcopy(schema)
+    )
+    assert reloaded["runtime"]["network_proxy_url"] == proxy_url.replace(
+        "socks5h://", "socks5://"
+    )
+    assert reloaded["runtime"]["network_proxy_mode"] == "Lolicon API 不走代理"
+
     snapshot = settings_snapshot(target)
+    proxy = _field(snapshot, "network_proxy_url")
+    assert proxy["configured"] is True and proxy["secret"] is True
+    assert "value" not in proxy and "default" not in proxy
+    assert "fixture-password" not in json.dumps(snapshot, ensure_ascii=False)
+    fields = {field["key"] for group in snapshot["groups"] for field in group["fields"]}
+    assert {"dedupe_days", "auto_trigger_enabled"}.isdisjoint(fields)
+    save_settings(target, {}, ["network_proxy_url"])
+    reloaded = AstrBotConfig(
+        config_path=str(tmp_path / "plugin.json"), schema=deepcopy(schema)
+    )
+    assert reloaded["runtime"]["network_proxy_url"] == ""
+    assert reloaded["runtime"]["network_proxy_mode"] == "Lolicon API 不走代理"
     secret = _field(snapshot, "pixiv_refresh_token")
     assert secret["configured"] is True
     assert secret["secret"] is True

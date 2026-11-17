@@ -21,50 +21,59 @@ checkin/
 │  ├─ ranking_store.py   群签到排行与趋势查询
 │  ├─ store.py           CheckinStore 组合入口
 │  ├─ application.py     每日签到流程与问候内容
-│  ├─ commands.py        签到功能命令业务
+│  ├─ commands.py        签到帮助、状态、日历与主题等命令
 │  ├─ shop.py            商店商品目录、购买处理与付费背景刷新
 │  ├─ artwork.py         卡片渲染与背景作品选择
 │  └─ holiday.py         联网节假日数据更新与查询
 pixiv/
-│  ├─ search.py          命令／Tool 共用取图、发送、固定价格结算与清理
-│  ├─ search_result.py   执行事实摘要，不携带图片路径／URL／正常账单
-│  ├─ selection.py       请求级方向／比例／像素／大小校验与实际文件尺寸复核
+│  ├─ commands.py        /p、/pd、/pr 文字参数与命令展示适配
+│  ├─ search.py          普通搜索入口、图源优先级与回退
+│  ├─ execution.py       单次请求的选图、下载、发送与结算清理
+│  ├─ search_result.py   命令与工具共享的执行结果
+│  ├─ selection.py       本次方向、比例、像素与大小约束
+│  ├─ query.py           模式、作品引用与单页目标输入边界
+│  ├─ catalog.py         共用作品流、过滤及公开字段投影
+│  ├─ discovery.py       查询复用、独立限频与有界内存续页
+│  ├─ stats.py           无凭据的公开作品热度补查与会话关闭
+│  ├─ network.py         出站代理校验、Lolicon API 分流与独立会话工厂
 │  ├─ delivery.py        消息发送错误处理
 │  ├─ filters.py         普通分级、漫画和安全策略过滤
 │  ├─ safety.py          有效规则快照与关键词匹配
-│  ├─ client.py          Pixiv API 客户端、签到标签竖图粗筛
-│  ├─ pagination.py      请求内分页状态、上游响应与 continuation 校验
+│  ├─ client.py          Pixiv 固定接口调用、认证与连接
+│  ├─ pagination.py      续页字段类型、URL解析与共享校验
 │  ├─ lolicon.py         Lolicon API 客户端与数据规范化
 │  ├─ downloader.py      图片下载、Lolicon 反代轮换与画质选择
-│  ├─ index.py           多自然日去重索引、黑名单辅助元信息与旧词归档读取
+│  ├─ usage.py           10分钟／2自然日窗口、作品页身份与占用事务
+│  ├─ index.py           SQLite 连接、锁、索引与分页游标
+tools/
+│  ├─ definitions.py     工具说明与共享参数定义
+│  ├─ images.py          发图与余额工具入口
+│  ├─ discovery.py       作品与作者查询工具入口
+│  ├─ requests.py        同消息任务复用、串行执行与总预算
+│  ├─ results.py         面向模型的结果投影与下一步提示
+│  └─ service.py         工具注册、领域调用与卸载
 plugin_api/
 ├─ api.py                Plugin Pages 后端 API 与设置路由
-└─ settings.py           Schema 驱动的设置快照、委派视图、校验和部分保存
-tools/
-└─ images.py             原生 Tool、同事件幂等与在途取消生命周期
-skills/get-px-image/
-└─ SKILL.md              随包取图使用说明
+└─ settings.py           Schema 驱动的设置快照、校验及部分保存
 ```
 
 根目录保留会话策略服务 `group_safety.py`；签到、取图和 Web API 业务分别位于对应包中。根 `__init__.py` 只有模块说明，不注册旧包路径别名；新代码和测试直接导入真实模块。
 
-管理中心普通配置由 `plugin_api/settings.py` 从 `_conf_schema.json` 生成界面目录，读取当前有效分组/旧扁平值并在提交时严格验证；敏感令牌在读取时脱敏。全局关键词、匹配方式与作品黑名单委派到“内容安全”，安全分组委派到“安全分组”，隐藏旧群/私聊列表仅归档，均不开放通用配置覆盖接口。带选项的多选会返回已保存的旧值供页面勾选保留，写入只接受声明选项或该键当前已存值，不会把旧值扩成新选项。设置页读取或保存期间冻结所有会改变草稿的控件（输入、开关、下拉、搜索、分组导航、手机组选择、清除令牌、放弃与重新载入），结束后恢复各控件原有 disabled 状态；保存失败保留草稿，保存成功不回读、不自动重载插件或页面。
-
 模块按职责划分，不按行数强制拆分。`__init__.py` 和组合入口可以很小；普通业务模块只有在具备独立职责和测试边界时才单独存在。
 
-## 原生模型取图
+## 管理中心设置
 
-初始化成功后 `ImageToolService` 注册 `get_px_image`／`get_px_context`，显式将 `handler_module_path` 绑定实际插件入口，以兼容旧框架模块解析；终止时先停新请求，取消并等待在途工具，再清理客户端／索引。仅按对象身份移除本实例注册的工具，不删除同名外部对象。
+`plugin_api/settings.py` 从当前 schema 生成设置字段，安全规则委派到专用页面，隐藏旧键不开放读写。Pixiv Token 与可含代理凭据的 `network_proxy_url` 仅返回是否配置；新代理地址复用 `pixiv/network.py` 的校验，空输入保留原值，显式清除才写入空值。保存只更新补丁内字段，失败恢复嵌套容器和列表引用，不自动重载。
 
-`SearchMixin._execute_search()` 返回 `SearchResult`，`_handle_search()` 保留命令 yield 展示。两个入口复用同一选图、发送、结算和 finally 清理；收费开关、单价和转发阈值在执行开始固定。Tool 仅收费模式使用 `find_profile()` 查询余额，未知用户按零余额不建档，故障拒绝；签到关闭或单价为 0 时不读钱包，状态返回未查询的 `null`；`/p` 既有预检故障跳过行为不扩改。成功结算低余额提醒用 `spend_coins()` 返回的事务后余额与扣款额反推同事务前余额，不用预检值判断。
+`pages/pluginCenter/` 保留淡紫界面、明暗主题、六个视图和移动布局；`settings.mjs` 管理配置草稿，`ui.mjs` 提供键盘可操作的下拉与数字控件，`fonts.mjs` 负责 MiSans 线路切换、失败回退和重试。设置保存期间冻结草稿控件，失败保留输入；字体加载和设置保存独立。页面不使用浏览器存储，支持宿主沙箱；安全分组保存采用接口返回的规范化对象。取图、工具及签到业务仍使用主线领域实现。
 
-Tool 只回文本事实，图片由插件发送，不返回图片内容或路径。`event` 内只记录本次执行结果和在途状态，重复调用不再消费；追加取图需新事件，不为框架合并 follow-up 猜测授权。选图截止时间受实际 Tool 超时约束，余留一半（最多30秒）给发送/结算/清理；不后台化、不改全局超时。取消继续传播，已开始的结算/清理通过持有并等待的任务完成，保持回执、占用和文件保护期。
+## 出站代理
 
-Tool 标签硬上限 48 字符，超长拒绝、不截断；说明约束模型只选用户原名或一个确定的译名，不擅自扩写，不在代码中识别角色或猜译名。`send_mode=auto/single/forward` 只覆盖当前 Tool 调用的发送选择：默认／省略为single，不合并；仅用户明确要求合并时模型才选择forward，仍受 OneBot 平台限制；显式auto沿用执行开始固定的阈值，仅用户明确要求按配置自动选择时使用。不会写回配置，命令仍按原阈值；换方式的重复调用也受同事件幂等保护，未知送达不补发。
+`main.py` 通过公共配置读取方法构造不可变 `NetworkRouting`，向 Pixiv、Lolicon、下载器、一言及节假日客户端注入出口；公开查询服务向独立热度客户端注入同一代理配置。Pixiv SDK 的 OAuth 与 App API 使用显式 `proxy`，其余请求由 `create_http_session()` 创建独立会话，使用 HTTP CONNECT／SOCKS5 连接器，关闭时沿用各自生命周期。
 
-Tool 附加不可变 `ImageSelection`：方向、绝对容差比例、最小宽高在元数据过滤后、claim 前执行；下载成功后只读文件头核对实际发送档位尺寸，不解码画面、不调用视觉模型。缺失／无效宽高在有尺寸要求时拒绝；不符合的文件及时清理、释放 pending 并使用同批候选补足。无附加条件时保持既有行为。`max_size_mib` 只收紧配置上限，省略不改变配置的0语义；50MiB硬上限由下载器继续执行。比例与方向叠加，不偷偷放宽，不扩展候选浏览或主动翻页工具。Tool 部分找到时返回实际数量说明，安全／索引故障仍保留服务故障提示；筛选不改变送达、结算、来源身份或同事件幂等。
+`network_proxy_url` 留空时直连。两种模式仅决定 Lolicon 固定元数据 API 是否豁免，全部图片及反代地址始终使用已配置的代理；原图地址与网络直连不是同一概念，下载日志分别记录 `route` 与 `network_route`。会话不信任环境代理，不修改进程环境；配置无效拒绝加载，代理网络失败不回退出站直连。下载限制、超时、取消、图源／图片反代轮换、发送和结算不变。
 
-随包 Skill 原位发现，只有说明，无脚本或配置复制。安全仍由固定 `ContentSafetyPolicy` 执行，Skill 不是权限边界。最低插件版本声明不变，随包 Skill 能力需框架支持（本地核对 v4.24.1 起），真实旧版端到端仍未验证。
+OneBot、模型、T2I 和浏览器请求不在此路由范围。配置及路由表见[出站代理](configuration.md#出站代理)。
 
 ## 签到指令入口
 
@@ -84,7 +93,7 @@ Tool 附加不可变 `ImageSelection`：方向、绝对容差比例、最小宽�
 
 ## 前端页面
 
-`pages/pluginCenter/` 使用原生 HTML、CSS 和 ES module，提供群排行、成员当前数值编辑、内容安全、安全分组、数据管理和插件配置六个视图；顶部为 AstrBot 大小双星/安全摘要/刷新与单行滑动选中页签，主内容 1200px。`fonts.mjs` 通过 `config` 接口读取 `webui_font_source` 对应的线路、字体族和展示名，默认从小米国内服务加载 MiSans，也可选择第三方 jsDelivr（固定 `misans@5.0.0`）或系统字体；服务端只返回元数据，字体 CSS 和 WOFF2 由浏览器加载、缓存，不随 Pages 打包。字体样式与 400／500／600／700 字重的基础字符加载完成后，统一切换正文、标题、控件与数字的字体族，配置键保留等宽字体。保存线路后直接重新加载字体，不刷新页面；字体错误与设置保存结果独立，12 秒内未完成加载则移除该样式、回到系统字体并提供手动重试。每次加载取消上一轮并检查请求代次，防止旧线路晚到覆盖新线路或系统字体。字号按页面标题22px、分区/弹窗18px、导航15px、正文/控件14px、说明13px分层，手机输入框16px；正文400、控件500、标题与标签600，由CSS语义变量维护。签到卡的内置霞鹜文楷及自包含规则不受影响。配色为淡紫渐变与亮白内容区，深色使用灰紫底色；菜单、页签、按钮与弹窗提供短时动效，遵循 reduced-motion。首帧主题按“宿主注入的 `data-theme` → URL `theme` 参数 → 系统偏好”落定，宿主已给出主题后不再跟随系统切换；不读写浏览器存储。页签使用完整 tab 模式：`role=tab`／`aria-controls`／roving tabindex，方向键与 Home／End 自动激活对应 `tabpanel`，点击当前页签保持状态。`ui.mjs` 提供自绘下拉、数值加减与 checkbox＋独立轨道开关，下拉选项自动换行、宽度不超过父容器与视口，空间不足时向上展开并按可见区域限制高度，配置页复用它们渲染枚举、模型和多选；配置标题、当前组与保存操作归并为粘性工具栏，`ResizeObserver` 记录导航壳与工具栏实际高度，避免字体或窄屏换行后固定层覆盖内容。配置字段在桌面为左说明/右控件的设置行，手机为单列且工具栏标题与操作分行，长提示词独占一行；默认隐藏英文配置键，可在导航区勾选显示，不写入配置或浏览器存储。操作按钮统一使用 `.btn`，分标准与紧凑两档，移动端触点至少 44px；数字输入保留原有步长、范围、验证与键盘语义，仅替换原生加减外观。弹窗退场期间使用 inert 阻止重复交互，仍由原生 close 事件处理返回值与焦点归还；保存状态与副作用沿用原流程。各页面只定义控件布局。安全分组使用整行列表，数据管理以分区排列，减少重复卡片与标题。下拉使用 20px SVG 箭头，保留原键盘语义与自动选向。会话策略由配置文件持久化；签到业务数据仍由 SQLite 和签到备份管理。成员编辑只更新 `checkin_users`，不回写 `checkin_records` 或 `checkin_group_presence`。安全分组保存使用接口返回的规范化分组更新当前列表，移除保存后的常规二次读取；仅旧响应缺少分组时补读，补读失败不把已完成的保存误报为失败。
+`pages/pluginCenter/` 使用原生 HTML、CSS 和 ES module，集中提供群排行、成员当前数值编辑、全局规则、安全分组和数据管理。会话策略由配置文件持久化；签到业务数据仍由 SQLite 和签到备份管理。成员编辑只更新 `checkin_users`，不回写 `checkin_records` 或 `checkin_group_presence`。
 
 ## 依赖方向
 
@@ -103,9 +112,6 @@ main.py
 python -m json.tool _conf_schema.json
 python -m compileall -q main.py checkin pixiv plugin_api scripts/ci tests
 node --check pages/pluginCenter/app.js
-node --check pages/pluginCenter/settings.mjs
-node --check pages/pluginCenter/ui.mjs
-node --test tests/js/safety.test.mjs tests/js/settings.test.mjs tests/js/ui.test.mjs
 python -m pytest -q tests
 ```
 ## 会话内容安全策略
@@ -126,15 +132,13 @@ Pages 后端规则写入配置；`image_index.sqlite3` 仅为黑名单保存辅�
 
 `pixiv/delivery.py` 的 `send_once()` 返回五种状态：消息构建失败为 `FAILED`；调用正常返回为 `CONFIRMED`，但 OneBot file 正常返回且无有效 `message_id`（非零整数或非空白字符串，排除 bool／对象）时为 `ACCEPTED`（已受理，需保留文件）；发送异常链包含超时为 `TIMED_OUT`；其余提交异常为 `UNKNOWN`。超时按 `TimeoutError` 类型或 message/wording 中独立的 timeout/timed out/超时文本判断，先排除路径、URL 和无关回包字段，并保留路径字段后的独立超时诊断（含冒号分隔、无扩展名路径与“上传／读取超时”，不把 timeout.jpg 等文件名当诊断）；文件读取错误也只检查相同诊断文本，不因路径中的 copyfile 重发。包括 OneBot 1200 回包中的 `Timeout: NTEvent … sendMsg`，不能仅凭 1200 判定超时。
 
-`search.py` 对 `CONFIRMED`、`ACCEPTED` 与 `TIMED_OUT` 均记录 normal 使用记录并结算金币；超时不补发，即使最终没有出图也扣费。`FAILED` 与构建期间取消释放未提交图片占用；`UNKNOWN` 与提交期间取消保留 normal_pending 占用，不扣费。OneBot `ACCEPTED`、超时、未知及提交期间取消保留文件读取窗口。构建和发送异常只记日志，不补发异常提示；正常金币结算消息保留。
+`execution.py` 对 `CONFIRMED`、`ACCEPTED` 与 `TIMED_OUT` 均记录 normal 使用记录并结算金币；超时不补发，即使最终没有出图也扣费。`FAILED` 与构建期间取消释放未提交图片占用；`UNKNOWN` 与提交期间取消保留 normal_pending 占用，不扣费。OneBot `ACCEPTED`、超时、未知及提交期间取消保留文件读取窗口。构建和发送异常只记日志，不补发异常提示；命令保留正常金币结算消息，工具不外发正常账单。
 
 异常日志只提取 `error_type`、`retcode`、`status`、脱敏 `message/wording`，并包含 `send_mode`、可用的作品 ID、`phase`、`delivery_status` 和 `duration_ms`。错误文本先截取前 2048 字符再脱敏，输出最多 512 字符，限制异常回包的正则处理开销与日志体积；地址、本地路径及 Windows UNC 共享路径、凭据和长数字标识会被遮蔽，不输出完整请求与回包。路径按盘符、UNC、file URI、位于词边界的根目录或点目录起点，以及带文件扩展名的相对路径识别；`NodeIKernelMsgService/sendMsg` 等服务名/方法名保留，不单凭标识内部的斜杠判定路径。file/path/filename 字段支持无引号的空格路径，以后续字段或分隔符为界；引号路径按对应引号闭合，兼容转义斜杠和相对路径后的方括号。编码切换、使用记录、去重占位释放失败分别记录，不重发已确认图片。
 
 ## OneBot 图片发送
 
-`send_once()` 在 aiocqhttp 且事件存在 bot 时直接调用已有客户端的 call_action()，不另建连接。单图调用 send_group_msg/send_private_msg，合并转发调用 send_group_forward_msg/send_private_forward_msg，保留 self_id 路由。默认 file URI；构建或提交明确报文件不存在、权限不足、ENOENT/copyfile 等读取问题时，记录本次异常和 file → base64 切换，再重建同一消息尝试一次。第二次失败也独立记录；发送超时优先分类，绝不触发换编码。其他平台继续使用框架链路。
-
-合并转发每图一个节点，节点内保留标题／ID与图片，缺图提示单独放在末尾；所有节点一次提交为一条转发。直发与合并共用原始 OneBot 自动传输策略，不区分可选发送链路。Tool 的 `send_mode` 只决定本次是否合并，不修改费用、去重或未知送达不补发规则。
+`send_once()` 在 aiocqhttp 且事件存在 bot 时直接调用已有客户端的 call_action()，不另建连接。单图调用 send_group_msg/send_private_msg，合并转发调用 send_group_forward_msg/send_private_forward_msg，保留 self_id 路由。默认 file URI；构建或提交明确报文件／路径不存在（含 llbot 的“路径不存在”）、权限不足、ENOENT/copyfile 等读取问题时，记录本次异常和 file → base64 切换，再重建同一消息尝试一次。第二次失败也独立记录；发送超时优先分类，绝不触发换编码。其他平台继续使用框架链路。
 
 `onebot_image_transport` 已从 schema 和配置映射移除，真实 AstrBot 加载时按 schema 先裁剪旧键，运行时不依赖其存在。`_cleanup_retired_transport_config()` 只处理未经框架裁剪的残留配置（例如直接传入 dict），删除后尝试保存，保存失败恢复原值；不承担框架裁剪前的迁移，也不能恢复已被裁剪的值。
 
@@ -156,14 +160,50 @@ initialize 获取插件数据目录后，将 `data_dir / "temp"` 注入共享 Im
 
 ## 普通发图的大小筛选
 
-`pixiv/search.py` 在所选画质下下载候选，超出大小上限、地址缺失或下载失败就换作品，先使用同批剩余候选，再按图片源优先级补取。首批全被漫画、安全规则或去重过滤时也继续补取。每次请求最多取 3 轮候选（每轮按优先级最多请求两个来源）、实际尝试下载 20 张作品，相同原始 ID 不重复下载；不足时发送已下载的图片。安全规则或去重索引异常停止选图；取消时等待正在执行的占用写入，再释放未提交占用。每张候选保留自己的 source_key，补取回退另一源后仍按对应来源写成功记录或释放 pending；跳过候选立即释放，未提交与取消仍由 finally 收尾。
+`pixiv/execution.py` 在所选画质下下载候选，超出大小上限、地址缺失或下载失败就换作品，先使用同批剩余候选，再有限补取。普通取图首次按配置优先级尝试来源，选定来源后在本请求内保持该来源：Pixiv 沿真实游标续查，Lolicon 有限重抽；明确 Pixiv 模式不跨源回退。每次请求最多取 3 批、实际尝试 20 张作品，相同 ID 不重复下载；不足时发送已下载的图片。候选保留 source_key 用于来源和分页定位，使用记录与 pending 则按会话、业务类别和作品页共享；跳过候选立即释放占用，未提交与取消仍由 finally 收尾。
 
 `ImageDownloader.download_for_send()` 的 `allow_quality_fallback=False` 限定普通发图只尝试所选画质的反代和源地址；超软上限时清理文件并抛错交回选图层，50 MiB 硬上限不变。签到及日历传入 `size_limit_bytes=0` 并保留默认画质回退。持久配置沿用 `auto_downgrade_original_mb` 的键与数值，WebUI 名称改为图片大小上限。
 
-首轮取源完成后以 `time.monotonic()` 建立 `request_timeout * max(3, count)` 秒的共享截止时间，单张下载（含反代轮换）及补取用 `asyncio.wait_for` 传入剩余预算。到期取消进行中的操作，发送已下载图片；首次取源、消息发送及清理不在预算内。外部取消继续传播。
-
-Lolicon 无分页，每轮重新随机请求且不推进 offset。Pixiv 客户端返回 `PixivPage(items, next_params)`，`SourceRequest` 在请求内按 source_key 保存 continuation、重复位置集合和失败原因；列表为空但仍有下一页时保留状态并允许另一源回退。候选耗尽时保存下一页数字 offset，不依赖条数推算；无下一页则本次流结束。完整推荐参数只在请求内保存，跨请求继续使用现有数字起点，不变更数据库 schema。签到／预览复用该机制，日历保持单批；签到标签搜索显式传递 `portrait=True`，经已有认证请求入口启用竖图粗筛并进行本地精筛；不再由 Lolicon 比例字符串推断。推荐 continuation 的 `viewed` 与 `bookmark_illust_ids` 列表经校验、聚合后透传 SDK，重复位置比较使用不可变列表内容。旧的按候选数量推算分页方法已移除，索引只保存上游数字位置。
-
-两源在响应边界校验必要列表、候选身份和分级等字段，使用 `SourceResponseError.reason` 暴露脱敏错误类别。Pixiv 的一次轻量重试只针对网络／超时错误，不因畸形响应或鉴权失败重试；不新增 `Retry-After` 逻辑。`SelectionIndexError` 区分本地索引故障和正常候选不足，不允许索引失效时继续放行。
+初始取源与候选过滤完成后以 `time.monotonic()` 建立 `request_timeout * max(3, count)` 秒的下载及补取截止时间，`count` 为应用数量上限和工具余额限制后的实际执行张数，单张下载（含反代轮换）及补取用 `asyncio.wait_for` 传入剩余预算。到期取消进行中的操作，发送已下载图片；命令的首次取源、消息发送及清理不在这段预算内；工具首次取源另受框架选图预算限制，后续取两个截止时间中较早者。外部取消继续传播。
 
 大小约束由 `download()` 统一执行：Content-Length 超限时不读取正文，流式字节累计超限立即中止并清理半文件；`download_for_send()` 不重复检查返回大小。`ImageSizeLimitError` 按类型记录为 `size_limit` 并交回选图层，异常文案不参与分类。
+
+## 模型取图
+
+`main.py` 注册 `/p`、`/pd`、`/pr` 并转交 `pixiv/commands.py`。指令和模型工具均交给 `SearchMixin._execute_search()`，明确 Pixiv 模式由共享入口创建 `CandidateStream`；普通抽图使用 `SourceRequest` 保留选定来源和真实 Pixiv 续页位置，Lolicon 仅有限重抽。作品流、下载、发送和结算共用，模型会话和任务协调继续留在 tools/。
+
+`tools/service.py` 的 `ImageToolService` 统一注册 `get_px_image`、`get_px_context` 及公开查询工具 `get_px_artworks`、`get_px_users`，`skills/get-px-image/SKILL.md` 提供随包调用说明。`main.py` 在初始化后注册工具，卸载时先停用工具、取消并等待在途调用完成结算与清理，再关闭领域资源；生命周期检查覆盖工具解绑。
+
+`SearchMixin._execute_search()` 是命令与工具的共享入口，按钱包用户ID登记收费取图进行中标记，持有到结算清理结束；同用户跨消息重入直接返回busy，不排队、不占模型名额，免费及其他用户不拦截。异常和取消仍在收尾完成后释放。该入口委托 `SearchExecution.run()` 完成本次请求；`_handle_search()` 只向命令展示结果消息。`SearchExecution` 将数量／余额／安全准备、候选获取、选图下载、消息发送、结算清理分为独立方法，用单次请求对象显式保存文件、去重占用与送达状态，取消后仍等待占用及结算收尾。`SearchResult` 记录下载、各送达状态、结算和中断事实，不暴露图片路径、直链或正常账单。`ImageSelection` 只在工具请求中生效，先筛候选尺寸，再核对下载文件头，大小限制与管理员限制取较小值。普通命令以图源游标选择起始位置，请求内通过 SourceRequest 保留真实 Pixiv 续页位置；公开查询使用独立内存游标，不推进命令游标。
+
+工具从事件取得当前用户和会话，不接受目标会话或安全策略参数；校验完整 UMO 后解析当前命名分组。`get_px_context` 返回 `allow_r18` 和全局 `keyword_match_mode`，不返回屏蔽词、关联会话清单或安全编辑能力；已删除 `builtin_terms_enabled`。查询游标绑定实际规则，规则变化后失效；发送重新解析规则。状态查询不建档、不预留金币，免费时 `balance` 和 `affordable_count` 为 null，不读取钱包。
+
+`tools/requests.py` 通过事件 extra 保存按规范化查询和筛选条件区分的任务结果，同任务执行中或已有提交结果时复用；count及发送方式不产生新的任务。不同任务串行执行，首次发送统一限频准入，已提交／已受理／送达未知的张数共同消耗本消息 max_count 名额。确定未提交的任务可在剩余预算内重试；结果投影和guidance由tools/results.py维护，领域SearchResult仅保存事实。工具选图等待预算来自框架超时，预留一半（最多 30 秒）给发送、结算及清理，首轮取源也受限；命令沿用原预算。发送后的结算和清理受 shield 保护，重复取消仍等待收尾；正常返回、受理、超时沿用既有收费规则，未知送达不补发。正常工具账单只记日志，配置上限截断、余额不足缩减或跨低余额阈值时返回提醒。
+
+工具结果通过 `count_limits` 区分配置上限与余额缩减，保留原始请求数量、实际执行数量及本次配置上限；两类限制叠加时合并提醒，正常结算后的低余额提示不覆盖数量缩减原因。结算调用异常保持 `settlement=unknown`，日志只说明扣费状态待核对，不承诺未扣费。
+
+## 模型公开查询与发送
+
+四个原生工具由同一个服务注册与关闭。默认取图保留配置的图源优先级；明确模式通过领域作品流获取候选，再进入共享下载、发送、结算和清理链路。榜单、搜索、作者和关联作品保持上游顺序；指定作品忽略完成历史，但与其他普通取图共享同会话、作品页的在途占用。失败释放未提交占用，送达未知保留占用。
+
+`pixiv/usage.py` 维护图片使用记录的查询、原子占用及固定窗口，`index.py` 负责连接、锁及调用。新记录按 normal/checkin 业务分类写入，按对应业务及当前窗口读取。普通历史和pending为滚动10分钟，签到对应记录保留最近2个北京时间自然日，彼此独立；分页位置分别保存但统一保留滚动24小时，读取和推进先排除过期起点，并复用索引清理删除闲置过期行；已受理／超时／未知占用也在对应窗口到期时失效。会话内按作品页共享，PID与PID:0视为首张，其他页独立。分页键增加normal/checkin前缀，旧共享游标不读取、不迁入；查询和推进均检查窗口。原子占用仍使用BEGIN IMMEDIATE；分页表增加page_params列保存真实上游续页参数，旧整数位置兼容读取。
+
+图片索引首次从未标记状态切换到固定窗口时，在同一事务中清空图片使用／占用及分页两表并将索引库user_version从0置为1；只执行一次，不依赖配置或插件版本。续页结构随后升级到2，版本1升级前备份，只增加参数列并保留已有记录，失败事务回滚。保存配置、重载、重启和重装代码保留已完成标记及后续新记录；失败回滚并终止加载。正式签到库、黑名单、安全配置、归档和卡片缓存不参与这次清理。
+
+普通取图从非零起点获得空页且没有续页时，先重置本业务起点，再最多重查首页一次；该查询计入既有3批预算，模型入口仍受框架剩余时间限制。真实续页到底只重置下次请求起点，不在当前请求循环翻回首页；日历和预览不读持久游标。日志记录feature、offset及原始candidate_count，上游全程无候选时返回明确空结果说明。
+
+公开查询不写图片使用或命令分页记录，也不按已发送历史排除候选；查询链的已展示候选判重与发送历史去重是两回事。真实续页解析固定 SDK 端点的白名单参数，内存状态保留未展示候选；游标绑定会话、用户、账号配置及实际安全规则，10分钟过期、最多128个，重载清空。同事件相同查询复用 Future，查询限频与发图分离；每次最多扫描3个上游批次，并受 request_timeout 与框架超时中较小者约束。同事件首次查询通过后，后续查询复用准入，并共享首次查询建立的 request_timeout 与框架超时中较小者的截止时间；换条件或重试不续期。瞬时上游失败不写入永久复用结果，可在剩余预算内重试。筛选参数错误归为invalid_request且不可自动重试；明确缺失的指定作品逐项记not_found，不阻断后续目标，认证及未知上游错误仍报错。Lolicon 没有真实续页。参数及状态集中在[随包 Skill](../../skills/get-px-image/SKILL.md)。
+
+已展示身份沿整条查询链保留，跨上游批次不清空；作品按原始 ID（指定页时包含页码）判重，作者按作者 ID 判重。每条链最多展示1000条，达到上限返回 `pagination.limit_reached=true`，不再生成下一游标，限制集合与游标快照的内存用量。
+
+续页字段契约统一由 `pixiv/pagination.py` 维护，客户端解析／调用与图片索引保存均使用同一规则。偏移为非负整数，推荐书签位置兼容整数及最长256字符的可打印ASCII游标文本，不将 `null` 等文本擅自解释为空值；可选空书签字段省略。推荐保留 `viewed`、`bookmark_illust_ids` 及三项显示布尔标记，列表最多1024项且保留原顺序。地址必须匹配固定HTTPS端点，未知字段不透传，不能借续页修改原查询条件或选择其他URL。
+
+关联接口兼容 `seed_illust_ids[0]`、`viewed[0]` 等连续索引数组，保留上游已浏览作品位置。SDK 高层关联方法未暴露 `viewed`，对应续页通过 SDK 的认证请求方法访问同一个固定关联端点，不直接请求上游返回的 URL。
+
+`include_stats=true` 仅对公开作品查询生效，先取得通过当前安全规则的候选，再由 `ArtworkStatsClient` 补查固定 HTTPS 网页端点。仅发送作品正整数 ID，不携带 App Token／Cookie、不跟随重定向；单响应解码后最多256 KiB，按作品ID合并请求，并发最多3个。点赞、收藏和浏览分别投影为 total_likes、total_bookmarks 和 total_view；无效或缺失值不填零。全部补查共用原查询剩余预算，最多3秒，失败或耗尽不丢弃候选，不改变顺序或发送结算。
+
+搜索默认 `date_desc`，只接受按发布时间正序／倒序，不提供服务端热门排序或任选返回字段。统计补查失败保留上游已有计数；3秒只限制补查阶段。模型可比较本批已知统计，再按比较顺序传入指定目标；统计有缺失时不能声称是整批最高。查询不预留目标或金币，后续指定发送重新复核且不换作品补齐。
+
+热度不写数据库；同事件相同查询复用最终结果，游标保存热度选项与原候选页，不同事件重新查询可更新统计。卸载先取消并等待查询及热度任务，再关闭独立 HTTP 会话。Skill 和原生工具说明禁止用户未要求时主动视觉识图；热门选择仅参考元数据，日／周／月榜保持原序。
+
+工具参数与说明集中在 `tools/definitions.py`，每次构造返回独立字典。作品查询与发图工具直接复用参数定义，不依赖先实例化另一个工具。`tools/images.py` 和 `tools/discovery.py` 只承担原生工具调用入口，`tools/service.py` 处理模型会话、请求幂等与工具生命周期；实际作品查询和发送业务留在 `pixiv/`。

@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import asyncio
 import random
 import re
 
@@ -8,7 +7,7 @@ from astrbot.api import logger
 from astrbot.api.event import AstrMessageEvent
 
 from .index import ordered_by_unused
-from .pagination import SelectionIndexError
+from .usage import usage_id
 from .safety import (
     ContentSafetyPolicy,
     STRICT_CONTENT_SAFETY_POLICY,
@@ -123,26 +122,34 @@ class FiltersMixin:
         *,
         source_key: str,
         dedupe_enabled: bool = True,
+        raw_count: int = 0,
+        ordered: bool = False,
+        allow_repeat: bool = False,
+        owner: str = "",
     ) -> list[dict]:
-        if not dedupe_enabled or self.image_index is None:
-            return random.sample(illusts, pick_count)
+        if self.image_index is None:
+            return illusts[:pick_count] if ordered else random.sample(illusts, pick_count)
 
         scope = self._event_scope(event)
         try:
-            used_ids = await self.image_index.get_used_illust_ids(scope, source_key)
+            used_ids = (
+                await self.image_index.get_used_illust_ids(scope, source_key)
+                if dedupe_enabled else set()
+            )
         except Exception as e:
             logger.warning(
                 f"{LOG_PREFIX} 读取发图去重索引失败: "
                 f"error_type={type(e).__name__}"
             )
-            raise SelectionIndexError("读取去重索引失败") from e
+            return []
 
-        ordered = ordered_by_unused(illusts, used_ids)
-        fresh = [i for i in ordered if str(i.get("id") or "") not in used_ids]
-        repeated = [i for i in ordered if str(i.get("id") or "") in used_ids]
+        by_usage = ordered_by_unused(illusts, used_ids)
+        fresh = [i for i in by_usage if usage_id(i.get("id")) not in used_ids]
+        repeated = [i for i in by_usage if usage_id(i.get("id")) in used_ids]
 
-        candidates = random.sample(fresh, len(fresh)) + random.sample(
-            repeated, len(repeated)
+        candidates = (
+            list(illusts) if ordered else
+            random.sample(fresh, len(fresh)) + random.sample(repeated, len(repeated))
         )
         chosen: list[dict] = []
         user_id = str(event.get_sender_id() or "")
@@ -152,33 +159,19 @@ class FiltersMixin:
             illust_id = str(illust.get("id") or "")
             if not illust_id:
                 continue
-            claim_task = asyncio.ensure_future(self.image_index.claim_usage(
-                scope=scope, source_key=source_key, illust_id=illust_id,
-                feature="normal_pending", user_id=user_id,
-            ))
             try:
-                # SQLite 线程可能在外部取消后完成写入，先等占用结果再释放。
-                claimed = await asyncio.shield(claim_task)
-            except BaseException as exc:
-                if isinstance(exc, asyncio.CancelledError):
-                    try:
-                        if await claim_task:
-                            chosen.append(illust)
-                    except Exception as claim_exc:
-                        logger.warning(f"{LOG_PREFIX} 取消后图片占用失败: error_type={type(claim_exc).__name__}")
-                for claimed_illust in chosen:
-                    try:
-                        await self.image_index.release_usage(
-                            scope=scope, source_key=source_key,
-                            illust_id=str(claimed_illust["id"]), feature="normal_pending",
-                        )
-                    except Exception as release_exc:
-                        logger.warning(f"{LOG_PREFIX} 选图占用释放失败: error_type={type(release_exc).__name__}")
-                if isinstance(exc, asyncio.CancelledError):
-                    raise
-                if not isinstance(exc, Exception):
-                    raise
-                raise SelectionIndexError("图片占用失败") from exc
+                claimed = await self.image_index.claim_usage(
+                    scope=scope,
+                    source_key=source_key + (":explicit_pending" if allow_repeat else ""),
+                    illust_id=illust_id,
+                    feature="normal_pending",
+                    user_id=user_id,
+                    ignore_history=allow_repeat or not dedupe_enabled,
+                    owner=owner,
+                )
+            except Exception as exc:
+                logger.warning(f"{LOG_PREFIX} 图片占用失败: error_type={type(exc).__name__}")
+                return chosen
             if claimed:
                 chosen.append(illust)
         return chosen

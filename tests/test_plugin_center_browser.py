@@ -700,11 +700,17 @@ def test_group_save_uses_authoritative_response_without_waiting_for_reload(page)
     page.click('#policyList [data-edit-group="g1"]')
     page.fill("#safetyGroupName", "已保存名称")
     page.evaluate("""() => {
-      window.__getHandlers['content-safety'] = () => { throw new Error('unexpected reload'); };
+      const old = window.__responses['content-safety'];
+      window.__getHandlers['content-safety'] = () => new Promise(resolve => {
+        window.__resolveStaleSafety = () => resolve(old);
+      });
       window.__postHandlers['content-safety/groups/save'] = body => new Promise(resolve => {
         window.__resolveGroupSave = () => resolve({ success: true, group: { ...body, name: '已保存名称' } });
       });
     }""")
+    # 模拟已打开弹窗时到达的后台刷新，不穿过原生 modal 点击背景。
+    page.evaluate("document.querySelector('#refreshBtn').click()")
+    page.wait_for_function("typeof window.__resolveStaleSafety === 'function'")
     page.locator('#safetyGroupForm button[type="submit"]').click()
     assert page.get_attribute("#safetyGroupForm", "aria-busy") == "true"
     assert page.locator("#safetyGroupName").is_disabled()
@@ -715,6 +721,37 @@ def test_group_save_uses_authoritative_response_without_waiting_for_reload(page)
         == "已保存名称"
     )
     assert "已保存" in page.locator("#toast").inner_text()
+    assert page.locator('#policyList [data-edit-group="g1"]').evaluate(
+        "element => element === document.activeElement"
+    )
+    page.evaluate("window.__resolveStaleSafety()")
+    page.wait_for_function("!document.querySelector('#refreshBtn').disabled")
+    assert (
+        page.locator('#policyList [data-edit-group="g1"] strong').inner_text()
+        == "已保存名称"
+    )
+
+    page.evaluate("""() => {
+      window.__postHandlers['content-safety/groups/save'] = body => Promise.resolve({
+        success: true, group: { ...body, group_id: 'g2' },
+      });
+      window.__postHandlers['content-safety/groups/remove'] = () => Promise.resolve({ success: true });
+    }""")
+    page.click("#policyAddBtn")
+    page.fill("#safetyGroupName", "新增分组")
+    page.locator('#safetyGroupForm button[type="submit"]').click()
+    page.wait_for_function("!document.querySelector('#safetyGroupDialog').open")
+    assert page.locator('#policyList [data-edit-group="g2"]').evaluate(
+        "element => element === document.activeElement"
+    )
+    page.click('#policyList [data-edit-group="g2"]')
+    page.click("#safetyGroupDelete")
+    page.click("#dialogConfirm")
+    page.wait_for_function("!document.querySelector('#safetyGroupDialog').open")
+    assert page.locator('#policyList [data-edit-group="g2"]').count() == 0
+    assert page.locator("#policyAddBtn").evaluate(
+        "element => element === document.activeElement"
+    )
 
 
 def test_group_save_failure_keeps_editable_draft(page):

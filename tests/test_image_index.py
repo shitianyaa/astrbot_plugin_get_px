@@ -1,5 +1,4 @@
 import asyncio
-import sqlite3
 import tempfile
 import unittest
 from datetime import datetime
@@ -18,10 +17,8 @@ class FrozenImageIndexStore(ImageIndexStore):
         return self.date_key
 
     def now_iso(self) -> str:
-        return f"{self.date_key}T12:00:00+08:00"
-
-    def _now_dt(self) -> datetime:
-        return self._frozen_dt
+        day = datetime.fromisoformat(self.date_key)
+        return self._frozen_dt.replace(year=day.year, month=day.month, day=day.day).isoformat(timespec="seconds")
 
 
 class ImageIndexStoreTest(unittest.IsolatedAsyncioTestCase):
@@ -48,6 +45,12 @@ class ImageIndexStoreTest(unittest.IsolatedAsyncioTestCase):
                 self.assertEqual(
                     await store.get_used_illust_ids("group:1", "pixiv:recommended"), {"100"}
                 )
+                self.assertFalse(
+                    await store.claim_usage(
+                        scope="group:1", source_key="pixiv:recommended",
+                        illust_id="100", feature="normal_pending",
+                    )
+                )
 
                 await store.release_usage(
                     scope="group:1",
@@ -68,6 +71,10 @@ class ImageIndexStoreTest(unittest.IsolatedAsyncioTestCase):
                         user_id="user:next",
                     )
                 )
+                await store.record_usage(
+                    scope="group:1", source_key="pixiv:recommended", illust_id="100", feature="normal"
+                )
+                self.assertEqual(await store.get_used_illust_ids("group:1", "pixiv:recommended"), {"100"})
             finally:
                 store.close()
 
@@ -202,73 +209,17 @@ class ImageIndexStoreTest(unittest.IsolatedAsyncioTestCase):
 
     # ── page-cursor tests ──────────────────────────────────────────
 
-    async def test_page_offset_write_replace_and_clear(self):
+    async def test_page_cursor_roundtrip_and_reset(self):
         with tempfile.TemporaryDirectory() as tmp:
             store = FrozenImageIndexStore(tmp)
             try:
-                self.assertEqual(await store.get_page_offset("group:1", "search:tag"), 0)
-                for offset in (7, 45, 0):
-                    await store.set_page_offset("group:1", "search:tag", offset)
-                    self.assertEqual(await store.get_page_offset("group:1", "search:tag"), offset)
-            finally:
-                store.close()
-
-    async def test_page_offset_is_isolated_by_scope_and_source(self):
-        with tempfile.TemporaryDirectory() as tmp:
-            store = FrozenImageIndexStore(tmp)
-            try:
-                await store.set_page_offset("group:1", "search:rare_tag", 15)
-                self.assertEqual(await store.get_page_offset("group:2", "search:rare_tag"), 0)
-                self.assertEqual(await store.get_page_offset("group:1", "search:other_tag"), 0)
-                self.assertEqual(await store.get_page_offset("group:1", "search:rare_tag"), 15)
-            finally:
-                store.close()
-
-    async def test_page_offset_survives_store_reopen(self):
-        with tempfile.TemporaryDirectory() as tmp:
-            store = FrozenImageIndexStore(tmp)
-            try:
-                await store.set_page_offset("group:1", "search:tag", 60)
-                store.close()
-                store = FrozenImageIndexStore(tmp)
-                self.assertEqual(await store.get_page_offset("group:1", "search:tag"), 60)
-            finally:
-                store.close()
-
-    async def test_page_offset_ttl_expired(self):
-        """过期游标应返回 0 并删除记录。"""
-        with tempfile.TemporaryDirectory() as tmp:
-            store = FrozenImageIndexStore(tmp)
-            try:
-                # 先写入一个正常游标
-                await store.set_page_offset("group:1", "search:blue_archive", 30)
-
-                # 直接修改数据库，把 updated_at 改成 PAGE_CURSOR_TTL_DAYS+1 天前
-                from pixiv.index import PAGE_CURSOR_TTL_DAYS
-                from datetime import timedelta
-
-                old_time = store._frozen_dt - timedelta(days=PAGE_CURSOR_TTL_DAYS + 1)
-                # 关闭 store 的连接，用独立连接修改数据库
-                store.close()
-                from contextlib import closing
-
-                with closing(sqlite3.connect(str(store._db_path))) as conn:
-                    conn.execute(
-                        "UPDATE source_page_cursor SET updated_at = ? "
-                        "WHERE scope = ? AND source_key = ?",
-                        (
-                            old_time.isoformat(timespec="seconds"),
-                            "group:1",
-                            "search:blue_archive",
-                        ),
-                    )
-                    conn.commit()
-                # 重新获取连接
-                store._conn = None
-
-                # 现在查询应该返回 0（TTL 过期）
-                offset = await store.get_page_offset("group:1", "search:blue_archive")
-                self.assertEqual(offset, 0)
+                key = "pixiv:recommended"
+                self.assertIsNone(await store.get_page_cursor("group:1", key))
+                params = {"max_bookmark_id_for_recommend": 123}
+                await store.save_page_cursor("group:1", key, params)
+                self.assertEqual(await store.get_page_cursor("group:1", key), params)
+                await store.reset_page_cursor("group:1", key)
+                self.assertIsNone(await store.get_page_cursor("group:1", key))
             finally:
                 store.close()
 

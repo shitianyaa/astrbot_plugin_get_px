@@ -23,7 +23,7 @@ finally:
 
 SCHEMA = json.loads((ROOT / "_conf_schema.json").read_text(encoding="utf-8"))
 FIXTURE = ROOT / "tests/fixtures/config_v3_8_0_grouped.json"
-RETIRED = {"dedupe_ttl_hours", "dedupe_days_migrated", "_grouped_config_migrated", "lolicon_api_url"}
+RETIRED = {"dedupe_days", "dedupe_ttl_hours", "dedupe_days_migrated", "_grouped_config_migrated", "lolicon_api_url", "auto_trigger_enabled"}
 
 
 def test_schema_contains_only_formal_groups_and_required_policy_marker():
@@ -53,7 +53,7 @@ async def test_v3_8_0_grouped_config_survives_framework_load_save_and_reload(tmp
     for group in expected.values():
         for key, value in group.items():
             assert plugin._cfg_get(key) == value
-    assert plugin._cfg_int("dedupe_days", 1, 0, 7) == 7
+    assert "dedupe_days" not in config["content_dedupe"]
     assert plugin._cfg_int("p_coin_cost", 20, 0, 200) == 35
     assert plugin._cfg_bool("checkin_enabled", True) is False
 
@@ -105,7 +105,7 @@ def test_new_install_has_grouped_defaults_without_retired_keys(tmp_path):
         config_path=str(tmp_path / "new.json"), schema=deepcopy(SCHEMA)
     )
     assert tuple(config) == GetPxPlugin._CONFIG_GROUP_KEYS
-    assert config["content_dedupe"]["dedupe_days"] == 1
+    assert "dedupe_days" not in config["content_dedupe"]
     assert config["content_dedupe"][LEGACY_KEYS[0]] == []
     assert config["content_dedupe"][LEGACY_KEYS[1]] == []
     assert config["runtime"]["request_timeout"] == 30.0
@@ -127,4 +127,6 @@ def test_init_client_ignores_retired_url_and_reuses_pixiv_client(monkeypatch):
     plugin._init_client()
     assert plugin.lolicon_client is lolicon and lolicon.available
     assert plugin.client is pixiv
-    factory.assert_called_once_with(refresh_token="fixture-token", request_timeout=30.0)
+    factory.assert_called_once_with(
+        refresh_token="fixture-token", request_timeout=30.0, proxy_url=""
+    )

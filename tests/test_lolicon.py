@@ -9,8 +9,6 @@ import pytest
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 
 from astrbot_plugin_get_px.pixiv.lolicon import DEFAULT_API_URL, LoliconClient
-from astrbot_plugin_get_px.pixiv.pagination import PixivPage, SourceResponseError
-from astrbot_plugin_get_px.pixiv.downloader import pick_image_url_exact
 from astrbot_plugin_get_px.pixiv.constants import AIOCQHTTP_PLATFORM
 from astrbot_plugin_get_px.pixiv.search import SearchMixin
 from astrbot_plugin_get_px.pixiv.safety import ContentSafetyPolicy
@@ -70,6 +68,18 @@ class _SourceEvent:
         return "1"
 
 
+@pytest.mark.asyncio
+async def test_combined_keywords_become_separate_and_tags():
+    client = LoliconClient()
+    session = _FakeSession()
+    client._session = session
+    await client.search("洛茜 黑丝", count=2)
+    assert [value for key, value in session.calls[0][1]["params"] if key == "tag"] == ["洛茜", "黑丝"]
+    with pytest.raises(ValueError):
+        await client.search("一 二 三 四")
+    assert len(session.calls) == 1
+
+
 class _SourceLolicon:
     available = True
 
@@ -102,19 +112,25 @@ class _SourcePixiv:
         self.search_calls = []
         self.recommended_calls = []
 
-    async def search(self, tag, offset=0, *, continuation=None, portrait=False):
+    async def query_page(self, query, continuation=None):
+        from astrbot_plugin_get_px.pixiv.client import PixivPage
+        offset = (continuation or {}).get("offset", 0)
+        items = await self.search(query.tag, offset) if query.mode == "search" else await self.recommended(offset)
+        return PixivPage(items)
+
+    async def search(self, tag, offset=0):
         self.search_calls.append((tag, offset))
         self.order.append("pixiv")
         if self.error:
             raise RuntimeError("down")
-        return PixivPage([] if self.empty else [{"id": "3"}], None)
+        return [] if self.empty else [{"id": "3"}]
 
-    async def recommended(self, offset=0, *, continuation=None):
+    async def recommended(self, offset=0):
         self.recommended_calls.append(offset)
         self.order.append("pixiv")
         if self.error:
             raise RuntimeError("down")
-        return PixivPage([] if self.empty else [{"id": "4"}], None)
+        return [] if self.empty else [{"id": "4"}]
 
 
 class _SourceHarness(SearchMixin):
@@ -180,26 +196,6 @@ class LoliconClientTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual([value for key, value in params if key == "size"], [
             "original", "regular", "small", "thumb", "mini"
         ])
-
-    async def test_response_boundaries_and_optional_metadata(self):
-        client = LoliconClient()
-        response = _FakeResponse()
-        client._session = SimpleNamespace(closed=False, get=lambda *args, **kwargs: response)
-        for payload in ({}, {"data": [{"pid": 1, "p": 0, "r18": "false"}]},
-                        {"error": "private upstream details", "data": []}):
-            with self.subTest(payload=payload):
-                response.payload = payload
-                with self.assertRaises(SourceResponseError) as caught:
-                    await client.random()
-                self.assertNotIn("private", str(caught.exception))
-        response.payload = {"error": "", "data": []}
-        self.assertEqual(await client.random(), [])
-        response.payload = {"error": "", "data": [
-            {"pid": 1, "p": 0, "r18": False, "tags": [], "aiType": 0, "urls": {}}
-        ]}
-        item, = await client.random()
-        self.assertEqual((item["id"], item["x_restrict"]), ("1:0", 0))
-        self.assertEqual(pick_image_url_exact(item, "large"), "")
 
     async def test_r18_mode_accepts_only_strict_or_mixed(self):
         client = LoliconClient()
@@ -290,13 +286,13 @@ async def test_preferred_pixiv_random_uses_recommended_page_cursor():
     pixiv = _SourcePixiv()
     lolicon = _SourceLolicon()
     plugin = _SourceHarness(lolicon, pixiv, preferred="Pixiv")
-    index = SimpleNamespace(get_page_offset=AsyncMock(return_value=60))
+    index = SimpleNamespace(get_page_cursor=AsyncMock(return_value={"offset": 60}), reset_page_cursor=AsyncMock())
     plugin.image_index = index
     _, _, source = await plugin._fetch_source_candidates(_SourceEvent(), "")
     assert source == "pixiv:recommended"
     assert pixiv.recommended_calls == [60]
     assert lolicon.calls == []
-    index.get_page_offset.assert_awaited_once_with("group:1", source)
+    index.get_page_cursor.assert_awaited_once_with("group:1", source, feature="normal")
 
 
 @pytest.mark.asyncio

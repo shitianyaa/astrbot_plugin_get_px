@@ -7,7 +7,7 @@ import aiohttp
 
 from astrbot.api import logger
 
-from .pagination import SourceResponseError
+from .network import create_http_session, normalize_proxy_url
 
 
 LOG_PREFIX = "[GetPx]"
@@ -21,8 +21,12 @@ class LoliconClient:
 
     exclude_ai: bool = True
     request_timeout: float = 30.0
+    proxy_url: str = field(default="", repr=False)
     _session: aiohttp.ClientSession | None = field(default=None, repr=False)
     _closed: bool = field(default=False, repr=False)
+
+    def __post_init__(self) -> None:
+        self.proxy_url = normalize_proxy_url(self.proxy_url)
 
     @property
     def available(self) -> bool:
@@ -32,7 +36,7 @@ class LoliconClient:
         if self._closed:
             raise RuntimeError("Lolicon 客户端已关闭")
         if self._session is None or self._session.closed:
-            self._session = aiohttp.ClientSession()
+            self._session = create_http_session(self.proxy_url)
         return self._session
 
     async def fetch(
@@ -53,8 +57,10 @@ class LoliconClient:
             ("excludeAI", "true" if self.exclude_ai else "false"),
         ]
         params.extend(("size", size) for size in IMAGE_SIZES)
-        if tag.strip():
-            params.append(("tag", tag.strip()))
+        terms = tag.split()
+        if len(terms) > 3:
+            raise ValueError("Lolicon AND 搜索最多支持三个条件，不能丢弃条件")
+        params.extend(("tag", term) for term in terms)
         if aspect_ratio:
             params.append(("aspectRatio", aspect_ratio))
 
@@ -62,25 +68,13 @@ class LoliconClient:
         timeout = aiohttp.ClientTimeout(total=self.request_timeout)
         async with session.get(DEFAULT_API_URL, params=params, timeout=timeout) as resp:
             if resp.status != 200:
-                raise SourceResponseError(f"http_{resp.status}")
+                raise RuntimeError(f"Lolicon API HTTP {resp.status}")
             payload = await resp.json(content_type=None)
-        if not isinstance(payload, dict) or not isinstance(payload.get("error", ""), str):
-            raise SourceResponseError("malformed_response")
+        if not isinstance(payload, dict):
+            raise RuntimeError("Lolicon API 返回格式无效")
         if payload.get("error"):
-            raise SourceResponseError("upstream_error")
-        if not isinstance(payload.get("data"), list):
-            raise SourceResponseError("malformed_response")
-        items = payload["data"]
-        for item in items:
-            if (not isinstance(item, dict) or type(item.get("pid")) is not int or item["pid"] <= 0
-                    or type(item.get("p")) is not int or item["p"] < 0
-                    or type(item.get("r18")) is not bool
-                    or not isinstance(item.get("tags"), list)
-                    or any(not isinstance(tag, str) for tag in item.get("tags", []))
-                    or not isinstance(item.get("urls", {}), dict)
-                    or any(not isinstance(url, str) for url in item.get("urls", {}).values())):
-                raise SourceResponseError("malformed_candidate")
-        return [self._normalize(item) for item in items]
+            raise RuntimeError(str(payload["error"]))
+        return [self._normalize(item) for item in payload.get("data") or []]
 
     async def search(
         self,

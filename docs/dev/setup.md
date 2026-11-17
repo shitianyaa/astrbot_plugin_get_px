@@ -87,7 +87,7 @@ python main.py
 1. 阅读 [`../project/architecture.md`](../project/architecture.md) 的 `pixiv/` 部分
 2. 修改相关模块（`search.py`、`downloader.py`、`filters.py` 等）
 3. 运行相关测试：`python -m pytest -q tests/test_lolicon.py tests/test_pixiv_client.py tests/test_filtering.py tests/test_delivery.py tests/test_p_coin_cost.py tests/test_image_index.py`
-4. 手工验证：`/p 关键词 2`、`/p 2`；开启自动触发后发送「来张图」
+4. 手工验证：`/p 关键词 2`、`/p 2`、`/pd 作品ID`、`/pr 周 2`；在工具可用的模型对话中发送「来张图」，检查原生工具调用和实际发送状态
 
 ### 修改签到逻辑
 
@@ -128,7 +128,7 @@ sqlite3 -readonly "<插件数据目录>/image_index.sqlite3" ".schema image_usag
 sqlite3 -readonly "<插件数据目录>/image_index.sqlite3" "SELECT date_key, scope, source_key, illust_id, feature FROM image_usage ORDER BY sent_at DESC LIMIT 10;"
 ```
 
-去重查询按会话、图源／标签和原始图片 ID 隔离。JPEG 与摘要在 `checkin_card_cache/`，不在 SQLite；详细存储与清理边界见 [缓存与去重](../project/cache-and-dedupe.md)。不要把包含用户资料的查询结果直接贴入公开日志或 issue。
+去重查询按会话、业务类别和作品页区分；同会话同业务跨图源、标签及指令／工具入口共享。普通历史为滚动10分钟，签到历史为最近2个北京时间自然日，指定作品仅忽略完成历史。JPEG 与摘要在 `checkin_card_cache/`，不在 SQLite；详细存储与清理边界见 [缓存与去重](../project/cache-and-dedupe.md)。不要把包含用户资料的查询结果直接贴入公开日志或 issue。
 
 ### 重置隔离测试数据
 

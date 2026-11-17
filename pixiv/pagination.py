@@ -1,209 +1,114 @@
-"""Request-local continuation for Pixiv; Lolicon has no paged stream."""
+"""固定Pixiv接口的续页字段契约，供响应解析、SDK调用和持久化共用。"""
 
 from __future__ import annotations
 
-from dataclasses import dataclass, field
 import re
 from urllib.parse import parse_qs, urlsplit
 
-
-class SourceResponseError(RuntimeError):
-    """Safe source failure without upstream response text."""
-
-    def __init__(self, reason: str, *, detail: str = "none", field: str = "none"):
-        self.reason = reason
-        self.detail = detail
-        self.field = field
-        super().__init__(f"图片源响应不可用: reason={reason}")
+from .query import QueryError
 
 
-def validate_pixiv_candidate(item: object) -> None:
-    if (
-        not isinstance(item, dict)
-        or isinstance(item.get("id"), bool)
-        or not str(item.get("id", "")).isdecimal()
-        or int(item["id"]) <= 0
-        or type(item.get("x_restrict")) is not int
-        or item["x_restrict"] not in {0, 1, 2}
-        or not isinstance(item.get("type"), str)
-        or not isinstance(item.get("tags"), list)
-        or any(
-            not isinstance(t, dict) or not isinstance(t.get("name"), str)
-            for t in item.get("tags", [])
-        )
-        or not isinstance(item.get("user", {}), dict)
-        or not isinstance(item.get("image_urls", {}), dict)
-        or not isinstance(item.get("meta_single_page", {}), dict)
-        or not isinstance(item.get("meta_pages", []), list)
-    ):
-        raise SourceResponseError("malformed_candidate")
-    containers = [item.get("image_urls", {})]
-    if any(
-        not isinstance(url, str)
-        for key, url in item.get("meta_single_page", {}).items()
-        if key.endswith("url")
-    ):
-        raise SourceResponseError("malformed_candidate")
-    for page in item.get("meta_pages", []):
-        if not isinstance(page, dict) or not isinstance(
-            page.get("image_urls", {}), dict
-        ):
-            raise SourceResponseError("malformed_candidate")
-        containers.append(page.get("image_urls", {}))
-    if any(
-        not isinstance(url, str)
-        for urls in containers
-        for key, url in urls.items()
-        if key not in {"width", "height"}
-    ):
-        raise SourceResponseError("malformed_candidate")
+_EXTRA_FIELDS = {
+    "illust_recommended": {
+        "max_bookmark_id_for_recommend": "cursor",
+        "min_bookmark_id_for_recent_illust": "cursor",
+        "viewed": "ids",
+        "bookmark_illust_ids": "ids",
+        "include_ranking_label": "bool",
+        "include_ranking_illusts": "bool",
+        "include_privacy_policy": "bool",
+    },
+    "illust_related": {"seed_illust_ids": "ids", "viewed": "ids"},
+}
 
 
-class SelectionIndexError(RuntimeError):
-    """Local dedupe failure must not be treated as an exhausted candidate pool."""
+def _fields(method: str) -> dict[str, str]:
+    return {"offset": "integer", **_EXTRA_FIELDS.get(method, {})}
 
 
-@dataclass
-class PixivPage:
-    items: list[dict]
-    next_params: dict | None
+def _integer(value: object) -> int:
+    if type(value) is int and 0 <= value < 10**20:
+        return value
+    if isinstance(value, str) and re.fullmatch(r"[0-9]{1,20}", value):
+        return int(value)
+    raise ValueError("分页整数无效")
 
 
-@dataclass
-class SourceRequest:
-    next_params: dict[str, dict | None] = field(default_factory=dict)
-    seen: dict[str, set[tuple]] = field(default_factory=dict)
-    failure_reason: str = ""
+def validate_continuation(method: str, params: object) -> dict:
+    """归一化字段类型；推荐书签位置是有界游标，不假定都是作品整数ID。"""
+    fields = _fields(method)
+    if not isinstance(params, dict) or not params or set(params) - fields.keys():
+        raise ValueError("分页参数与接口不匹配")
+    result = {}
+    for key, value in params.items():
+        kind = fields[key]
+        if kind == "ids":
+            if not isinstance(value, list) or not 1 <= len(value) <= 1024:
+                raise ValueError("分页作品列表无效")
+            result[key] = [_integer(item) for item in value]
+        elif kind == "cursor" and isinstance(value, str) and not re.fullmatch(r"[0-9]{1,20}", value):
+            if not 1 <= len(value) <= 256 or not value.isascii() or not value.isprintable():
+                raise ValueError("分页游标无效")
+            result[key] = value
+        elif kind == "bool":
+            if type(value) is bool:
+                result[key] = value
+            elif isinstance(value, str) and value.casefold() in ("true", "false"):
+                result[key] = value.casefold() == "true"
+            else:
+                raise ValueError("分页显示标记无效")
+        else:
+            result[key] = _integer(value)
+    if not any(fields[key] != "bool" for key in result):
+        raise ValueError("图片源未返回续页位置")
+    return result
 
 
-def parse_continuation(
-    value: object, *, recommended: bool, tag: str = ""
-) -> dict | None:
+def _array_values(params: dict, key: str) -> list[str] | None:
+    indexed = []
+    for name, values in params.items():
+        if name == key + "[]" or not name.startswith(key + "["):
+            continue
+        match = re.fullmatch(re.escape(key) + r"\[([0-9]{1,4})\]", name)
+        if not match or len(values) != 1:
+            raise ValueError("分页数组下标无效")
+        indexed.append((int(match[1]), values[0]))
+    plain = [params[name] for name in (key, key + "[]") if name in params]
+    if indexed:
+        indexed.sort()
+        if plain or len(indexed) > 1024 or any(index != position for position, (index, _) in enumerate(indexed)):
+            raise ValueError("分页数组下标不连续或形式混合")
+        return [value for _, value in indexed]
+    if len(plain) > 1:
+        raise ValueError("分页数组形式混合")
+    # SDK也会将种子／书签列表编码成逗号分隔的field[]。
+    return [item for value in plain[0] for item in value.split(",")] if plain else None
+
+
+def parse_continuation(value: object, endpoint: str, method: str) -> dict | None:
     if value is None or value == "":
         return None
     if not isinstance(value, str):
-        raise SourceResponseError("invalid_continuation", detail="value_type")
-    path = "/v1/illust/recommended" if recommended else "/v1/search/illust"
-    detail, field = "url_syntax", "none"
+        raise QueryError("upstream_error", "图片源返回的续页信息无效。")
     try:
-        url = urlsplit(value)
-        detail = "scheme"
-        if url.scheme != "https":
-            raise ValueError
-        detail = "host"
-        if url.netloc != "app-api.pixiv.net":
-            raise ValueError
-        detail = "path"
-        if url.path != path:
-            raise ValueError
-        detail = "fragment"
-        if url.fragment:
-            raise ValueError
-        detail = "query_syntax"
-        query = parse_qs(url.query, keep_blank_values=True, strict_parsing=True)
-        numbers = {"offset"}
-        booleans = set()
-        static = (
-            {"filter", "content_type", "include_ranking_label"}
-            if recommended
-            else {"word", "search_target", "sort", "filter", "ratio_pattern"}
-        )
-        if recommended:
-            numbers.update(
-                {"max_bookmark_id_for_recommend", "min_bookmark_id_for_recent_illust"}
-            )
-            booleans.update({"include_ranking_illusts", "include_privacy_policy"})
-        params = {}
-        indexed_viewed = {}
-        for key, values in query.items():
-            if recommended and (
-                re.fullmatch(r"viewed\[\d*\]", key) or key == "bookmark_illust_ids[]"
-            ):
-                field = "bookmark_illust_ids" if key == "bookmark_illust_ids[]" else "viewed"
-                detail = "list_number"
-                ids = [value for raw in values for value in raw.split(",")]
-                if any(not value.isdecimal() or int(value) <= 0 for value in ids):
-                    raise ValueError
-                if key == "bookmark_illust_ids[]":
-                    params["bookmark_illust_ids"] = [int(value) for value in ids]
-                elif key == "viewed[]":
-                    detail = "list_format"
-                    if any("," in raw for raw in values):
-                        raise ValueError
-                    params["viewed"] = [int(value) for value in ids]
-                else:
-                    detail = "list_format"
-                    if len(values) != 1 or "," in values[0]:
-                        raise ValueError
-                    detail = "list_index"
-                    index = int(key[7:-1])
-                    if len(ids) != 1 or index in indexed_viewed:
-                        raise ValueError
-                    indexed_viewed[index] = int(ids[0])
+        parsed, expected = urlsplit(value), urlsplit(endpoint)
+        if (parsed.scheme != "https" or parsed.netloc != expected.netloc
+                or parsed.path != expected.path or parsed.fragment):
+            raise ValueError("续页地址与接口不匹配")
+        params = parse_qs(parsed.query, keep_blank_values=True, max_num_fields=4096)
+        result = {}
+        for key, kind in _fields(method).items():
+            values = _array_values(params, key) if kind == "ids" else params.get(key)
+            if values is None:
                 continue
-            detail, field = "unknown_parameter", "unknown"
-            if key not in numbers | booleans | static:
-                raise ValueError
-            # Only fixed allowlisted names reach diagnostics; never echo an unknown key.
-            detail, field = "scalar_count", key
-            if len(values) != 1:
-                raise ValueError
-            raw = values[0]
-            if key in numbers:
-                detail = "number"
-                # 推荐边界不是作品 ID；上游可返回 min=0 / max=-1 哨兵。
-                max_sentinel = recommended and key == "max_bookmark_id_for_recommend" and raw == "-1"
-                if not raw.isdecimal() and not max_sentinel:
-                    raise ValueError
-                params[key] = int(raw)
-            elif key in booleans:
-                detail = "boolean"
-                if raw not in {"true", "false", "0", "1"}:
-                    raise ValueError
-                params[key] = raw in {"true", "1"}
-            elif key in static:
-                detail = "static_value"
-                expected = {
-                    "word": {tag},
-                    "search_target": {"partial_match_for_tags"},
-                    "sort": {"date_desc"},
-                    "filter": {"for_ios", "for_android"},
-                    "ratio_pattern": {"portrait"},
-                    "content_type": {"illust"},
-                    "include_ranking_label": {"true", "false", "0", "1"},
-                }
-                if raw not in expected[key]:
-                    raise ValueError
+            if kind == "ids":
+                result[key] = values
             else:
-                raise ValueError
-        if indexed_viewed:
-            detail, field = "list_indices", "viewed"
-            if "viewed" in params or sorted(indexed_viewed) != list(
-                range(len(indexed_viewed))
-            ):
-                raise ValueError
-            params["viewed"] = [
-                indexed_viewed[index] for index in range(len(indexed_viewed))
-            ]
-        if not params:
-            detail, field = "empty_parameters", "none"
-            raise ValueError
-        return params
-    except (ValueError, UnicodeError) as exc:
-        raise SourceResponseError("invalid_continuation", detail=detail, field=field) from exc
-
-
-def parse_pixiv_page(payload: object, *, recommended: bool, tag: str = "") -> PixivPage:
-    if not isinstance(payload, dict):
-        raise SourceResponseError("malformed_response")
-    if payload.get("error"):
-        raise SourceResponseError("upstream_error")
-    items = payload.get("illusts")
-    if not isinstance(items, list):
-        raise SourceResponseError("malformed_response")
-    for item in items:
-        validate_pixiv_candidate(item)
-    return PixivPage(
-        items,
-        parse_continuation(payload.get("next_url"), recommended=recommended, tag=tag),
-    )
+                if len(values) != 1:
+                    raise ValueError("分页单值字段重复")
+                if kind == "cursor" and values[0] == "":
+                    continue
+                result[key] = values[0]
+        return validate_continuation(method, result)
+    except ValueError as exc:
+        raise QueryError("upstream_error", "图片源返回的续页参数或地址无效。") from exc

@@ -14,7 +14,7 @@ from astrbot_plugin_get_px.pixiv.delivery import DeliveryStatus
 from astrbot_plugin_get_px.pixiv.filters import FiltersMixin
 from astrbot_plugin_get_px.pixiv.index import ImageIndexStore
 from astrbot_plugin_get_px.pixiv.selection import ImageSelection
-from astrbot_plugin_get_px.tools.images import ImageToolService
+from astrbot_plugin_get_px.tools.service import ImageToolService
 from test_image_tools import Event, setup_flow
 from test_p_coin_cost import _illust
 
@@ -56,7 +56,7 @@ async def test_tool_size_limit_can_only_tighten_and_does_not_write_config(
     plugin.config["auto_downgrade_original_mb"] = admin
     before = dict(plugin.config)
     args = {} if requested is None else {"max_size_mib": requested}
-    with patch("astrbot_plugin_get_px.pixiv.search.send_once", AsyncMock(return_value=DeliveryStatus.CONFIRMED)):
+    with patch("astrbot_plugin_get_px.pixiv.execution.send_once", AsyncMock(return_value=DeliveryStatus.CONFIRMED)):
         summary = await ImageToolService(plugin).image(context, args)
     assert summary["delivery"] == {"confirmed": 1}
     assert plugin.downloader.download_for_send.await_args.kwargs["size_limit_bytes"] == effective * 1024 * 1024
@@ -68,8 +68,8 @@ async def test_tool_size_limit_can_only_tighten_and_does_not_write_config(
 @pytest.mark.parametrize("file_size", [(60, 80), (160, 120), None])
 async def test_metadata_filter_precedes_claim_and_real_file_filter_releases_usage(tmp_path, file_size):
     plugin, context, paths = await setup_flow(tmp_path, items=3)
-    plugin.config.update(dedupe_days=1, image_quality="large")
-    plugin.image_index = ImageIndexStore(tmp_path, retention_days=1)
+    plugin.config.update(image_quality="large")
+    plugin.image_index = ImageIndexStore(tmp_path)
     plugin._pick_illusts = MethodType(FiltersMixin._pick_illusts, plugin)
     # 1元信息为横图；2原作够大但所选large文件太小；3满足全部条件。
     plugin.illusts[0].update(width=200, height=100)
@@ -84,7 +84,7 @@ async def test_metadata_filter_precedes_claim_and_real_file_filter_releases_usag
     args = {"orientation": "portrait", "aspect_ratio": 0.75, "ratio_tolerance": 0, "min_width": 100, "min_height": 150}
     try:
         with patch("astrbot_plugin_get_px.pixiv.filters.random.sample", side_effect=lambda seq, n: list(seq)[:n]), patch(
-            "astrbot_plugin_get_px.pixiv.search.send_once", AsyncMock(return_value=DeliveryStatus.CONFIRMED)
+            "astrbot_plugin_get_px.pixiv.execution.send_once", AsyncMock(return_value=DeliveryStatus.CONFIRMED)
         ) as sender:
             summary = await ImageToolService(plugin).image(context, args)
         assert summary["downloaded_count"] == 1 and summary["delivery"] == {"confirmed": 1}
@@ -102,7 +102,7 @@ async def test_metadata_filter_precedes_claim_and_real_file_filter_releases_usag
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("available", [False, True])
-async def test_filtered_batches_replenish_without_relaxing_or_repeating(tmp_path, available):
+async def test_filtered_batches_keep_conditions_and_retry_only_if_unsubmitted(tmp_path, available):
     plugin, context, _ = await setup_flow(tmp_path, items=1)
     wrong = dict(_illust(10), width=160, height=120)
     good = dict(_illust(11), width=120, height=160)
@@ -110,17 +110,17 @@ async def test_filtered_batches_replenish_without_relaxing_or_repeating(tmp_path
         ([wrong], 1, "pixiv:search:test"),
         ([good] if available else [wrong], 1, "lolicon:search:test"),
         ([wrong], 1, "lolicon:search:test"),
-    ])
+    ] * 2)
     path = tmp_path / "portrait.png"
     Image.new("RGB", (120, 160)).save(path)
     plugin.downloader.download_for_send.return_value = (str(path), "original", path.stat().st_size)
     plugin.downloader.download_for_send.side_effect = None
     service = ImageToolService(plugin)
-    with patch("astrbot_plugin_get_px.pixiv.search.send_once", AsyncMock(return_value=DeliveryStatus.CONFIRMED)) as sender:
+    with patch("astrbot_plugin_get_px.pixiv.execution.send_once", AsyncMock(return_value=DeliveryStatus.CONFIRMED)) as sender:
         summary = await service.image(context, {"tag": "test", "count": 2, "orientation": "portrait"})
-        repeated = await service.image(context, {"orientation": "landscape"})
-    assert repeated["duplicate_call"]
-    assert plugin._fetch_source_candidates.await_count == 3
+        repeated = await service.image(context, {"tag": "test", "count": 2, "orientation": "portrait"})
+    assert bool(repeated.get("duplicate_call")) == available
+    assert plugin._fetch_source_candidates.await_count == (3 if available else 6)
     assert plugin.downloader.download_for_send.await_count == int(available)
     assert sender.await_count == int(available)
     assert summary["downloaded_count"] == int(available) and summary["message"]
@@ -134,7 +134,7 @@ async def test_valid_dimensions_never_override_content_safety_or_service_failure
     Image.new("RGB", (120, 160)).save(paths[0])
     plugin._filter_blacklisted_illusts = MethodType(FiltersMixin._filter_blacklisted_illusts, plugin)
     service = ImageToolService(plugin)
-    with patch("astrbot_plugin_get_px.pixiv.search.send_once", AsyncMock()) as sender:
+    with patch("astrbot_plugin_get_px.pixiv.execution.send_once", AsyncMock()) as sender:
         summary = await service.image(context, {"orientation": "portrait"})
         assert not summary["downloaded_count"]
         context.context.event = Event()
@@ -144,3 +144,12 @@ async def test_valid_dimensions_never_override_content_safety_or_service_failure
     sender.assert_not_awaited()
     plugin.downloader.download_for_send.assert_not_awaited()
     assert (await plugin.checkin_store.find_profile("10001")).coins == 100
+
+
+@pytest.mark.parametrize("ratio,tolerance", [(0.1, 0.05), (0.05, 0.025), (0.75, 0.1)])
+def test_default_ratio_tolerance_accepts_narrow_ratios(ratio, tolerance):
+    selection = ImageSelection.from_args({"aspect_ratio": ratio})
+    assert selection.ratio_tolerance == tolerance
+    assert selection.matches_dimensions(50, int(50 / ratio))
+    assert not selection.matches_dimensions(100, 100)
+    assert ImageSelection.from_args({"aspect_ratio": ratio, "ratio_tolerance": 0}).ratio_tolerance == 0

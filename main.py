@@ -1,13 +1,11 @@
 """AstrBot 插件 — 安全插画发图与签到
 
-通过标签搜索插画并发送图片，支持 Lolicon/Pixiv 图片源优先级与自动回退、内容安全过滤、多页作品、自然语言自动触发和签到。
+通过标签搜索插画并发送图片，支持 Lolicon/Pixiv 图片源优先级与自动回退、内容安全过滤、多页作品、模型原生取图和签到。
 
 搜索指令：
     /p [标签] [数量]           搜索并发送图片
-
-自动触发（需在配置中开启）：
-    来一份图                   发送 1 张随机图片
-    来三张初音ミク图             搜索标签「初音ミク」发送 3 张
+    /pd <作品ID或链接> [页码]  发送指定作品的单页
+    /pr <日|周|月> [数量]     按榜单顺序发送图片
 
 签到指令：
     /签到                      每日签到
@@ -33,7 +31,6 @@
 
 import asyncio
 from pathlib import Path
-import re
 import time
 import weakref
 
@@ -45,7 +42,7 @@ from astrbot.core.star.filter.command import GreedyStr
 from astrbot.core.star.star_tools import StarTools
 from .checkin import CheckinStore, UnversionedCheckinDatabaseError
 from .group_safety import SessionSafetyService
-from .tools.images import ImageToolService
+from .tools.service import ImageToolService
 from .checkin.application import CheckinApplicationMixin
 from .checkin.artwork import CheckinArtworkMixin
 from .checkin.cache import CheckinCardCache
@@ -56,10 +53,12 @@ from .checkin.omnidraw_bridge import OmnidrawBridge
 from .checkin.shop import CheckinShopMixin
 from .pixiv import DeliveryMixin, FiltersMixin, SearchMixin
 from .pixiv.client import PixivClient
+from .pixiv.commands import PixivCommandMixin
 from .pixiv.constants import MAX_IMAGE_COUNT
 from .pixiv.downloader import ImageDownloader
 from .pixiv.index import ImageIndexStore
 from .pixiv.lolicon import LoliconClient
+from .pixiv.network import NetworkRouting, PROXY_ALL
 from .plugin_api import PluginWebApi
 
 # ──────────────────────────────────────────────────────────────────────
@@ -68,29 +67,14 @@ from .plugin_api import PluginWebApi
 
 LOG_PREFIX = "[GetPx]"
 PLUGIN_NAME = "astrbot_plugin_get_px"
-PLUGIN_VERSION = "v3.8.7"
+PLUGIN_VERSION = "v3.8.8"
 WEB_INTERNAL_ERROR_MESSAGE = "服务内部错误，请稍后重试"
 
-AUTO_TRIGGER_PATTERN = r"^/?(来\s*(.*?)(份|个|张|点))(.*?)(福利|色|瑟|涩|塞)?图$"
 CHECKIN_REGEX_PATTERN = r"^(?!/)签到$"
 CHECKIN_HELP_IMAGE = (
     Path(__file__).resolve().parent / "assets" / "checkin_help_v4.1.png"
 )
 
-
-CHINESE_NUMBER_MAP = {
-    "一": "1",
-    "二": "2",
-    "两": "2",
-    "三": "3",
-    "四": "4",
-    "五": "5",
-    "六": "6",
-    "七": "7",
-    "八": "8",
-    "九": "9",
-    "十": "10",
-}
 
 # ──────────────────────────────────────────────────────────────────────
 # 插件主类
@@ -102,6 +86,7 @@ class GetPxPlugin(
     CheckinCommandMixin,
     CheckinShopMixin,
     CheckinArtworkMixin,
+    PixivCommandMixin,
     SearchMixin,
     DeliveryMixin,
     FiltersMixin,
@@ -113,8 +98,10 @@ class GetPxPlugin(
         self.safety_service = SessionSafetyService(config, log_prefix=LOG_PREFIX)
         self.client: PixivClient | None = None
         self.lolicon_client: LoliconClient | None = None
+        self.network_routing = self._network_config()
         self.downloader = ImageDownloader(
-            self._cfg_str("lolicon_image_proxy_origins", "")
+            self._cfg_str("lolicon_image_proxy_origins", ""),
+            proxy_url=self.network_routing.proxy_url,
         )
         self._last_request: dict[str, float] = {}
         self.data_dir: Path | None = None
@@ -127,7 +114,9 @@ class GetPxPlugin(
         )
         self.checkin_store: CheckinStore | None = None
         self.checkin_cache: CheckinCardCache | None = None
-        self.checkin_greeting = CheckinGreetingGenerator(context)
+        self.checkin_greeting = CheckinGreetingGenerator(
+            context, proxy_url=self.network_routing.proxy_url
+        )
         self.holiday_calendar: HolidayCalendar | None = None
         self._holiday_refresh_task: asyncio.Task | None = None
         self._termination_task: asyncio.Task[None] | None = None
@@ -146,13 +135,11 @@ class GetPxPlugin(
         self.data_dir = Path(data_dir)
         self.downloader.temp_dir = self.data_dir / "temp"
         self._cleanup_retired_transport_config()
-        dedupe_days = self._cfg_int("dedupe_days", 1, 0, 7)
         self._init_client()
         # SQLite DDL/迁移是同步操作，放入线程池避免阻塞事件循环
         self.image_index = await asyncio.to_thread(
             ImageIndexStore,
             data_dir,
-            retention_days=dedupe_days,
         )
         await self.image_index.cleanup_old_days(trigger="startup")
         checkin_database_existed = (self.data_dir / "checkin.sqlite3").exists()
@@ -163,25 +150,33 @@ class GetPxPlugin(
                 f"{LOG_PREFIX} 签到数据库缺少 schema 版本号且已包含数据表，"
                 "无法确认其格式。如果是从 v2.8.x 升级，请先使用插件 3.0.0 "
                 f"启动一次完成数据迁移，再升级到 {PLUGIN_VERSION}；"
-                "数据库未自动修改；请先备份并核对格式，不要直接删除生产数据库。"
+                "否则请检查或移除 checkin.sqlite3 后重启。"
             )
             raise
         database_action = "已加载" if checkin_database_existed else "已创建"
         logger.info(
             f"{LOG_PREFIX} 签到数据库{database_action}: "
-            f"version={PLUGIN_VERSION} database=checkin.sqlite3"
+            f"version={PLUGIN_VERSION}, path={self.checkin_store._db_path}"
         )
         await self.safety_service.initialize(
             self.checkin_store, self.image_index, self.data_dir
         )
         # 归档及新配置保存成功后，才收敛旧 schema3；不删除历史表。
-        convergence = await asyncio.to_thread(
-            self.checkin_store.converge_legacy_group_policy_schema
-        )
+        try:
+            convergence = await asyncio.to_thread(
+                self.checkin_store.converge_legacy_group_policy_schema
+            )
+        except Exception as exc:
+            logger.error(
+                f"{LOG_PREFIX} 会话策略数据库收敛失败，终止插件加载: "
+                f"error_type={type(exc).__name__}"
+            )
+            raise
         logger.info(
             f"{LOG_PREFIX} 安全策略初始化完成: "
             f"from_version={convergence['from_version']} "
-            f"to_version={convergence['to_version']}"
+            f"to_version={convergence['to_version']} "
+            f"backup_file={Path(convergence['backup_path']).name if convergence['backup_path'] else '-'}"
         )
         self.checkin_cache = CheckinCardCache(self.data_dir / "checkin_card_cache")
         self._omnidraw_hint_logged = False
@@ -193,6 +188,7 @@ class GetPxPlugin(
         self.holiday_calendar = HolidayCalendar(
             self.data_dir,
             plugin_version=PLUGIN_VERSION,
+            proxy_url=self.network_routing.proxy_url,
         )
         await self.downloader.resume_cleanup()
         self._holiday_refresh_task = asyncio.create_task(
@@ -218,11 +214,22 @@ class GetPxPlugin(
                 f"error_type={type(exc).__name__}"
             )
 
+    def _network_config(self) -> NetworkRouting:
+        return NetworkRouting(
+            self._cfg_str("network_proxy_url"),
+            self._cfg_str("network_proxy_mode", PROXY_ALL),
+        )
+
     def _init_client(self):
         """初始化固定地址的 Lolicon 和可选的 Pixiv 客户端。"""
+        routing = getattr(self, "network_routing", None)
+        if routing is None:
+            routing = self._network_config()
+            self.network_routing = routing
         if getattr(self, "lolicon_client", None) is None:
             self.lolicon_client = LoliconClient(
                 exclude_ai=self._cfg_bool("lolicon_exclude_ai", True),
+                proxy_url=routing.lolicon_proxy_url,
                 request_timeout=self._cfg_float(
                     "request_timeout", 30.0, 5.0, 120.0
                 ),
@@ -235,6 +242,7 @@ class GetPxPlugin(
         if getattr(self, "client", None) is None:
             self.client = PixivClient(
                 refresh_token=token,
+                proxy_url=routing.proxy_url,
                 request_timeout=self._cfg_float("request_timeout", 30.0, 5.0, 120.0),
             )
         logger.info(f"{LOG_PREFIX} 图片源初始化完成: available_sources=lolicon,pixiv")
@@ -358,27 +366,20 @@ class GetPxPlugin(
     @filter.command("p")
     async def cmd_p(self, event: AstrMessageEvent, query: GreedyStr = GreedyStr):
         """搜索并发送图片。参数: [标签] [数量]"""
-        if not self._ensure_client_or_error(event):
-            yield event.plain_result(
-                "⚠️ 图片源暂不可用，请配置 Lolicon API，或填写 pixiv_refresh_token 作为回退"
-            )
-            return
-        event.stop_event()
-        # 框架无参时传入空字符串；直接调用时则会保留默认哨兵。
-        raw_query = "" if query is GreedyStr else str(query or "")
-        tag, count = self._split_tag_and_count(raw_query)
-        async for result in self._handle_search(event, tag=tag, count_str=count):
+        async for result in self._handle_pixiv_command(event, "auto", query):
             yield result
 
-    @staticmethod
-    def _split_tag_and_count(query: str) -> tuple[str, str]:
-        """把 GreedyStr 参数拆成标签与尾部数量；纯数字视为随机发图数量。"""
-        tokens = query.split()
-        if not tokens:
-            return "", ""
-        if tokens[-1].isdigit():
-            return " ".join(tokens[:-1]), tokens[-1]
-        return " ".join(tokens), ""
+    @filter.command("pd")
+    async def cmd_pd(self, event: AstrMessageEvent, query: GreedyStr = GreedyStr):
+        """下载并发送指定作品单页。参数: <作品ID或标准链接> [页码]"""
+        async for result in self._handle_pixiv_command(event, "artwork", query):
+            yield result
+
+    @filter.command("pr")
+    async def cmd_pr(self, event: AstrMessageEvent, query: GreedyStr = GreedyStr):
+        """按 Pixiv 榜单顺序发图。参数: <日|周|月> [数量]"""
+        async for result in self._handle_pixiv_command(event, "ranking", query):
+            yield result
 
     # ──────────────────────────────────────────────────────────────
     # 签到指令
@@ -397,7 +398,7 @@ class GetPxPlugin(
         event.stop_event()
         if not CHECKIN_HELP_IMAGE.is_file():
             logger.error(
-                f"{LOG_PREFIX} 签到帮助图片不存在: asset=checkin_help"
+                f"{LOG_PREFIX} 签到帮助图片不存在: {CHECKIN_HELP_IMAGE}"
             )
             yield event.plain_result("签到帮助图片缺失，请联系管理员重新安装插件")
             return
@@ -629,46 +630,6 @@ class GetPxPlugin(
         yield event.plain_result(
             await self._handle_checkin_event_admin(event, "删除", event_id, "", "")
         )
-
-    @filter.regex(AUTO_TRIGGER_PATTERN)
-    async def auto_trigger(self, event: AstrMessageEvent):
-        """自然语言自动触发发图。"""
-        if not self._cfg_bool("auto_trigger_enabled", False):
-            return
-        if not self._ensure_client_or_error(event):
-            return
-
-        message = event.get_message_str().strip()
-        match = re.match(AUTO_TRIGGER_PATTERN, message)
-        if not match:
-            return
-
-        event.stop_event()
-
-        count_part = match.group(2).strip() if match.group(2) else ""
-        tag_part = (match.group(4) or "").strip()
-
-        # 解析数量：中文数字、阿拉伯数字
-        count_str = ""
-        raw = count_part if count_part else "1"
-        if raw.isdigit():
-            count_str = raw
-        else:
-            for cn_digit, arabic in CHINESE_NUMBER_MAP.items():
-                if raw == cn_digit:
-                    count_str = arabic
-                    break
-            if not count_str:
-                count_str = "1"
-
-        logger.info(
-            f"{LOG_PREFIX} 自然语言触发: count={count_str} "
-            f"tag_configured={'yes' if tag_part else 'no'}"
-        )
-        async for result in self._handle_search(
-            event, tag=tag_part, count_str=count_str
-        ):
-            yield result
 
     # ──────────────────────────────────────────────────────────────
     # 工具方法

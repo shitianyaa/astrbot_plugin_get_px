@@ -198,7 +198,7 @@ async function reloadAll() {
       await Promise.allSettled([
         apiGet("overview"),
         apiGet("checkin-groups"),
-        apiGet("content-safety"),
+        safetyPanel.reload(),
         apiGet("image-blacklist"),
       ]);
 
@@ -232,11 +232,7 @@ async function reloadAll() {
       if (!state.loaded.groups) renderGroupsError();
     }
 
-    if (safetyResult.status === "fulfilled") {
-      state.safety = safetyResult.value;
-      state.loaded.safety = true;
-      renderSafety();
-    } else {
+    if (safetyResult.status === "rejected") {
       failures.push(errorMessage(safetyResult.reason, "内容安全数据读取失败"));
       if (!state.loaded.safety) renderSafetyError();
     }
@@ -529,22 +525,13 @@ const safetyPanel = mountSafety({ apiGet, apiPost, escapeHtml, showToast, confir
   if (state.loaded.overview) renderOverview();
 } });
 
-function renderSafety() {
-  safetyPanel.update(state.safety);
-}
-
-
 function renderSafetyError() {
   els.customTerms.textContent = "安全规则读取失败，请刷新后重试。";
 }
 
 async function reloadSafety() {
   try {
-    state.safety = await apiGet("content-safety");
-    state.loaded.safety = true;
-    state.overview.custom_term_count = state.safety.global_safety_terms?.length || 0;
-    renderSafety();
-    if (state.loaded.overview) renderOverview();
+    await safetyPanel.reload();
   } catch (error) {
     renderSafetyError();
     showGlobalError([errorMessage(error, "内容安全数据读取失败")]);

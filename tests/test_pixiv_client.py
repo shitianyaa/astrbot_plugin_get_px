@@ -2,9 +2,7 @@ import asyncio
 import sys
 import unittest
 from pathlib import Path
-from unittest.mock import AsyncMock, patch
-
-import pytest
+from unittest.mock import patch
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 
@@ -39,24 +37,6 @@ def _logged_in_client(api) -> PixivClient:
     return client
 
 
-def client_with_response(payload):
-    api = AsyncMock()
-    api.search_illust.return_value = payload
-    api.illust_recommended.return_value = payload
-    api.requests_.return_value = payload
-    return _logged_in_client(api)
-
-
-@pytest.mark.asyncio
-async def test_portrait_search_uses_authenticated_request():
-    client = client_with_response({"illusts": [], "next_url": None})
-    await client.search("tag", portrait=True)
-    kwargs = client._api.requests_.await_args.kwargs
-    assert kwargs["url"] == "https://app-api.pixiv.net/v1/search/illust"
-    assert kwargs["params"]["ratio_pattern"] == "portrait"
-    assert kwargs["auth"] is True
-
-
 class PixivClientIllustDetailTest(unittest.IsolatedAsyncioTestCase):
     async def test_retry_aborts_when_client_closes_during_backoff(self):
         client = PixivClient("token")
@@ -67,7 +47,7 @@ class PixivClientIllustDetailTest(unittest.IsolatedAsyncioTestCase):
             factory_calls += 1
 
             async def fail():
-                raise TimeoutError("temporary failure")
+                raise RuntimeError("temporary failure")
 
             return fail()
 

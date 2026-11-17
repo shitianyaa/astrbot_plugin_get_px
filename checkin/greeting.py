@@ -11,6 +11,7 @@ import aiohttp
 from astrbot.api import logger
 
 from .content import GreetingContext, MAX_GREETING_LENGTH
+from ..pixiv.network import create_http_session, normalize_proxy_url
 
 LOG_PREFIX = "[GetPx]"
 
@@ -103,8 +104,9 @@ _CHECKIN_TAG_RE = re.compile(r"</?checkin_data\b[^>]*>", re.IGNORECASE)
 
 
 class CheckinGreetingGenerator:
-    def __init__(self, context: Any):
+    def __init__(self, context: Any, *, proxy_url: str = ""):
         self.context = context
+        self.proxy_url = normalize_proxy_url(proxy_url)
         self._session: aiohttp.ClientSession | None = None
         self._closed = False
         self._warning_log_times: dict[str, float] = {}
@@ -125,7 +127,7 @@ class CheckinGreetingGenerator:
         if self._closed:
             raise RuntimeError("check-in greeting generator is closed")
         if self._session is None or self._session.closed:
-            self._session = aiohttp.ClientSession()
+            self._session = create_http_session(self.proxy_url)
         return self._session
 
     async def close(self) -> None:
@@ -149,7 +151,7 @@ class CheckinGreetingGenerator:
         if not enabled:
             logger.debug(
                 f"{LOG_PREFIX} AI 签到问候完成: result=本地文案 reason=未启用 "
-                "provider=无 duration_ms=0"
+                "provider=无 duration=0ms"
             )
             return fallback
 
@@ -168,7 +170,7 @@ class CheckinGreetingGenerator:
                 self._warning(
                     "provider_lookup_error",
                     f"{LOG_PREFIX} AI 签到问候完成: result=本地文案 "
-                    f"reason=模型查询失败 provider=当前会话 duration_ms={elapsed_ms} "
+                    f"reason=模型查询失败 provider=当前会话 duration={elapsed_ms}ms "
                     f"error_type={type(exc).__name__}"
                 )
                 return fallback
@@ -176,8 +178,8 @@ class CheckinGreetingGenerator:
             elapsed_ms = int((time.monotonic() - started_at) * 1000)
             self._warning(
                 "no_provider",
-                f"{LOG_PREFIX} AI 签到问候完成: result=本地文案 reason=未找到可用模型 "
-                f"provider=当前会话 duration_ms={elapsed_ms}"
+                f"{LOG_PREFIX} AI 签到问候完成: result=本地文案 reason=no_model "
+                f"provider=当前会话 duration={elapsed_ms}ms"
             )
             return fallback
 
@@ -197,7 +199,7 @@ class CheckinGreetingGenerator:
             self._warning(
                 "timeout",
                 f"{LOG_PREFIX} AI 签到问候完成: result=本地文案 reason=超时 "
-                f"provider={_greeting_provider_label(provider_source)} duration_ms={elapsed_ms}"
+                f"provider={_greeting_provider_label(provider_source)} duration={elapsed_ms}ms"
             )
             return fallback
         except Exception as exc:
@@ -205,7 +207,7 @@ class CheckinGreetingGenerator:
             self._warning(
                 "provider_error",
                 f"{LOG_PREFIX} AI 签到问候完成: result=本地文案 reason=模型调用失败 "
-                f"provider={_greeting_provider_label(provider_source)} duration_ms={elapsed_ms} "
+                f"provider={_greeting_provider_label(provider_source)} duration={elapsed_ms}ms "
                 f"error_type={type(exc).__name__}"
             )
             return fallback
@@ -219,7 +221,7 @@ class CheckinGreetingGenerator:
                     reason,
                     f"{LOG_PREFIX} AI 签到问候完成: result=本地文案 "
                     f"reason={_greeting_reason_label(reason)} "
-                    f"provider={_greeting_provider_label(provider_source)} duration_ms={elapsed_ms}"
+                    f"provider={_greeting_provider_label(provider_source)} duration={elapsed_ms}ms"
                 )
                 return fallback
             if getattr(response, "tools_call_name", None):
@@ -227,7 +229,7 @@ class CheckinGreetingGenerator:
                 self._warning(
                     "tool_response",
                     f"{LOG_PREFIX} AI 签到问候完成: result=本地文案 reason=工具调用响应 "
-                    f"provider={_greeting_provider_label(provider_source)} duration_ms={elapsed_ms}"
+                    f"provider={_greeting_provider_label(provider_source)} duration={elapsed_ms}ms"
                 )
                 return fallback
             text, reason = self._normalize_response_with_reason(
@@ -238,7 +240,7 @@ class CheckinGreetingGenerator:
             self._warning(
                 "invalid_response",
                 f"{LOG_PREFIX} AI 签到问候完成: result=本地文案 reason=响应格式无效 "
-                f"provider={_greeting_provider_label(provider_source)} duration_ms={elapsed_ms} "
+                f"provider={_greeting_provider_label(provider_source)} duration={elapsed_ms}ms "
                 f"error_type={type(exc).__name__}"
             )
             return fallback
@@ -248,21 +250,21 @@ class CheckinGreetingGenerator:
             logger.debug(
                 f"{LOG_PREFIX} AI 签到问候完成: result=本地文案 "
                 f"reason={_greeting_reason_label(reason)} "
-                f"provider={_greeting_provider_label(provider_source)} duration_ms={elapsed_ms}"
+                f"provider={_greeting_provider_label(provider_source)} duration={elapsed_ms}ms"
             )
             return fallback
         if len(text) > MAX_GREETING_LENGTH:
             elapsed_ms = int((time.monotonic() - started_at) * 1000)
             logger.debug(
                 f"{LOG_PREFIX} AI 签到问候完成: result=本地文案 reason=内容过长 "
-                f"provider={_greeting_provider_label(provider_source)} duration_ms={elapsed_ms} "
+                f"provider={_greeting_provider_label(provider_source)} duration={elapsed_ms}ms "
                 f"output_length={len(text)}"
             )
             return fallback
         elapsed_ms = int((time.monotonic() - started_at) * 1000)
         logger.debug(
             f"{LOG_PREFIX} AI 签到问候完成: result=AI reason=成功 "
-            f"provider={_greeting_provider_label(provider_source)} duration_ms={elapsed_ms} "
+            f"provider={_greeting_provider_label(provider_source)} duration={elapsed_ms}ms "
             f"output_length={len(text)}"
         )
         return text, "ai"
@@ -296,7 +298,7 @@ class CheckinGreetingGenerator:
             self._warning(
                 "hitokoto_request_error",
                 f"{LOG_PREFIX} 一言签到问候完成: result=本地文案 reason=请求失败 "
-                f"duration_ms={elapsed_ms} error_type={type(exc).__name__}",
+                f"duration={elapsed_ms}ms error_type={type(exc).__name__}",
             )
             return fallback
 
@@ -304,7 +306,7 @@ class CheckinGreetingGenerator:
             elapsed_ms = int((time.monotonic() - started_at) * 1000)
             logger.debug(
                 f"{LOG_PREFIX} 一言签到问候完成: result=本地文案 reason=返回格式无效 "
-                f"duration_ms={elapsed_ms}"
+                f"duration={elapsed_ms}ms"
             )
             return fallback
         text, reason = self._normalize_response_with_reason(payload.get("hitokoto", ""))
@@ -312,14 +314,14 @@ class CheckinGreetingGenerator:
             elapsed_ms = int((time.monotonic() - started_at) * 1000)
             logger.debug(
                 f"{LOG_PREFIX} 一言签到问候完成: result=本地文案 "
-                f"reason={_greeting_reason_label(reason)} duration_ms={elapsed_ms}"
+                f"reason={_greeting_reason_label(reason)} duration={elapsed_ms}ms"
             )
             return fallback
         if len(text) > HITOKOTO_MAX_LENGTH:
             elapsed_ms = int((time.monotonic() - started_at) * 1000)
             logger.debug(
                 f"{LOG_PREFIX} 一言签到问候完成: result=本地文案 reason=内容过长 "
-                f"duration_ms={elapsed_ms} output_length={len(text)}"
+                f"duration={elapsed_ms}ms output_length={len(text)}"
             )
             return fallback
         attribution = self._hitokoto_attribution(
@@ -328,7 +330,7 @@ class CheckinGreetingGenerator:
         elapsed_ms = int((time.monotonic() - started_at) * 1000)
         logger.debug(
             f"{LOG_PREFIX} 一言签到问候完成: result=一言 reason=成功 "
-            f"duration_ms={elapsed_ms} output_length={len(text)}"
+            f"duration={elapsed_ms}ms output_length={len(text)}"
         )
         return text, "hitokoto", attribution
 

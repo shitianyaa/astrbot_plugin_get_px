@@ -81,11 +81,7 @@ class CheckinApplicationMixin:
         image_index = getattr(self, "image_index", None)
         if image_index is None:
             return False
-        try:
-            return int(getattr(image_index, "retention_days", 1)) > 0
-        except (TypeError, ValueError):
-            # 未知的第三方索引实现按启用处理，避免误释放真实占用。
-            return True
+        return True
 
     async def _handle_checkin(
         self,
@@ -395,7 +391,7 @@ class CheckinApplicationMixin:
                         f"error_type={type(exc).__name__}"
                     )
                 logger.info(
-                    f"{LOG_PREFIX} 签到卡发送调用已结束: tier={actual_tier} "
+                    f"{LOG_PREFIX} 签到卡发送完成: tier={actual_tier} "
                     f"cache_hit={'yes' if cache_hit else 'no'} "
                     f"delivery_status={delivery_status.value} "
                     f"background_mode={getattr(background, 'mode', 'none')}"
@@ -715,7 +711,7 @@ class CheckinApplicationMixin:
             bot = getattr(event, "bot", None)
             if bot is None or not hasattr(bot, "call_action"):
                 logger.warning(
-                    f"{LOG_PREFIX} QQ 生日未读取: reason=call_action_unavailable"
+                    f"{LOG_PREFIX} QQ 生日读取失败: 当前事件不支持 call_action"
                 )
                 return QQBirthdayLookup(None, False)
             payload = await asyncio.wait_for(
@@ -728,7 +724,7 @@ class CheckinApplicationMixin:
             )
             parsed = parse_qq_birthday(payload)
             if parsed is None:
-                logger.info(f"{LOG_PREFIX} QQ 生日未读取: reason=birthday_not_available")
+                logger.info(f"{LOG_PREFIX} QQ 生日未读取: 用户未公开生日")
             else:
                 logger.info(f"{LOG_PREFIX} QQ 生日读取成功")
             return QQBirthdayLookup(parsed, True)

@@ -27,6 +27,7 @@ export function mountSafety({ apiGet, apiPost, escapeHtml, showToast, confirmAct
   const $ = id => document.getElementById(id);
   let settings = { safety_groups: [], global_safety_terms: [], keyword_match_mode: "宽松" };
   let draft = null, baseline = null, busy = false, trigger = null;
+  let loadSequence = 0, restoreTrigger = true;
   const dialog = $("safetyGroupDialog");
   const form = $("safetyGroupForm");
   const modeSelect = createSelect({
@@ -64,12 +65,25 @@ export function mountSafety({ apiGet, apiPost, escapeHtml, showToast, confirmAct
     $("policyList").innerHTML = groups.map(group => `<button type="button" class="safety-group-card" data-edit-group="${escapeHtml(group.group_id)}"><strong>${escapeHtml(group.name)}</strong><span class="safety-rating ${group.allow_r18 ? "sensitive" : ""}">${group.allow_r18 ? "允许 R18" : "仅普通分级"}</span><span>${group.sessions.length} 个会话 · ${group.custom_terms.length} 个附加关键词</span><small>${group.sessions.length ? escapeHtml(group.sessions[0]) : "尚未关联会话"}</small></button>`).join("") || '<div class="empty">暂无匹配分组。未分组会话仍遵循全局规则，R18 关闭。</div>';
   }
   async function reload() {
-    settings = await apiGet("content-safety");
-    onChange(settings);
-    render();
-    return settings;
+    const sequence = ++loadSequence;
+    try {
+      const value = await apiGet("content-safety");
+      if (sequence !== loadSequence) return null;
+      settings = value;
+      onChange(settings);
+      render();
+      return settings;
+    } catch (error) {
+      if (sequence !== loadSequence) return null;
+      throw error;
+    }
+  }
+  function focusGroup(groupId) {
+    const card = [...$("policyList").querySelectorAll("[data-edit-group]")].find(button => button.dataset.editGroup === groupId);
+    (card || $("policyAddBtn")).focus();
   }
   function open(group, button) {
+    restoreTrigger = true;
     draft = createGroupDraft(group);
     baseline = createGroupDraft(group);
     trigger = button;
@@ -89,7 +103,7 @@ export function mountSafety({ apiGet, apiPost, escapeHtml, showToast, confirmAct
     await closeDialog(dialog);
   }
   dialog.addEventListener("cancel", event => { event.preventDefault(); close(); });
-  dialog.addEventListener("close", () => { draft = baseline = null; trigger?.focus(); });
+  dialog.addEventListener("close", () => { draft = baseline = null; if (restoreTrigger) trigger?.focus(); });
   $("safetyGroupCancel").addEventListener("click", close);
   $("policyAddBtn").addEventListener("click", event => open({}, event.currentTarget));
   $("policySearch").addEventListener("input", render);
@@ -134,6 +148,7 @@ export function mountSafety({ apiGet, apiPost, escapeHtml, showToast, confirmAct
       const result = await apiPost("content-safety/groups/save", payload);
       const savedGroup = result.group;
       if (savedGroup) {
+        ++loadSequence;
         settings.safety_groups = settings.safety_groups.filter(
           group => group.group_id !== savedGroup.group_id,
         ).concat(savedGroup);
@@ -141,7 +156,9 @@ export function mountSafety({ apiGet, apiPost, escapeHtml, showToast, confirmAct
         onChange(settings);
         render();
       }
+      restoreTrigger = false;
       await closeDialog(dialog);
+      focusGroup(savedGroup?.group_id);
       showToast("安全分组已保存");
       // 当前接口返回规范化分组，无需再等一轮 GET；旧响应才补读。
       if (!savedGroup) {
@@ -157,14 +174,17 @@ export function mountSafety({ apiGet, apiPost, escapeHtml, showToast, confirmAct
     try {
       const groupId = draft.group_id;
       await apiPost("content-safety/groups/remove", { group_id: groupId });
+      ++loadSequence;
       settings.safety_groups = settings.safety_groups.filter(group => group.group_id !== groupId);
       onChange(settings);
       render();
+      restoreTrigger = false;
       await closeDialog(dialog);
+      focusGroup();
       showToast("安全分组已删除");
     }
     catch (error) { if (dialog.open) $("safetyGroupError").textContent = error.message; else showToast(error.message, "error"); }
     finally { setBusy(false); }
   });
-  return { reload, update(value) { settings = value; render(); } };
+  return { reload, update(value) { ++loadSequence; settings = value; onChange(settings); render(); } };
 }

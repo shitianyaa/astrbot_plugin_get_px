@@ -12,8 +12,8 @@ from unittest.mock import AsyncMock, Mock, patch
 import pytest
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
+from astrbot_plugin_get_px.tools.service import ImageToolService
 from astrbot_plugin_get_px.tools.images import (
-    ImageToolService,
     GetPxImageTool,
     GetPxContextTool,
 )
@@ -71,13 +71,14 @@ async def test_tool_shrinks_to_affordable_and_never_emits_normal_bill(tmp_path):
     plugin, context, paths = await setup_flow(tmp_path, coins=45)
     service = ImageToolService(plugin)
     with patch(
-        "astrbot_plugin_get_px.pixiv.search.send_once",
+        "astrbot_plugin_get_px.pixiv.execution.send_once",
         AsyncMock(return_value=DeliveryStatus.ACCEPTED),
     ):
         summary = await service.image(context, {"count": 3})
         repeated = await service.image(context, {"count": 2})
     assert summary["effective_count"] == 2 and summary["delivery"] == {"accepted": 2}
     assert summary["settlement"] == "completed" and summary["notice"]
+    assert summary["count_limits"] == ["balance"]
     assert "balance" not in summary and "cost" not in summary
     assert not context.context.event.sent and repeated["duplicate_call"]
     assert not repeated["notice"]
@@ -95,7 +96,7 @@ async def test_low_balance_notice_uses_transaction_balance_and_frozen_price(tmp_
         plugin.config["p_coin_cost"] = 99
         return DeliveryStatus.CONFIRMED
 
-    with patch("astrbot_plugin_get_px.pixiv.search.send_once", side_effect=deliver):
+    with patch("astrbot_plugin_get_px.pixiv.execution.send_once", side_effect=deliver):
         summary = await ImageToolService(plugin).image(context, {"count": 3})
     assert (await plugin.checkin_store.find_profile("10001")).coins == 40
     assert summary["notice"] and summary["settlement"] == "completed"
@@ -146,7 +147,7 @@ async def test_free_context_and_image_do_not_depend_on_wallet(
     assert snapshot["max_count"] == 5 and snapshot["allow_r18"] is False
     assert not service._calls
     with patch(
-        "astrbot_plugin_get_px.pixiv.search.send_once",
+        "astrbot_plugin_get_px.pixiv.execution.send_once",
         AsyncMock(return_value=DeliveryStatus.CONFIRMED),
     ) as sender:
         summary = await service.image(context, {"count": 3})
@@ -195,6 +196,8 @@ async def test_free_context_and_image_do_not_depend_on_wallet(
         {"max_size_mib": 1e-12},
         {"r18": True},
         {"target": "other"},
+        {"mode": "artwork", "targets": [{"artwork": "1"}], "count": True},
+        {"mode": "artwork", "targets": [{"artwork": "1"}, {"artwork": "2"}], "count": 1},
     ],
 )
 async def test_tool_rejects_invalid_parameters_before_consumption(tmp_path, args):
@@ -212,7 +215,7 @@ async def test_tool_passes_short_names_without_expanding_or_truncating(tmp_path,
     plugin, context, _ = await setup_flow(tmp_path, items=1)
     plugin._fetch_source_candidates = AsyncMock(wraps=plugin._fetch_source_candidates)
     with patch(
-        "astrbot_plugin_get_px.pixiv.search.send_once",
+        "astrbot_plugin_get_px.pixiv.execution.send_once",
         AsyncMock(return_value=DeliveryStatus.CONFIRMED),
     ):
         summary = await ImageToolService(plugin).image(context, {"tag": tag})
@@ -300,7 +303,10 @@ async def test_inflight_repeat_and_close_cancel_before_client_cleanup(tmp_path):
     plugin.context.get_llm_tool_manager().func_list.append(foreign)
     task = asyncio.create_task(service.image(context, {"count": 1}))
     await started.wait()
-    assert (await service.image(context, {}))["duplicate_call"]
+    repeated = await service.image(context, {})
+    assert repeated["duplicate_call"] and repeated["running"]
+    assert not repeated["delivery"] and not repeated["downloaded_count"]
+    assert plugin.downloader.download_for_send.await_count == 1
     await service.close()
     with pytest.raises(asyncio.CancelledError):
         await task
@@ -325,7 +331,7 @@ async def test_actual_framework_executor_returns_text_and_does_not_resend(tmp_pa
     service = ImageToolService(plugin)
     wrapper = ContextWrapper(context=context.context, tool_call_timeout=120)
     with patch(
-        "astrbot_plugin_get_px.pixiv.search.send_once",
+        "astrbot_plugin_get_px.pixiv.execution.send_once",
         AsyncMock(return_value=DeliveryStatus.CONFIRMED),
     ) as sender:
         outputs = [
@@ -359,22 +365,32 @@ async def test_uncertain_or_failed_delivery_keeps_existing_charge_rules(
     tmp_path, status, send_mode
 ):
     plugin, context, _ = await setup_flow(tmp_path, coins=100, items=1)
+    if status is DeliveryStatus.FAILED:
+        path = tmp_path / "retry.jpg"
+        async def download(*args, **kwargs):
+            path.write_bytes(b"image")
+            return str(path), "original", 5
+        plugin.downloader.download_for_send.side_effect = download
     with patch(
-        "astrbot_plugin_get_px.pixiv.search.send_once", AsyncMock(return_value=status)
+        "astrbot_plugin_get_px.pixiv.execution.send_once", AsyncMock(return_value=status)
     ) as sender:
         service = ImageToolService(plugin)
         summary = await service.image(context, {"send_mode": send_mode})
         repeated = await service.image(
             context, {"send_mode": "forward" if send_mode == "single" else "single"}
         )
-    assert repeated["duplicate_call"] and sender.await_count == 1
+    if status is DeliveryStatus.FAILED:
+        assert "duplicate_call" not in repeated and sender.await_count == 2
+    else:
+        assert repeated["duplicate_call"] and sender.await_count == 1
     charged = status is DeliveryStatus.TIMED_OUT
     assert (await plugin.checkin_store.find_profile("10001")).coins == (
         80 if charged else 100
     )
     assert summary["delivery"] == {status.value: 1}
     assert summary["settlement"] == ("completed" if charged else "not_required")
-    assert not summary["retry_allowed"] and not context.context.event.sent
+    assert summary["retry_allowed"] == (status is DeliveryStatus.FAILED)
+    assert not context.context.event.sent
 
 
 @pytest.mark.asyncio
@@ -386,7 +402,7 @@ async def test_settlement_shortfall_is_reported_without_amounts_or_resending(tmp
         return DeliveryStatus.CONFIRMED
 
     with patch(
-        "astrbot_plugin_get_px.pixiv.search.send_once", side_effect=deliver
+        "astrbot_plugin_get_px.pixiv.execution.send_once", side_effect=deliver
     ) as sender:
         summary = await ImageToolService(plugin).image(context, {})
     assert summary["settlement"] == "failed" and summary["message"]
@@ -407,7 +423,7 @@ async def test_timeout_during_submit_remains_unknown_and_repeat_does_not_send(tm
         await asyncio.Event().wait()
 
     with patch(
-        "astrbot_plugin_get_px.pixiv.search.send_once", side_effect=deliver
+        "astrbot_plugin_get_px.pixiv.execution.send_once", side_effect=deliver
     ) as sender:
         with pytest.raises(Exception, match="execution timeout"):
             _ = [
@@ -438,7 +454,7 @@ async def test_repeated_cancellation_waits_for_started_settlement(tmp_path):
     plugin.checkin_store.spend_coins = slow_spend
     service = ImageToolService(plugin)
     with patch(
-        "astrbot_plugin_get_px.pixiv.search.send_once",
+        "astrbot_plugin_get_px.pixiv.execution.send_once",
         AsyncMock(return_value=DeliveryStatus.CONFIRMED),
     ):
         task = asyncio.create_task(service.image(context, {}))
@@ -457,36 +473,214 @@ async def test_repeated_cancellation_waits_for_started_settlement(tmp_path):
 
 
 @pytest.mark.asyncio
-async def test_current_umo_rules_and_count_limit_are_authoritative(tmp_path):
+async def test_current_group_rules_and_count_limit_are_authoritative(tmp_path):
     from astrbot_plugin_get_px.group_safety import SessionSafetyService
     from astrbot_plugin_get_px.pixiv.filters import FiltersMixin
+    from test_group_safety_config import Config
 
     plugin, context, _ = await setup_flow(tmp_path, items=1)
     service = ImageToolService(plugin)
-    plugin.safety_service = SessionSafetyService(
-        {
-            "content_dedupe": {
-                "safety_groups": [
-                    {
-                        "name": "A",
-                        "sessions": ["bot-a:GroupMessage:1"],
-                        "allow_r18": True,
-                        "custom_terms": [],
-                    }
-                ]
-            }
-        }
-    )
-    plugin._content_safety_policy = lambda event: FiltersMixin._content_safety_policy(
-        plugin, event
-    )
-    assert (await service.get_context(context, {}))["allow_r18"]
+    plugin.safety_service = SessionSafetyService(Config(content_dedupe={}))
+    await plugin.safety_service.save_group({
+        "name": "插画", "sessions": [context.context.event.unified_msg_origin],
+        "allow_r18": True, "custom_terms": []
+    })
+    await plugin.safety_service.update_global({"keyword_match_mode": "严格"})
+    plugin._content_safety_policy = lambda event: FiltersMixin._content_safety_policy(plugin, event)
+    state = await service.get_context(context, {})
+    assert state["allow_r18"] and state["keyword_match_mode"] == "严格"
+    assert "builtin_terms_enabled" not in state and "safety_groups" not in state
     context.context.event.unified_msg_origin = "bot-b:GroupMessage:1"
     assert not (await service.get_context(context, {}))["allow_r18"]
     plugin.config["max_count"] = 1
-    with patch(
-        "astrbot_plugin_get_px.pixiv.search.send_once",
-        AsyncMock(return_value=DeliveryStatus.CONFIRMED),
-    ):
+    with patch("astrbot_plugin_get_px.pixiv.execution.send_once",
+               AsyncMock(return_value=DeliveryStatus.CONFIRMED)):
         summary = await service.image(context, {"count": 5})
     assert summary["requested_count"] == 5 and summary["effective_count"] == 1
+    assert summary["delivery"] == {"confirmed": 1}
+    assert summary["max_count"] == 1 and summary["count_limits"] == ["max_count"]
+    assert summary["notice"]
+
+
+@pytest.mark.asyncio
+async def test_repeated_cancellation_waits_for_claim_and_releases_pending(tmp_path):
+    from types import MethodType
+    from astrbot_plugin_get_px.pixiv.filters import FiltersMixin
+    from astrbot_plugin_get_px.pixiv.index import ImageIndexStore
+
+    plugin, context, _ = await setup_flow(tmp_path, items=1)
+    plugin.image_index = ImageIndexStore(tmp_path)
+    plugin._pick_illusts = MethodType(FiltersMixin._pick_illusts, plugin)
+    started, release = asyncio.Event(), asyncio.Event()
+    claim = plugin.image_index.claim_usage
+
+    async def slow_claim(**kwargs):
+        started.set()
+        await release.wait()
+        return await claim(**kwargs)
+
+    plugin.image_index.claim_usage = slow_claim
+    service = ImageToolService(plugin)
+    try:
+        task = asyncio.create_task(service.image(context, {}))
+        await started.wait()
+        task.cancel()
+        await asyncio.sleep(0)
+        task.cancel()
+        await asyncio.sleep(0)
+        assert not task.done()
+        release.set()
+        with pytest.raises(asyncio.CancelledError):
+            await task
+        rows = plugin.image_index._get_conn().execute("SELECT * FROM image_usage").fetchall()
+        assert not rows and not service._calls
+        plugin.downloader.download_for_send.assert_not_awaited()
+        assert (await plugin.checkin_store.find_profile("10001")).coins == 100
+    finally:
+        plugin.image_index.close()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("umo", [None, "", "bot:GroupMessage:", "bot:invalid:1", "bot:GroupMessage:1\n"])
+async def test_invalid_session_is_rejected_before_event_or_wallet_write(tmp_path, umo):
+    plugin, context, _ = await setup_flow(tmp_path)
+    context.context.event.unified_msg_origin = umo
+    service = ImageToolService(plugin)
+    with pytest.raises(ValueError):
+        await service.image(context, {})
+    assert not context.context.event.extras
+    with pytest.raises(ValueError):
+        await service.get_context(context, {})
+    assert (await plugin.checkin_store.find_profile("10001")).coins == 100
+
+
+@pytest.mark.asyncio
+async def test_initial_fetch_respects_selection_budget_without_retry(tmp_path):
+    plugin, context, _ = await setup_flow(tmp_path, items=1)
+    context.tool_call_timeout = 0.02
+
+    async def slow_fetch(*args, **kwargs):
+        await asyncio.Event().wait()
+
+    plugin._fetch_source_candidates = AsyncMock(side_effect=slow_fetch)
+    service = ImageToolService(plugin)
+    summary = await asyncio.wait_for(service.image(context, {}), timeout=2)
+    repeated = await service.image(context, {})
+    assert summary["message"] and not summary["delivery"] and not summary["running"]
+    assert repeated["duplicate_call"]
+    plugin._fetch_source_candidates.assert_awaited_once()
+    plugin.downloader.download_for_send.assert_not_awaited()
+    assert (await plugin.checkin_store.find_profile("10001")).coins == 100
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "requested,limit,coins,cost,effective,reasons",
+    [(2, 1, 0, 0, 1, ["max_count"]),
+     (5, 3, 45, 20, 2, ["max_count", "balance"]),
+     (2, 1, 60, 20, 1, ["max_count"]),
+     (3, 5, 200, 20, 3, [])],
+)
+async def test_count_limits_explain_clamping_without_losing_notices(
+    tmp_path, requested, limit, coins, cost, effective, reasons
+):
+    plugin, context, _ = await setup_flow(tmp_path, coins=coins, items=3)
+    plugin.config.update(max_count=limit, p_coin_cost=cost)
+    service = ImageToolService(plugin)
+    with patch("astrbot_plugin_get_px.pixiv.execution.send_once",
+               AsyncMock(return_value=DeliveryStatus.CONFIRMED)):
+        summary = await service.image(context, {"count": requested})
+        duplicate = await service.image(context, {"count": requested})
+    assert summary["requested_count"] == requested
+    assert summary["effective_count"] == summary["downloaded_count"] == effective
+    assert summary["max_count"] == limit and summary["count_limits"] == reasons
+    assert bool(summary["notice"]) == bool(reasons)
+    assert not summary["message"]
+    assert duplicate["count_limits"] == reasons and not duplicate["notice"]
+    if "max_count" in reasons:
+        assert "上限" in summary["notice"]
+    if "balance" in reasons:
+        assert "金币" in summary["notice"]
+
+
+@pytest.mark.asyncio
+async def test_candidates_shortfall_does_not_claim_a_count_limit(tmp_path):
+    plugin, context, _ = await setup_flow(tmp_path, items=1)
+    with patch("astrbot_plugin_get_px.pixiv.execution.send_once",
+               AsyncMock(return_value=DeliveryStatus.CONFIRMED)):
+        summary = await ImageToolService(plugin).image(context, {"count": 2})
+    assert summary["effective_count"] == 2 and summary["downloaded_count"] == 1
+    assert not summary["count_limits"] and not summary["notice"]
+    assert summary["message"]
+
+
+@pytest.mark.asyncio
+async def test_settlement_exception_after_commit_reports_unknown_without_retry(tmp_path):
+    plugin, context, _ = await setup_flow(tmp_path, coins=100, items=1)
+    spend = plugin.checkin_store.spend_coins
+
+    async def uncertain_spend(**kwargs):
+        await spend(**kwargs)
+        raise RuntimeError("sensitive fixture text")
+
+    plugin.checkin_store.spend_coins = uncertain_spend
+    service = ImageToolService(plugin)
+    with patch("astrbot_plugin_get_px.pixiv.execution.send_once",
+               AsyncMock(return_value=DeliveryStatus.CONFIRMED)) as sender, patch(
+                   "astrbot_plugin_get_px.pixiv.search.logger"
+               ) as logger:
+        summary = await service.image(context, {})
+        repeated = await service.image(context, {})
+    assert summary["settlement"] == "unknown" and summary["message"]
+    assert not summary["retry_allowed"] and repeated["duplicate_call"]
+    assert sender.await_count == 1
+    assert (await plugin.checkin_store.find_profile("10001")).coins == 80
+    logged = str(logger.warning.call_args_list)
+    assert "sensitive fixture text" not in logged and "不扣费" not in logged
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("tool", [True, False])
+@pytest.mark.parametrize("failure", ["source", "manga", "safety", "download", "index", "rate"])
+async def test_unsubmitted_requests_allow_safe_retry_without_send_or_charge(tmp_path, tool, failure):
+    plugin, context, _ = await setup_flow(tmp_path, items=1)
+    if failure == "source":
+        plugin.illusts = []
+    elif failure == "manga":
+        plugin._filter_manga = lambda items: []
+    elif failure == "safety":
+        plugin._filter_blacklisted_illusts = AsyncMock(return_value=[])
+    elif failure == "download":
+        plugin.downloader.download_for_send.side_effect = RuntimeError("fixture")
+    elif failure == "index":
+        plugin.image_index = SimpleNamespace(
+            get_used_illust_ids=AsyncMock(side_effect=RuntimeError("fixture"))
+        )
+        from astrbot_plugin_get_px.pixiv.filters import FiltersMixin
+        plugin._pick_illusts = FiltersMixin._pick_illusts.__get__(plugin)
+    else:
+        plugin._check_rate_limit = lambda sender: 7
+    plugin._fetch_source_candidates = AsyncMock(wraps=plugin._fetch_source_candidates)
+    plugin.checkin_store.spend_coins = AsyncMock(wraps=plugin.checkin_store.spend_coins)
+    with patch("astrbot_plugin_get_px.pixiv.execution.send_once", AsyncMock()) as sender:
+        if tool:
+            service = ImageToolService(plugin)
+            summary = await service.image(context, {})
+            calls = plugin._fetch_source_candidates.await_count
+            downloads = plugin.downloader.download_for_send.await_count
+            repeated = await service.image(context, {})
+            assert "duplicate_call" not in repeated and not repeated["running"]
+            assert not summary["delivery"] and not summary["downloaded_count"]
+            assert summary["settlement"] == "not_required" and summary["message"]
+            assert summary["retry_allowed"]
+            assert plugin._fetch_source_candidates.await_count >= calls
+            assert plugin.downloader.download_for_send.await_count >= downloads
+        else:
+            messages = [item async for item in plugin._handle_search(context.context.event, "", "1")]
+            assert len(messages) == 1
+    sender.assert_not_awaited()
+    plugin.checkin_store.spend_coins.assert_not_awaited()
+    assert not context.context.event.sent
+    assert (await plugin.checkin_store.find_profile("10001")).coins == 100
+    assert plugin._fetch_source_candidates.await_count == (2 if tool else 1) * (0 if failure == "rate" else 1 if failure == "source" else 3)
+    assert plugin.downloader.download_for_send.await_count == (2 if tool else 1) * int(failure == "download")
