@@ -19,7 +19,7 @@ try:
     from ..pixiv.safety import matched_illustration_term, normalize_illust_ids
     from ..group_safety import TERMS_KEY, IDS_KEY
     from .web_api_compat import unregister_web_apis
-    from .settings import FONT_SOURCES, save_settings, settings_snapshot
+    from .settings import save_settings, settings_snapshot
 except ImportError:
     # Direct imports used by the test suite.
     from checkin import load_checkin_snapshot_json
@@ -27,7 +27,7 @@ except ImportError:
     from pixiv.safety import matched_illustration_term, normalize_illust_ids
     from group_safety import TERMS_KEY, IDS_KEY
     from plugin_api.web_api_compat import unregister_web_apis
-    from plugin_api.settings import FONT_SOURCES, save_settings, settings_snapshot
+    from plugin_api.settings import save_settings, settings_snapshot
 
 
 class PluginWebApi:
@@ -593,15 +593,14 @@ class PluginWebApi:
             return self.internal_error("导入签到备份", exc)
 
     async def config(self):
-        font_source = self.plugin._cfg_str("webui_font_source", "mirror")
-        source = FONT_SOURCES.get(font_source, FONT_SOURCES["none"])
+        # 旧版 Pages 仍可能调用此接口，只返回系统字体。
         return jsonify(
             {
                 "success": True,
-                "font_source": font_source,
-                "font_url": source["url"],
-                "font_family": source["family"],
-                "font_label": source["label"],
+                "font_source": "none",
+                "font_url": "",
+                "font_family": "",
+                "font_label": "系统字体",
             }
         )
 

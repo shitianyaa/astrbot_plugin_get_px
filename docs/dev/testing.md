@@ -17,7 +17,7 @@
 | --- | --- | --- |
 | Python 语法检查 | 插件目录 | `python -m compileall -q main.py checkin pixiv tools plugin_api scripts/ci tests` |
 | JSON schema 检查 | 插件目录 | `python -m json.tool _conf_schema.json` |
-| JavaScript 语法检查 | 插件目录 | `node --check pages/pluginCenter/app.js`，并检查 `settings.mjs`、`safety.mjs`、`ui.mjs`、`fonts.mjs` |
+| JavaScript 语法检查 | 插件目录 | `node --check pages/pluginCenter/app.js`，并检查 `settings.mjs`、`safety.mjs`、`ui.mjs` |
 | 管理页状态测试 | 插件目录 | `node --test tests/js/safety.test.mjs tests/js/settings.test.mjs tests/js/ui.test.mjs` |
 | 管理页浏览器回归 | 插件目录 | `python -m pytest -q tests/test_plugin_center_browser.py`（缺 Playwright／Chromium 时跳过） |
 | pytest 全部测试 | 插件目录 | `python -m pytest -v tests` |
@@ -282,7 +282,7 @@ python -m pytest -q tests/test_checkin_cache.py tests/test_checkin_calendar.py t
 
 `tests/test_plugin_settings_api.py` 覆盖当前六组 schema、部分保存、类型／范围／选项／步长校验、真实 AstrBotConfig 保存重载和失败引用回滚。安全四键与隐藏键拒绝通用写入；Pixiv Token 和代理 URL 不回显，替换／显式清除分离，代理复用正式校验；废弃的自动触发与去重天数不能写入。签到奖励保持主线规则。
 
-`tests/test_plugin_center_resources.py` 校验打包资源递归闭包与相对 bridge 端点；`tests/js/settings.test.mjs`、`ui.test.mjs` 验证草稿、选项及键盘纯函数。`tests/test_plugin_center_browser.py` 以真实 Chromium 和合成 bridge 验证保存期间控件冻结、失败保留草稿、刷新不丢修改、数字步长、可访问名、沙箱、导航和字体切换／失败重试。测试不访问生产 AstrBot、QQ、Pixiv 或真实用户配置；真实 CDN 与宿主策略需另验。
+`tests/test_plugin_center_resources.py` 校验打包资源递归闭包与相对 bridge 端点；`tests/js/settings.test.mjs`、`ui.test.mjs` 验证草稿、选项及键盘纯函数。`tests/test_plugin_center_browser.py` 以真实 Chromium 和合成 bridge 验证保存期间控件冻结、失败保留草稿、刷新不丢修改、数字步长、可访问名、沙箱和导航，并验证旧字体响应不会触发字体请求。布局回归覆盖长短分组宽度、工具条在滚动及修改状态变化时的位置和高度，以及矮窗口中分组栏独立滚动。交互回归覆盖成员翻页、分页内编辑、搜索重置，以及切群时保留当前内容并拒绝旧请求覆盖新榜单。测试不访问生产 AstrBot、QQ、Pixiv 或真实用户配置；实际宿主集成需另验。
 
 ## OneBot 自动传输与超时结算
 

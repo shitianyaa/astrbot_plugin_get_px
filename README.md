@@ -170,9 +170,9 @@ AstrBot 图片与签到插件，支持 Lolicon / Pixiv 搜图、模型取图、�
 
 在 AstrBot 插件页打开「pluginCenter」，可以查看群排行和趋势、调整成员金币与好感度、管理安全分组、导出和导入签到备份，并在「插件配置」按六组导航或搜索设置。界面支持明暗主题、移动布局和键盘操作。
 
-设置只保存改动项；失败保留草稿，不自动重载插件。Pixiv Token 和出站代理地址仅显示是否配置，留空保留，清除需显式勾选；安全规则在专用页面维护。代理、Token 及客户端配置保存后需重载，MiSans 字体线路可直接切换，加载失败使用系统字体。没有新增好感度金币加成或签到奖励配置。
+设置只保存改动项；失败保留草稿，不自动重载插件。Pixiv Token 和出站代理地址仅显示是否配置，留空保留，清除需显式勾选；安全规则在专用页面维护。代理、Token 及客户端配置保存后需重载。管理中心使用访问设备的系统字体，无需下载。没有新增好感度金币加成或签到奖励配置。
 
-修改成员数值只影响当前资料，不回写历史奖励、群排行或已生成卡片。
+成员资料每页显示 20 位。搜索或清除条件后回到第一页，编辑后留在当前页。修改成员数值只影响当前资料，不回写历史奖励、群排行或已生成卡片。
 
 ### 常用配置
 
@@ -259,7 +259,6 @@ lunar-python
 - 默认图片源由 [Lolicon API](https://api.lolicon.app/) 提供
 - Pixiv 图片源基于 [pixivpy-async](https://github.com/Mikubill/pixivpy-async)
 - 管理中心设置页参考 ke mi 的 [PR #27](https://github.com/shitianyaa/astrbot_plugin_get_px/pull/27)，在此基础上整理界面与配置安全边界
-- 管理中心在线字体使用 [MiSans](https://hyperos.mi.com/font/)，遵循其字体许可；浏览器从小米或第三方 jsDelivr 加载，插件不打包字体
 - 作品黑名单缩略图生成基于 [Pillow](https://python-pillow.org/)
 - 签到每日一言由 [Hitokoto API](https://github.com/hitokoto-osc/hitokoto-api) 提供，感谢一言开源社区和公共 API 服务
 - 签到卡片内置字体由 [霞鹜文楷轻便版](https://github.com/lxgw/LxgwWenKai-Lite) 生成，采用 SIL Open Font License 1.1 授权

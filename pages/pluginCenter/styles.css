@@ -38,6 +38,7 @@
   --accent-end: #8863b0;
   --wash-start: #fffafd;
   --wash-end: #eff1ff;
+  --page-background: var(--bg) linear-gradient(135deg, var(--wash-start), var(--bg) 48%, var(--wash-end)) fixed;
   --soft-shadow: #72559012;
   --accent-invert: #ffffff;
   --link: #805aa6;
@@ -73,8 +74,9 @@
   --tabs-h: 42px;
   --shell-height: 98px;
   --config-toolbar-height: 72px;
-  --sticky-top: calc(var(--shell-height) + var(--config-toolbar-height) + 20px);
-  --page-gutter: 24px;
+  --config-toolbar-gap: 8px;
+  --sticky-top: calc(var(--shell-height) + var(--config-toolbar-gap) + var(--config-toolbar-height) + 16px);
+  --page-bottom: 40px;
 }
 
 /* 深色沿用紫色强调，危险、警告与成功保留独立语义。 */
@@ -135,7 +137,7 @@ body {
   font-size: var(--text-body);
   line-height: 1.6;
   color: var(--text);
-  background: var(--bg) linear-gradient(135deg, var(--wash-start), var(--bg) 48%, var(--wash-end)) fixed;
+  background: var(--page-background);
   -webkit-font-smoothing: antialiased;
   text-rendering: optimizeLegibility;
 }
@@ -169,7 +171,7 @@ button {
 
 html { scroll-padding-top: calc(var(--shell-height) + 16px); }
 html[data-view="settings"] {
-  scroll-padding-top: calc(var(--shell-height) + var(--config-toolbar-height) + 16px);
+  scroll-padding-top: var(--sticky-top);
 }
 :where(input, textarea, button, summary) { scroll-margin-block: 12px; }
 
@@ -370,8 +372,10 @@ html[data-view="settings"] {
   width: 100%;
   max-width: 1200px;
   margin: 0 auto;
-  padding: 16px 24px 40px;
+  padding: 16px 24px var(--page-bottom);
 }
+
+html[data-view="settings"] .main { padding-top: var(--config-toolbar-gap); }
 
 .view {
   display: none;
@@ -921,6 +925,7 @@ input:checked + .switch-track::after {
   background: transparent;
   color: var(--text);
   text-align: left;
+  transition: background-color var(--transition), border-color var(--transition);
 }
 
 .group-button:hover {
@@ -974,13 +979,13 @@ input:checked + .switch-track::after {
   gap: 2px;
   padding: 2px;
   border: 1px solid var(--border);
-  border-radius: var(--radius-xs);
+  border-radius: var(--radius-pill);
   background: var(--surface);
 }
 
 .segmented button {
   border: 0;
-  border-radius: 4px;
+  border-radius: var(--radius-pill);
   background: transparent;
   color: var(--text-muted);
   padding: 5px 12px;
@@ -1021,6 +1026,24 @@ input:checked + .switch-track::after {
   color: var(--text-subtle);
   font-size: var(--text-small);
 }
+
+.ranking-results { position: relative; }
+
+.ranking-status:not(:empty) {
+  position: absolute;
+  z-index: 1;
+  top: 8px;
+  right: 8px;
+  padding: 4px 10px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-pill);
+  background: var(--surface-elevated);
+  color: var(--text-muted);
+  font-size: var(--text-small);
+  pointer-events: none;
+}
+
+#rankingData[aria-busy="true"] { opacity: 0.65; }
 
 .activity-track {
   display: grid;
@@ -1065,7 +1088,7 @@ input:checked + .switch-track::after {
   width: 100%;
   max-width: 22px;
   min-height: 2px;
-  border-radius: 2px 2px 0 0;
+  border-radius: 6px 6px 0 0;
   background: var(--accent);
   opacity: 0.85;
 }
@@ -1098,6 +1121,7 @@ input:checked + .switch-track::after {
 }
 
 .ranking-row:first-child {
+  border-radius: var(--radius-xs);
   background: var(--surface);
 }
 
@@ -1213,13 +1237,23 @@ input:checked + .switch-track::after {
   color: var(--warn);
 }
 
-.member-load-more {
-  display: block;
-  margin: 12px auto 0;
+.member-pager:not([hidden]) {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 10px;
+  margin-top: 12px;
+  color: var(--text-muted);
+  font-size: var(--text-small);
 }
 
-.member-load-more[hidden] {
-  display: none;
+.member-pager .btn { flex-shrink: 0; }
+
+#memberPageStatus {
+  width: 8em;
+  min-width: 0;
+  overflow-wrap: anywhere;
+  text-align: center;
 }
 
 /* ==========================================================================
@@ -1462,22 +1496,34 @@ input[type="file"]::file-selector-button {
 
 .config-actionbar {
   position: sticky;
-  top: var(--shell-height);
+  top: calc(var(--shell-height) + var(--config-toolbar-gap));
   z-index: 30;
   display: flex;
   align-items: center;
   justify-content: space-between;
   gap: 16px;
-  margin: -16px calc(-1 * var(--page-gutter)) 24px;
-  padding: 16px var(--page-gutter);
-  border-bottom: 1px solid var(--border);
+  margin-bottom: 18px;
+  padding: 12px 16px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
   background: var(--surface-elevated);
+  box-shadow: var(--shadow-sm);
+}
+
+.config-actionbar::before {
+  /* 遮住吸顶后从工具条与主导航之间穿过的表单内容。 */
+  content: "";
+  position: absolute;
+  inset: auto -1px 100%;
+  height: calc(var(--config-toolbar-gap) + 1px);
+  z-index: -1;
+  background: var(--page-background);
 }
 
 .config-toolbar-heading {
   display: flex;
-  align-items: baseline;
-  flex-wrap: wrap;
+  flex: 1 1 auto;
+  align-items: center;
   gap: 8px 16px;
   min-width: 0;
 }
@@ -1491,33 +1537,32 @@ input[type="file"]::file-selector-button {
 .config-current-group {
   display: flex;
   align-items: baseline;
-  flex-wrap: wrap;
+  min-width: 0;
   gap: 8px;
   color: var(--text-muted);
   font-size: var(--text-body);
 }
 
-.config-current-group .hint { font-size: var(--text-small); }
+#settingsGroupTitle {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.config-current-group .hint {
+  flex-shrink: 0;
+  font-size: var(--text-small);
+  white-space: nowrap;
+}
 
 .config-bar-actions svg { display: none; }
 
-.font-status-row {
-  display: flex;
-  align-items: center;
-  flex-wrap: wrap;
-  gap: 8px;
-  margin: -6px 0 18px;
-  color: var(--text-subtle);
-  font-size: var(--text-small);
-}
-.font-status-row [data-state="error"] { color: var(--warn); }
 .rank-value, .member-metric strong, .number-control input, .count, .cache-stat-line strong {
   font-variant-numeric: tabular-nums;
 }
 
 .config-effect-note {
-  margin: 18px 0 0 auto;
-  width: calc(100% - 256px);
+  margin: 18px 0 0;
   color: var(--text-subtle);
   font-size: var(--text-small);
   line-height: 1.8;
@@ -1532,11 +1577,16 @@ input[type="file"]::file-selector-button {
 .config-effect-note p { margin-top: 8px; }
 
 .config-bar-state {
+  flex: 0 1 26ch;
+  block-size: 2.8em;
   min-width: 0;
-  margin-left: auto;
+  overflow: auto;
+  overflow-wrap: anywhere;
+  align-content: safe center;
   color: var(--text-muted);
   font-size: var(--text-small);
-  max-width: 34ch;
+  line-height: 1.4;
+  text-align: end;
 }
 
 .config-bar-state[data-state="dirty"] {
@@ -1568,8 +1618,6 @@ input[type="file"]::file-selector-button {
 }
 
 .config-nav {
-  position: sticky;
-  top: var(--sticky-top);
   display: flex;
   flex-direction: column;
   gap: 14px;
@@ -1632,6 +1680,23 @@ input[type="file"]::file-selector-button {
 
 .config-mobile-select {
   display: none;
+}
+
+.config-content { min-width: 0; }
+
+@media (min-width: 681px) {
+  html { scrollbar-gutter: stable; }
+
+  .config-nav {
+    position: sticky;
+    top: var(--sticky-top);
+    max-height: calc(100dvh - var(--sticky-top) - var(--page-bottom));
+    overflow-y: auto;
+    padding: 4px;
+    margin: -4px;
+  }
+
+  .config-nav > * { flex-shrink: 0; }
 }
 
 .config-main {
@@ -1975,8 +2040,6 @@ dialog p:not(.eyebrow):not(.member-history-note) {
    ========================================================================== */
 
 @media (max-width: 1000px) {
-  :root { --page-gutter: 16px; }
-
   .nav-primary,
   .nav-tabs,
   .main {
@@ -2020,6 +2083,10 @@ dialog p:not(.eyebrow):not(.member-history-note) {
 }
 
 @media (max-width: 680px) {
+  :root {
+    --page-bottom: 32px;
+  }
+
   .data-action.panel { grid-template-columns: 1fr; padding: 16px; }
   .data-action > *, .data-action > h3 { grid-column: 1; grid-row: auto; }
 
@@ -2045,7 +2112,6 @@ dialog p:not(.eyebrow):not(.member-history-note) {
 
   .main {
     padding-top: 12px;
-    padding-bottom: 32px;
   }
 
   .view-head {
@@ -2077,9 +2143,8 @@ dialog p:not(.eyebrow):not(.member-history-note) {
   }
 
   .config-actionbar {
-    margin-top: -12px;
     gap: 10px;
-    padding: 12px var(--page-gutter);
+    padding: 12px;
     flex-wrap: wrap;
   }
 
@@ -2095,13 +2160,10 @@ dialog p:not(.eyebrow):not(.member-history-note) {
     display: block;
     max-width: 120px;
     font-size: var(--text-small);
-    overflow: hidden;
-    text-overflow: ellipsis;
-    white-space: nowrap;
   }
+  #settingsGroupTitle { display: block; }
   .config-current-group .hint { display: none; }
-  .config-bar-state { order: 3; flex-basis: 100%; margin-left: 0; max-width: none; }
-  .config-bar-state[data-state="clean"] { display: none; }
+  .config-bar-state { order: 3; flex-basis: 100%; text-align: start; }
   .config-bar-actions { gap: 8px; flex-wrap: nowrap; width: 100%; justify-content: flex-end; }
   .config-bar-actions .btn { font-size: var(--text-body); padding: 8px 12px; }
   #settingsReloadBtn { width: 44px; padding: 10px; font-size: 0; }
@@ -2116,15 +2178,10 @@ dialog p:not(.eyebrow):not(.member-history-note) {
   .config-hint { order: 2; }
   .config-item-delegated .config-item-control { align-items: flex-start; }
   .config-main { padding: 0 16px; }
-  .config-effect-note { width: 100%; }
   :is(input[type="text"], input[type="password"], input[type="number"],
     input[type="search"], textarea, .dd-trigger) { font-size: 16px; min-height: 44px; }
   :is(.btn, .tab, .dd-option, .config-check, .switch, .dialog-actions button,
     .segmented button) { min-height: 44px; }
-
-  .config-nav {
-    position: static;
-  }
 
   .config-nav-list {
     display: none;

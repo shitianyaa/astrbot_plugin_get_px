@@ -395,17 +395,6 @@
           "step": 1
         },
         "hint": "同一用户两次取图消息的最小间隔，设为 0 禁用。只读查询单独限频；同条模型消息的后续任务共享首次准入，仍受总张数与时间预算限制。"
-      },
-      "webui_font_source": {
-        "description": "WebUI 字体来源",
-        "type": "string",
-        "default": "mirror",
-        "options": [
-          "mirror",
-          "official",
-          "none"
-        ],
-        "hint": "管理中心 MiSans 字体线路：mirror = 国内小米（默认），official = 国外 jsDelivr，none = 系统字体。保存后直接切换，加载失败回退系统字体；字体由浏览器下载，不经过插件出站代理。"
       }
     }
   }

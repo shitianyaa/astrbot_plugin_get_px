@@ -1,6 +1,5 @@
 import * as settingsModule from "./settings.mjs";
 import { mountSafety } from "./safety.mjs";
-import { mountFontControls } from "./fonts.mjs";
 import { createSelect, createNumberControl, closeDialog, closeOpenSelect, animateContent, initializePresentation } from "./ui.mjs";
 const bridge = window.AstrBotPluginPage;
 
@@ -16,8 +15,7 @@ const state = {
   members: [],
   memberQuery: "",
   memberTotal: 0,
-  memberOffset: 0,
-  memberPageSize: 50,
+  memberPage: 1,
   membersLoading: false,
   selectedMember: null,
   memberDialogTrigger: null,
@@ -34,14 +32,16 @@ const state = {
 };
 
 let settingsPage = null;
-let fontControls = null;
 let memberBoostSelect = null;
 let memberNumberControls = [];
+let rankingRequest = 0;
+let memberRequest = 0;
 // 宿主已给出主题（首帧注入或 theme 参数）时不再跟随系统偏好。
 let hostThemeKnown = document.documentElement.getAttribute("data-theme-source") === "host"
   || new URLSearchParams(window.location.search).has("theme");
 
 const MAX_BACKUP_BYTES = 5 * 1024 * 1024;
+const MEMBER_PAGE_SIZE = 20;
 const dateFormatter = new Intl.DateTimeFormat("zh-CN", {
   month: "2-digit",
   day: "2-digit",
@@ -59,10 +59,15 @@ const els = {
   activityTrack: $("activityTrack"),
   trendCaption: $("trendCaption"),
   rankingContent: $("rankingContent"),
+  rankingData: $("rankingData"),
+  rankingStatus: $("rankingStatus"),
   memberCount: $("memberCount"),
   memberSearch: $("memberSearch"),
   memberList: $("memberList"),
-  memberLoadMore: $("memberLoadMore"),
+  memberPager: $("memberPager"),
+  memberPrevPage: $("memberPrevPage"),
+  memberNextPage: $("memberNextPage"),
+  memberPageStatus: $("memberPageStatus"),
   memberDialog: $("memberDialog"),
   memberForm: $("memberForm"),
   memberDialogIdentity: $("memberDialogIdentity"),
@@ -192,7 +197,7 @@ async function reloadAll() {
   setButtonBusy(refreshButton, true, "正在刷新…", "刷新数据");
   hideGlobalError();
   const failures = [];
-  let shouldLoadRanking = false;
+  let rankingJob;
   try {
     const [overviewResult, groupsResult, safetyResult, blacklistResult] =
       await Promise.allSettled([
@@ -226,7 +231,7 @@ async function reloadAll() {
         state.selectedGroup = state.groups[0]?.group_id || "";
       }
       renderGroups();
-      shouldLoadRanking = true;
+      rankingJob = loadRanking();
     } else {
       failures.push(errorMessage(groupsResult.reason, "群列表读取失败"));
       if (!state.loaded.groups) renderGroupsError();
@@ -249,11 +254,11 @@ async function reloadAll() {
       if (!state.loaded.blacklist) renderBlacklistError();
     }
 
-    if (shouldLoadRanking) await loadRanking();
+    if (rankingJob) await rankingJob;
 
-    if (state.loaded.members) {
+    if (state.loaded.members && !state.membersLoading) {
       try {
-        await loadMembers({ reset: true });
+        await loadMembers();
       } catch (error) {
         failures.push(errorMessage(error, "成员资料读取失败"));
       }
@@ -286,8 +291,6 @@ function renderOverviewError() {
 function renderGroups() {
   if (!state.groups.length) {
     els.groupList.innerHTML = '<div class="empty">群排行将在群成员首次签到后出现</div>';
-    els.selectedGroupName.textContent = "暂无群签到数据";
-    els.selectedGroupMeta.textContent = "GROUP SCOPE EMPTY";
     return;
   }
   els.groupList.innerHTML = state.groups.map((group) => {
@@ -295,23 +298,20 @@ function renderGroups() {
     const groupMeta = `群号: ${group.group_id} (${group.platform})`;
     return `
     <button class="group-button${group.group_id === state.selectedGroup ? " active" : ""}"
-      type="button" data-group="${escapeHtml(group.group_id)}" title="${escapeHtml(groupName)} - ${escapeHtml(groupMeta)}">
+      type="button" aria-pressed="${group.group_id === state.selectedGroup}"
+      data-group="${escapeHtml(group.group_id)}" title="${escapeHtml(groupName)} - ${escapeHtml(groupMeta)}">
       <strong title="${escapeHtml(groupName)}">${escapeHtml(groupName)}</strong>
       <small title="${escapeHtml(groupMeta)}">${escapeHtml(groupMeta)}</small>
       <small>今日 ${formatCount(group.today_count)} · 本月 ${formatCount(group.month_count)}</small>
     </button>
   `;
   }).join("");
-  els.groupList.querySelectorAll("[data-group]").forEach((button) => {
-    button.addEventListener("click", async () => {
-      state.selectedGroup = button.dataset.group || "";
-      renderGroups();
-      await loadRanking();
-    });
-  });
-  const group = currentGroup();
-  els.selectedGroupName.textContent = group?.group_name || group?.group_id || "签到排行";
-  els.selectedGroupMeta.textContent = `${group?.platform || "unknown"} / GROUP ${group?.group_id || "-"}`;
+}
+
+function renderRankingGroup(group) {
+  els.selectedGroupName.textContent = group?.group_name || group?.group_id || "暂无群签到数据";
+  els.selectedGroupMeta.textContent = group
+    ? `${group.platform || "unknown"} / GROUP ${group.group_id}` : "尚未选择群聊";
 }
 
 function renderGroupsError() {
@@ -323,27 +323,40 @@ function renderGroupsError() {
 }
 
 async function loadRanking() {
-  if (!state.selectedGroup) {
+  const request = ++rankingRequest;
+  const group = currentGroup();
+  const { rankingType, trendDays } = state;
+  if (!group) {
+    renderRankingGroup(null);
     els.activityTrack.innerHTML = "";
     els.rankingContent.innerHTML = '<div class="empty">等待选择群聊数据</div>';
+    els.rankingStatus.textContent = "";
+    els.rankingData.setAttribute("aria-busy", "false");
     return;
   }
-  els.rankingContent.innerHTML = '<div class="empty">正在读取榜单，请稍候…</div>';
+  els.rankingStatus.textContent = "正在更新榜单…";
+  els.rankingData.setAttribute("aria-busy", "true");
   try {
     const [ranking, trend] = await Promise.all([
       apiGet("checkin-ranking", {
-        group_id: state.selectedGroup,
-        type: state.rankingType,
+        group_id: group.group_id,
+        type: rankingType,
         limit: 100,
       }),
       apiGet("checkin-trend", {
-        group_id: state.selectedGroup,
-        days: state.trendDays,
+        group_id: group.group_id,
+        days: trendDays,
       }),
     ]);
-    renderRanking(ranking);
-    renderTrend(trend.trend || []);
+    if (request !== rankingRequest) return;
+    renderRankingGroup(group);
+    renderRanking(ranking, rankingType);
+    renderTrend(trend.trend || [], trendDays);
+    animateContent(els.rankingData);
   } catch (error) {
+    if (request !== rankingRequest) return;
+    renderRankingGroup(group);
+    renderTrend([], trendDays);
     els.rankingContent.innerHTML = `
       <div class="empty error">
         <p>读取榜单失败：${escapeHtml(error.message)}</p>
@@ -353,24 +366,28 @@ async function loadRanking() {
     if (retryBtn) {
       retryBtn.addEventListener("click", loadRanking);
     }
+  } finally {
+    if (request === rankingRequest) {
+      els.rankingStatus.textContent = "";
+      els.rankingData.setAttribute("aria-busy", "false");
+    }
   }
 }
 
-function renderRanking(result) {
+function renderRanking(result, rankingType) {
   const entries = Array.isArray(result.entries) ? result.entries : [];
   if (!entries.length) {
     els.rankingContent.innerHTML = '<div class="empty">当前榜单还没有记录，快去签到吧！</div>';
     return;
   }
-  const units = { month: "天", streak: "天", total: "天" };
   els.rankingContent.innerHTML = entries.map((entry) => {
     const raw = String(entry.value ?? "");
     let value = "";
-    if (state.rankingType === "today") {
+    if (rankingType === "today") {
       const match = raw.match(/\d{2}:\d{2}:\d{2}/);
       value = match ? match[0] : (raw.slice(11, 19) || raw);
     } else {
-      value = `${raw}${units[state.rankingType] || "天"}`;
+      value = `${raw}天`;
     }
     return `
       <div class="ranking-row">
@@ -381,10 +398,10 @@ function renderRanking(result) {
   }).join("");
 }
 
-function renderTrend(trend) {
+function renderTrend(trend, days) {
   const max = Math.max(1, ...trend.map((item) => Number(item.count || 0)));
-  els.activityTrack.className = `activity-track${state.trendDays === 30 ? " days-30" : ""}`;
-  els.trendCaption.textContent = `最近 ${state.trendDays} 天`;
+  els.activityTrack.className = `activity-track${days === 30 ? " days-30" : ""}`;
+  els.trendCaption.textContent = `最近 ${days} 天`;
   els.activityTrack.innerHTML = trend.map((item) => {
     const count = Number(item.count || 0);
     const date = String(item.date || "");
@@ -397,9 +414,21 @@ function renderTrend(trend) {
   }).join("");
 }
 
+function memberPageCount(total) {
+  return Math.max(1, Math.ceil(total / MEMBER_PAGE_SIZE));
+}
+
+function updateMemberPager() {
+  const pages = memberPageCount(state.memberTotal);
+  els.memberPager.hidden = pages === 1;
+  els.memberPrevPage.disabled = state.membersLoading || state.memberPage <= 1;
+  els.memberNextPage.disabled = state.membersLoading || state.memberPage >= pages;
+  els.memberPageStatus.textContent = state.membersLoading
+    ? "正在加载…" : `第 ${formatCount(state.memberPage)} / ${formatCount(pages)} 页`;
+}
+
 function renderMembers() {
-  els.memberCount.textContent = `${formatCount(state.members.length)} / ${formatCount(state.memberTotal)} 位`;
-  els.memberLoadMore.hidden = state.members.length >= state.memberTotal;
+  els.memberCount.textContent = `共 ${formatCount(state.memberTotal)} 位`;
   if (!state.members.length) {
     els.memberList.innerHTML = state.memberQuery
       ? '<div class="empty">没有找到匹配的签到成员</div>'
@@ -439,34 +468,48 @@ function renderMembers() {
 function renderMembersError(message = "成员资料读取失败，请重新加载。") {
   els.memberCount.textContent = "读取失败";
   els.memberList.innerHTML = `<div class="empty error">${escapeHtml(message)}</div>`;
-  els.memberLoadMore.hidden = true;
 }
 
-async function loadMembers({ reset = false } = {}) {
-  if (state.membersLoading) return;
+async function loadMembers(page = state.memberPage, query = state.memberQuery) {
+  const request = ++memberRequest;
   state.membersLoading = true;
-  if (reset) {
-    state.memberOffset = 0;
-    state.members = [];
+  updateMemberPager();
+  els.memberList.setAttribute("aria-busy", "true");
+  if (!state.loaded.members) {
     els.memberList.innerHTML = '<div class="empty">正在读取成员资料…</div>';
   }
   try {
-    const result = await apiGet("checkin-members", {
-      query: state.memberQuery,
-      limit: state.memberPageSize,
-      offset: state.memberOffset,
-    });
-    const incoming = Array.isArray(result.members) ? result.members : [];
-    state.members = reset ? incoming : state.members.concat(incoming);
-    state.memberTotal = Number(result.total || 0);
-    state.memberOffset = state.members.length;
-    state.loaded.members = true;
-    renderMembers();
+    while (true) {
+      const result = await apiGet("checkin-members", {
+        query,
+        limit: MEMBER_PAGE_SIZE,
+        offset: (page - 1) * MEMBER_PAGE_SIZE,
+      });
+      if (request !== memberRequest) return false;
+      const total = Number(result.total || 0);
+      const lastPage = memberPageCount(total);
+      if (page > lastPage) {
+        page = lastPage;
+        continue;
+      }
+      state.members = Array.isArray(result.members) ? result.members : [];
+      state.memberTotal = total;
+      state.memberPage = page;
+      state.memberQuery = query;
+      state.loaded.members = true;
+      renderMembers();
+      return true;
+    }
   } catch (error) {
-    renderMembersError(error.message);
+    if (request !== memberRequest) return false;
+    if (!state.loaded.members) renderMembersError(error.message);
     throw error;
   } finally {
-    state.membersLoading = false;
+    if (request === memberRequest) {
+      state.membersLoading = false;
+      els.memberList.setAttribute("aria-busy", "false");
+      updateMemberPager();
+    }
   }
 }
 
@@ -670,11 +713,11 @@ function switchView(name) {
     view.hidden = !active;
   });
   document.documentElement.dataset.view = name;
-  animateContent(document.getElementById(`${name}View`));
+  animateContent(name === "settings" ? $("settingsGroups") : $(`${name}View`));
   moveTabIndicator();
   history.replaceState(null, "", `#${name}`);
-  if (name === "members" && !state.loaded.members) {
-    loadMembers({ reset: true }).catch((error) => {
+  if (name === "members" && !state.loaded.members && !state.membersLoading) {
+    loadMembers().catch((error) => {
       showGlobalError([errorMessage(error, "成员资料读取失败")]);
     });
   }
@@ -780,6 +823,17 @@ function bindEvents() {
     switchView(target.dataset.view);
   });
 
+  els.groupList.addEventListener("click", (event) => {
+    const button = event.target.closest("[data-group]");
+    if (!button || button.dataset.group === state.selectedGroup) return;
+    state.selectedGroup = button.dataset.group;
+    for (const option of els.groupList.querySelectorAll("[data-group]")) {
+      option.classList.toggle("active", option === button);
+      option.setAttribute("aria-pressed", String(option === button));
+    }
+    loadRanking();
+  });
+
   document.querySelectorAll("[data-rank]").forEach((button) => button.addEventListener("click", async () => {
     state.rankingType = button.dataset.rank;
     document.querySelectorAll("[data-rank]").forEach((item) => item.classList.toggle("active", item === button));
@@ -797,9 +851,8 @@ function bindEvents() {
 
   $("memberSearchForm").addEventListener("submit", async (event) => {
     event.preventDefault();
-    state.memberQuery = els.memberSearch.value.trim();
     try {
-      await loadMembers({ reset: true });
+      await loadMembers(1, els.memberSearch.value.trim());
     } catch (error) {
       showToast(error.message || "搜索成员失败", "error");
     }
@@ -807,25 +860,25 @@ function bindEvents() {
 
   $("memberClearBtn").addEventListener("click", async () => {
     els.memberSearch.value = "";
-    state.memberQuery = "";
     try {
-      await loadMembers({ reset: true });
-      els.memberSearch.focus();
+      if (await loadMembers(1, "")) els.memberSearch.focus();
     } catch (error) {
       showToast(error.message || "成员资料读取失败", "error");
     }
   });
 
-  els.memberLoadMore.addEventListener("click", async () => {
-    setButtonBusy(els.memberLoadMore, true, "正在加载…", "加载更多成员");
+  async function changeMemberPage(delta) {
     try {
-      await loadMembers();
+      if (await loadMembers(state.memberPage + delta)) {
+        els.memberList.focus({ preventScroll: true });
+        els.memberList.scrollIntoView({ block: "start" });
+      }
     } catch (error) {
-      showToast(error.message || "加载更多成员失败", "error");
-    } finally {
-      setButtonBusy(els.memberLoadMore, false, "正在加载…", "加载更多成员");
+      showToast(error.message || "加载成员分页失败", "error");
     }
-  });
+  }
+  els.memberPrevPage.addEventListener("click", () => changeMemberPage(-1));
+  els.memberNextPage.addEventListener("click", () => changeMemberPage(1));
 
   $("memberCancelBtn").addEventListener("click", () => closeDialog(els.memberDialog));
   els.memberDialog.addEventListener("close", () => {
@@ -843,8 +896,13 @@ function bindEvents() {
       setButtonBusy(submitButton, true, "正在保存…", "保存修改");
       const result = await apiPost("checkin-members/update", payload);
       const index = state.members.findIndex((item) => item.user_id === result.member?.user_id);
-      if (index >= 0) state.members[index] = result.member;
-      renderMembers();
+      if (index >= 0) {
+        state.members[index] = result.member;
+        renderMembers();
+        state.memberDialogTrigger = els.memberList.querySelector(
+          `[data-edit-member="${CSS.escape(result.member.user_id)}"]`,
+        );
+      }
       await closeDialog(els.memberDialog);
       showToast("成员签到数值已更新");
     } catch (error) {
@@ -963,7 +1021,7 @@ function followStickyHeights() {
       if (!height) continue;
       root.style.setProperty(
         entry.target === shell ? "--shell-height" : "--config-toolbar-height",
-        `${Math.ceil(height)}px`,
+        `${height}px`,
       );
     }
   });
@@ -980,20 +1038,15 @@ async function start() {
   await bridge.ready();
   followHostTheme();
   bindEvents();
-  fontControls = mountFontControls({ apiGet });
   settingsPage = settingsModule.createSettingsPage({
     bridge,
     notify: showToast,
     navigate: switchView,
     confirm: ({ title, message, confirmLabel }) =>
       confirmAction(title, message, confirmLabel),
-    onSaved: patch => {
-      if (patch.runtime?.webui_font_source !== undefined) fontControls.load();
-    },
   });
   const initialView = location.hash.slice(1);
   switchView(initialView || "ranking");
-  fontControls.load();
   await reloadAll();
 }
 

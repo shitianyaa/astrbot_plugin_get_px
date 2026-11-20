@@ -170,7 +170,7 @@ function statusLabel({ count, invalidCount, saving, loaded, saved, error }) {
   return loaded ? "配置已同步" : "正在读取设置…";
 }
 
-export function createSettingsPage({ bridge, notify, navigate, confirm, onSaved = () => {} }) {
+export function createSettingsPage({ bridge, notify, navigate, confirm }) {
   const form = byId("configSettingsForm");
   const fieldsNode = byId("settingsGroups");
   const navNode = byId("settingsNav");
@@ -790,7 +790,6 @@ export function createSettingsPage({ bridge, notify, navigate, confirm, onSaved 
       saved = true;
       renderFields();
       notify("插件设置已保存");
-      onSaved(patch);
     } catch (error) {
       errorNotice = `${error?.message || "设置保存失败"}；修改仍保留在页面中，可重试。`;
       notify(errorNotice, "error");

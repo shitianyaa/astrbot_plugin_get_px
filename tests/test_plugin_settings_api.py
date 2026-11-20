@@ -4,7 +4,6 @@ from copy import deepcopy
 import json
 from pathlib import Path
 from types import SimpleNamespace
-from urllib.parse import urlparse
 
 import pytest
 from astrbot.api import AstrBotConfig
@@ -17,55 +16,26 @@ from plugin_api.settings import SAFETY_KEYS, save_settings, settings_snapshot
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
-    ("source", "host", "family"),
-    [
-        ("mirror", "cdn-font.hyperos.mi.com", "MiSans"),
-        ("official", "cdn.jsdelivr.net", "MiSans VF"),
-        ("none", "", ""),
-        ("unknown", "", ""),
-    ],
+    "runtime", [{}, {"webui_font_source": "mirror"}, {"webui_font_source": "official"}]
 )
-async def test_font_config_uses_selected_route_or_system_without_saving(
-    source, host, family
-):
-    target = plugin(Config())
-    target._cfg_str = lambda key, default="": source
+async def test_legacy_font_endpoint_always_returns_system_font(runtime):
+    target = plugin(Config(runtime=deepcopy(runtime)))
     api = PluginWebApi(
         target, plugin_name="x", log_prefix="[x]", internal_error_message="internal"
     )
     app = Quart(__name__)
     app.add_url_rule("/config", view_func=api.config, methods=["GET"])
     response = await app.test_client().get("/config")
-    config = await response.get_json()
-    assert config["font_source"] == source
-    assert urlparse(config["font_url"]).hostname == (host or None)
-    assert config["font_family"] == family
-    assert config["font_label"]
+    assert response.status_code == 200
+    assert await response.get_json() == {
+        "success": True,
+        "font_source": "none",
+        "font_url": "",
+        "font_family": "",
+        "font_label": "系统字体",
+    }
+    assert target.config["runtime"] == runtime
     assert target.config.saves == 0
-    if source == "official":
-        assert "misans@5.0.0/" in config["font_url"]
-
-
-def test_font_route_labels_keep_existing_saved_values():
-    target = plugin(Config(runtime={"webui_font_source": "official"}))
-    field = next(
-        field
-        for group in settings_snapshot(target)["groups"]
-        for field in group["fields"]
-        if field["key"] == "webui_font_source"
-    )
-    assert field["value"] == "official"
-    assert [option["value"] for option in field["options"]] == [
-        "mirror",
-        "official",
-        "none",
-    ]
-    assert all(
-        option["label"] and option["label"] != option["value"]
-        for option in field["options"]
-    )
-    save_settings(target, {"runtime": {"webui_font_source": "none"}})
-    assert target.config["runtime"]["webui_font_source"] == "none"
 
 
 class Config(dict):
@@ -115,6 +85,7 @@ def test_settings_snapshot_hides_legacy_fields_and_redacts_secret():
     assert secret not in repr(result)
     assert "checkin_avatar_enabled" in fields
     assert "group_content_safety_policies" not in fields
+    assert "webui_font_source" not in fields
     for safety_key in (
         "global_safety_terms",
         "keyword_match_mode",
@@ -163,6 +134,7 @@ def test_every_visible_grouped_schema_item_is_edited_or_delegated():
         {"unknown": {"checkin_enabled": False}},
         {"checkin_basic": {"unknown": False}},
         {"runtime": {"_grouped_config_migrated": True}},
+        {"runtime": {"webui_font_source": "official"}},
         {"content_dedupe": {"group_content_safety_policies": []}},
         {"content_dedupe": {"global_safety_terms": []}},
         {"content_dedupe": {"keyword_match_mode": "loose"}},
@@ -245,24 +217,20 @@ def test_failed_save_restores_original_nonmapping_group():
 
 
 @pytest.mark.asyncio
-async def test_settings_api_registers_get_and_update_without_changing_font_contract():
+async def test_settings_api_reads_validates_and_updates_configuration():
     target = plugin(Config())
-    target._cfg_str = lambda key, default="": default
     target.checkin_store = None
     target.image_index = None
     api = PluginWebApi(
         target, plugin_name="x", log_prefix="[x]", internal_error_message="internal"
     )
     app = Quart(__name__)
-    app.add_url_rule("/config", view_func=api.config, methods=["GET"])
     app.add_url_rule("/settings", view_func=api.settings, methods=["GET"])
     app.add_url_rule(
         "/settings/update", view_func=api.settings_update, methods=["POST"]
     )
     client = app.test_client()
 
-    font = await client.get("/config")
-    assert (await font.get_json())["font_source"] == "mirror"
     snapshot = await client.get("/settings")
     assert (await snapshot.get_json())["success"] is True
     update = await client.post(

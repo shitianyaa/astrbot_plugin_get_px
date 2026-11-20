@@ -17,7 +17,7 @@ from pathlib import Path
 import pytest
 
 pytest.importorskip("playwright.sync_api")
-from playwright.sync_api import sync_playwright  # noqa: E402
+from playwright.sync_api import expect, sync_playwright  # noqa: E402
 
 PAGE_DIR = Path(__file__).resolve().parents[1] / "pages" / "pluginCenter"
 
@@ -111,18 +111,14 @@ SETTINGS = {
             "label": "运行参数",
             "fields": [
                 {
-                    "key": "webui_font_source",
-                    "label": "界面字体线路",
-                    "type": "string",
-                    "hint": "保存后切换字体",
-                    "slider": None,
-                    "default": "mirror",
-                    "value": "none",
-                    "options": [
-                        {"value": "mirror", "label": "国内线路（小米）"},
-                        {"value": "official", "label": "国外线路（jsDelivr）"},
-                        {"value": "none", "label": "系统字体（不下载）"},
-                    ],
+                    "key": "request_timeout",
+                    "label": "网络请求超时（秒）",
+                    "type": "float",
+                    "hint": "",
+                    "slider": {"min": 5, "max": 120, "step": 5},
+                    "default": 30,
+                    "value": 30,
+                    "options": [],
                 }
             ],
         },
@@ -157,7 +153,13 @@ RESPONSES = {
     "content-safety": SAFETY,
     "image-blacklist": {"success": True, "records": []},
     "checkin-members": {"success": True, "members": [], "total": 0},
-    "config": {"success": True, "font_source": "none", "font_url": ""},
+    # 模拟旧服务端仍声明在线字体，当前页面不得读取或加载。
+    "config": {
+        "success": True,
+        "font_source": "mirror",
+        "font_url": "https://font.test/legacy.css",
+        "font_family": "MiSans",
+    },
     "cache-storage": {
         "success": True,
         "total_human": "0 B",
@@ -178,9 +180,9 @@ window.AstrBotPluginPage = {
   ready: () => Promise.resolve({ isDark: false }),
   getContext: () => ({ isDark: false }),
   onContext: (handler) => { handler({ isDark: false }); return () => {}; },
-  apiGet: (endpoint) => (
+  apiGet: (endpoint, params) => (
     window.__getHandlers[endpoint]
-      ? window.__getHandlers[endpoint]()
+      ? window.__getHandlers[endpoint](params)
       : Promise.resolve(window.__responses[endpoint] || { success: true })
   ),
   apiPost: (endpoint, body) => {
@@ -232,7 +234,9 @@ def page() -> Iterator[object]:
     try:
         with sync_playwright() as playwright:
             try:
-                browser = playwright.chromium.launch()
+                browser = playwright.chromium.launch(
+                    ignore_default_args=["--hide-scrollbars"],
+                )
             except Exception as exc:  # 已安装 Playwright 但缺少浏览器时跳过
                 pytest.skip(f"Chromium 不可用：{type(exc).__name__}")
             context = browser.new_context(viewport={"width": 1440, "height": 900})
@@ -679,20 +683,127 @@ def test_backup_file_input_only_accepts_json(page, token, accepted):
 
 
 def test_settings_heading_and_group_remain_visible_while_scrolling(page):
+    page.set_viewport_size({"width": 1100, "height": 430})
     page.evaluate("""() => {
       document.querySelector('#settingsGroups').style.minHeight = '1500px';
-      window.scrollTo(0, 700);
     }""")
-    page.wait_for_timeout(100)
-    for selector in ("#settingsTitle", "#settingsGroupTitle", "#settingsSaveBtn"):
-        assert page.eval_on_selector(
-            selector,
-            "element => { const r = element.getBoundingClientRect(); return r.top >= 0 && r.bottom <= innerHeight; }",
-        )
-    assert page.eval_on_selector(
-        "#settingsTitle",
-        "element => { const r=element.getBoundingClientRect(); return r.top >= document.querySelector('.nav-shell').getBoundingClientRect().bottom; }",
+    page.wait_for_function("""() => {
+      const nav = document.querySelector('.config-nav');
+      return nav.scrollHeight > nav.clientHeight;
+    }""")
+    page.locator("#settingsView").evaluate(
+        "el => Promise.all(el.getAnimations().map(animation => animation.finished))"
     )
+    sidebar = page.locator(".config-nav")
+    sticky_positions = []
+    for scroll_y in (700, 10_000):
+        page.evaluate("(y) => window.scrollTo(0, y)", scroll_y)
+        toolbar = page.locator(".config-actionbar").bounding_box()
+        shell = page.locator(".nav-shell").bounding_box()
+        nav = sidebar.bounding_box()
+        assert toolbar["y"] >= shell["y"] + shell["height"]
+        assert nav["y"] >= toolbar["y"] + toolbar["height"]
+        assert nav["y"] + nav["height"] <= 430
+        sticky_positions.append(nav["y"])
+        for selector in ("#settingsTitle", "#settingsGroupTitle", "#settingsSaveBtn"):
+            expect(page.locator(selector)).to_be_in_viewport(ratio=1)
+    assert sticky_positions[0] == pytest.approx(sticky_positions[1], abs=1)
+    scroll_before = page.evaluate("scrollY")
+    sidebar.evaluate("el => { el.scrollTop = el.scrollHeight; }")
+    assert sidebar.evaluate("el => el.scrollTop") > 0
+    assert page.evaluate("scrollY") == scroll_before
+
+
+def test_settings_panel_keeps_width_across_long_and_short_groups(page):
+    page.set_viewport_size({"width": 1100, "height": 900})
+    page.add_style_tag(
+        content="#settingsGroups:has(#setting-max_count) { min-height: 1400px; }"
+    )
+    panel = page.locator(".config-main")
+    long_group = panel.bounding_box()
+    assert page.evaluate("document.documentElement.scrollHeight > innerHeight")
+    page.click('#settingsNav [data-group="runtime"]')
+    page.wait_for_selector("#setting-request_timeout")
+    assert page.evaluate("document.documentElement.scrollHeight <= innerHeight")
+    short_group = panel.bounding_box()
+    for key in ("x", "width"):
+        assert short_group[key] == pytest.approx(long_group[key], abs=1)
+
+
+@pytest.mark.parametrize("width", [1100, 390])
+def test_settings_toolbar_does_not_move_with_scroll_or_status(page, width):
+    page.set_viewport_size({"width": width, "height": 700})
+    page.add_style_tag(content="#settingsGroups { min-height: 1400px; }")
+    toolbar = page.locator(".config-actionbar")
+    initial = toolbar.bounding_box()
+    for scroll_y in (4, 500, 0):
+        page.evaluate("(y) => scrollTo(0, y)", scroll_y)
+        assert toolbar.bounding_box()["y"] == pytest.approx(initial["y"], abs=1)
+    page.fill("#setting-max_count", "5")
+    expect(page.locator("#settingsStatus")).to_contain_text("未保存")
+    for key in ("y", "height"):
+        assert toolbar.bounding_box()[key] == pytest.approx(initial[key], abs=1)
+    page.click("#settingsSaveBtn")
+    expect(page.locator("#settingsStatus")).to_contain_text("已保存")
+    for key in ("y", "height"):
+        assert toolbar.bounding_box()[key] == pytest.approx(initial[key], abs=1)
+
+
+def test_ranking_switch_keeps_current_content_and_ignores_late_response(page):
+    page.evaluate("""() => {
+      window.__responses['checkin-groups'] = {success: true, groups:
+        ['a', 'b', 'c'].map(group_id => ({
+          group_id, group_name: '群 ' + group_id, platform: 'fixture'
+        }))
+      };
+      window.__rankingWaiters = {};
+      for (const endpoint of ['checkin-ranking', 'checkin-trend']) {
+        window.__getHandlers[endpoint] = ({group_id}) =>
+          new Promise(resolve => { window.__rankingWaiters[group_id + endpoint] = resolve; });
+      }
+      window.__finishRanking = (id, count) => {
+        window.__rankingWaiters[id + 'checkin-ranking']({
+          success: true, entries: [{rank: 1, username: '成员 ' + id, user_id: id, value: '00:00:01'}]
+        });
+        window.__rankingWaiters[id + 'checkin-trend']({
+          success: true, trend: [{date: '2026-08-24', count}]
+        });
+      };
+    }""")
+    page.click("#tab-ranking")
+    page.click("#refreshBtn")
+    page.wait_for_function("Boolean(window.__rankingWaiters['acheckin-trend'])")
+    page.evaluate("window.__finishRanking('a', 1)")
+    heading = page.locator("#selectedGroupName")
+    data = page.locator("#rankingData")
+    chart = page.locator("#activityTrack .track-day")
+    expect(heading).to_have_text("群 a")
+    expect(data.get_by_text("成员 a")).to_be_visible()
+    height = data.bounding_box()["height"]
+
+    first_choice = page.locator('#groupList [data-group="b"]')
+    first_choice.click()
+    expect(first_choice).to_be_focused()
+    expect(first_choice).to_have_attribute("aria-pressed", "true")
+    expect(heading).to_have_text("群 a")
+    expect(data.get_by_text("成员 a")).to_be_visible()
+    expect(chart).to_have_attribute("aria-label", "2026-08-24，签到人数 1 人")
+    expect(data).to_have_attribute("aria-busy", "true")
+    assert data.bounding_box()["height"] == pytest.approx(height, abs=1)
+
+    page.click('#groupList [data-group="c"]')
+    page.evaluate("window.__finishRanking('c', 3)")
+    expect(heading).to_have_text("群 c")
+    expect(data.get_by_text("成员 c")).to_be_visible()
+    expect(chart).to_have_attribute("aria-label", "2026-08-24，签到人数 3 人")
+    page.evaluate("""async () => {
+      window.__finishRanking('b', 2);
+      await new Promise(requestAnimationFrame);
+    }""")
+    expect(heading).to_have_text("群 c")
+    expect(data.get_by_text("成员 c")).to_be_visible()
+    expect(chart).to_have_attribute("aria-label", "2026-08-24，签到人数 3 人")
+    expect(data).to_have_attribute("aria-busy", "false")
 
 
 def test_group_save_uses_authoritative_response_without_waiting_for_reload(page):
@@ -829,168 +940,80 @@ def test_member_number_buttons_preserve_decimal_step_and_minimum(page):
     assert page.evaluate("window.__posts.length") == 0
 
 
-def _font_routes(page, *, fail_first=False):
-    # 测试只借用随包字体作为可解析的WOFF2夹具，不验证MiSans字形。
-    font = (
-        PAGE_DIR.parents[1]
-        / "templates/checkin_themes/default/fonts/LXGWWenKaiLite-GB2312.woff2"
-    ).read_bytes()
-    attempts = []
-
-    def css(route):
-        attempts.append(route.request.url)
-        if fail_first and len(attempts) == 1:
-            route.abort()
-            return
-        family = "MiSans VF" if "official" in route.request.url else "MiSans"
-        route.fulfill(
-            content_type="text/css",
-            headers={"Access-Control-Allow-Origin": "*"},
-            body=f'@font-face{{font-family:"{family}";font-weight:100 900;src:url("https://font.test/fixture.woff2") format("woff2");}}',
-        )
-
-    page.route("https://font.test/*.css", css)
-    page.route(
-        "https://font.test/fixture.woff2",
-        lambda route: route.fulfill(
-            body=font,
-            content_type="font/woff2",
-            headers={"Access-Control-Allow-Origin": "*"},
-        ),
-    )
+def test_member_pager_preserves_page_on_edit_and_resets_on_search(page):
     page.evaluate("""() => {
-      window.__fontConfigs = {
-        mirror: {success:true,font_source:'mirror',font_url:'https://font.test/mirror.css',font_family:'MiSans',font_label:'国内线路（小米）'},
-        official: {success:true,font_source:'official',font_url:'https://font.test/official.css',font_family:'MiSans VF',font_label:'国外线路（jsDelivr）'},
-        none: {success:true,font_source:'none',font_url:'',font_family:'',font_label:'系统字体'}
+      const members = Array.from({length: 39}, (_, index) => ({
+        user_id: String(index + 1), username: '成员 ' + (index + 1),
+        coins: 10, affection: 0, total_days: 3, streak_days: 1
+      }));
+      window.__memberRequests = [];
+      window.__getHandlers['checkin-members'] = ({query, limit, offset}) => {
+        window.__memberRequests.push([query, limit, offset]);
+        const matching = members.filter(member => member.username.includes(query));
+        return {success: true, members: matching.slice(offset, offset + limit), total: matching.length};
       };
-      window.__postHandlers['settings/update'] = body => {
-        const source=body.groups.runtime?.webui_font_source;
-        if(source)window.__responses.config=window.__fontConfigs[source];
-        return Promise.resolve({success:true});
+      window.__postHandlers['checkin-members/update'] = values => {
+        const member = members.find(item => item.user_id === values.user_id);
+        Object.assign(member, values);
+        return {success: true, member};
       };
-      window.__previewMarker=42;
     }""")
-    return attempts
+    page.click("#tab-members")
+    rows = page.locator("#memberList .member-row")
+    status = page.locator("#memberPageStatus")
+    prev = page.locator("#memberPrevPage")
+    next_page = page.locator("#memberNextPage")
+    expect(rows).to_have_count(20)
+    expect(status).to_have_text("第 1 / 2 页")
+    expect(prev).to_be_disabled()
+    next_page.click()
+    expect(rows).to_have_count(19)
+    expect(status).to_have_text("第 2 / 2 页")
+    expect(next_page).to_be_disabled()
+
+    edit = page.locator('[data-edit-member="21"]')
+    edit.click()
+    page.fill("#memberCoins", "99")
+    page.click("#memberSaveBtn")
+    expect(edit).to_be_focused()
+    expect(rows.first.locator(".member-metric strong").first).to_have_text("99")
+    expect(status).to_have_text("第 2 / 2 页")
+    prev.click()
+    expect(rows).to_have_count(20)
+    next_page.click()
+    expect(rows).to_have_count(19)
+
+    page.fill("#memberSearch", "成员 21")
+    page.locator("#memberSearch").press("Enter")
+    expect(rows).to_have_count(1)
+    expect(page.locator("#memberPager")).to_be_hidden()
+    page.click("#memberClearBtn")
+    expect(rows).to_have_count(20)
+    expect(status).to_have_text("第 1 / 2 页")
+    assert page.evaluate("window.__memberRequests") == [
+        ["", 20, 0],
+        ["", 20, 20],
+        ["", 20, 0],
+        ["", 20, 20],
+        ["成员 21", 20, 0],
+        ["", 20, 0],
+    ]
 
 
-def _save_font(page, source):
+def test_pages_use_system_fonts_even_with_legacy_font_response(page):
+    font_requests = []
+
+    def track_font(request):
+        if request.resource_type == "font" or request.url.startswith(
+            "https://font.test/"
+        ):
+            font_requests.append(request.url)
+
+    page.route("https://font.test/**", lambda route: route.abort())
+    page.on("request", track_font)
+    page.reload(wait_until="networkidle")
     page.click('#settingsNav [data-group="runtime"]')
-    page.click("#setting-webui_font_source .dd-trigger")
-    page.locator(
-        f'#setting-webui_font_source .dd-option[data-value="{source}"]'
-    ).click()
-    page.click("#settingsSaveBtn")
-    page.wait_for_function(
-        "document.querySelector('#settingsStatus').textContent.includes('设置已保存')"
-    )
-
-
-def test_font_route_switches_live_and_system_disables_external_font(page):
-    attempts = _font_routes(page)
-    _save_font(page, "mirror")
-    page.wait_for_function(
-        "document.querySelector('#fontStatus').dataset.state==='ready'"
-    )
-    assert (
-        page.locator("body")
-        .evaluate("e=>getComputedStyle(e).fontFamily")
-        .startswith("MiSans")
-    )
-    assert (
-        page.locator("#settingsTitle")
-        .evaluate("e=>getComputedStyle(e).fontFamily")
-        .startswith("MiSans")
-    )
-    _save_font(page, "official")
-    page.wait_for_function(
-        "document.querySelector('#fontStatus').dataset.state==='ready'"
-    )
-    assert "MiSans VF" in page.locator("body").evaluate(
-        "e=>getComputedStyle(e).fontFamily"
-    )
-    _save_font(page, "none")
-    page.wait_for_function(
-        "document.querySelector('#fontStatus').dataset.state==='system'"
-    )
-    assert len(attempts) == 2
-    assert (
-        not page.locator("body")
-        .evaluate("e=>getComputedStyle(e).fontFamily")
-        .startswith("MiSans")
-    )
-    assert page.evaluate("window.__previewMarker") == 42
-    assert page.locator('link[href^="https://font.test/"]').count() == 0
-
-
-@pytest.mark.parametrize("failed_resource", ["stylesheet", "woff2"])
-def test_font_failure_keeps_settings_saved_and_retry_has_no_new_post(
-    page, failed_resource
-):
-    attempts = _font_routes(page, fail_first=failed_resource == "stylesheet")
-
-    def fail_font(route):
-        route.abort()
-
-    if failed_resource == "woff2":
-        page.route("https://font.test/fixture.woff2", fail_font)
-    _save_font(page, "mirror")
-    page.wait_for_function(
-        "document.querySelector('#fontStatus').dataset.state==='error'"
-    )
-    assert page.locator("#settingsSaveBtn").is_disabled()
-    assert page.get_attribute("#setting-webui_font_source input", "value") == "mirror"
-    assert page.locator("#fontRetryBtn").is_visible()
-    assert page.locator('link[href^="https://font.test/"]').count() == 0
-    if failed_resource == "woff2":
-        page.unroute("https://font.test/fixture.woff2", fail_font)
-    page.click("#fontRetryBtn")
-    page.wait_for_function(
-        "document.querySelector('#fontStatus').dataset.state==='ready'"
-    )
-    assert len(attempts) == 2
-    assert page.evaluate("window.__posts.length") == 1
-
-
-def test_font_timeout_falls_back_without_blocking_saved_settings(page):
-    _font_routes(page)
-    page.clock.install()
-    page.evaluate("() => { document.fonts.load=()=>new Promise(()=>{}); }")
-    _save_font(page, "mirror")
-    page.wait_for_selector(
-        'link[href="https://font.test/mirror.css"]', state="attached"
-    )
-    page.clock.fast_forward(12001)
-    page.wait_for_function(
-        "document.querySelector('#fontStatus').dataset.state==='error'"
-    )
-    assert page.locator("#fontRetryBtn").is_visible()
-    assert page.locator("#settingsSaveBtn").is_disabled()
-    assert page.evaluate("window.__posts.length") == 1
-    assert page.locator('link[href^="https://font.test/"]').count() == 0
-    assert "MiSans" not in page.locator("body").evaluate(
-        "e=>getComputedStyle(e).fontFamily"
-    )
-
-
-def test_old_font_completion_cannot_override_new_system_selection(page):
-    _font_routes(page)
-    page.evaluate("""() => {
-      window.__fontWaiters=[];
-      document.fonts.load=()=>new Promise(resolve=>window.__fontWaiters.push(resolve));
-    }""")
-    _save_font(page, "mirror")
-    page.wait_for_function("window.__fontWaiters.length===4")
-    _save_font(page, "none")
-    page.wait_for_function(
-        "document.querySelector('#fontStatus').dataset.state==='system'"
-    )
-    page.evaluate("window.__fontWaiters.forEach(resolve=>resolve([{status:'loaded'}]))")
-    page.wait_for_timeout(100)
-    assert page.get_attribute("#fontStatus", "data-state") == "system"
-    assert (
-        page.locator("body")
-        .evaluate("e=>getComputedStyle(e).fontFamily")
-        .find("MiSans")
-        == -1
-    )
+    expect(page.locator("#setting-request_timeout")).to_be_visible()
+    expect(page.get_by_text("界面字体线路")).to_have_count(0)
+    assert page.evaluate("document.fonts.size") == 0
+    assert font_requests == []

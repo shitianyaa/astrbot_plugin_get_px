@@ -23,7 +23,15 @@ finally:
 
 SCHEMA = json.loads((ROOT / "_conf_schema.json").read_text(encoding="utf-8"))
 FIXTURE = ROOT / "tests/fixtures/config_v3_8_0_grouped.json"
-RETIRED = {"dedupe_days", "dedupe_ttl_hours", "dedupe_days_migrated", "_grouped_config_migrated", "lolicon_api_url", "auto_trigger_enabled"}
+RETIRED = {
+    "dedupe_days",
+    "dedupe_ttl_hours",
+    "dedupe_days_migrated",
+    "_grouped_config_migrated",
+    "lolicon_api_url",
+    "auto_trigger_enabled",
+    "webui_font_source",
+}
 
 
 def test_schema_contains_only_formal_groups_and_required_policy_marker():
@@ -54,6 +62,7 @@ async def test_v3_8_0_grouped_config_survives_framework_load_save_and_reload(tmp
         for key, value in group.items():
             assert plugin._cfg_get(key) == value
     assert "dedupe_days" not in config["content_dedupe"]
+    assert "webui_font_source" not in config["runtime"]
     assert plugin._cfg_int("p_coin_cost", 20, 0, 200) == 35
     assert plugin._cfg_bool("checkin_enabled", True) is False
 
