@@ -82,7 +82,8 @@ export function createNumberControl(input, label) {
   // 控件可能位于包裹式 label 内，输入名称不应包含加减按钮的文本。
   input.setAttribute("aria-label", label);
   const buttons = [-1, 1].map(direction => {
-    const button = element("button", "number-step", direction < 0 ? "−" : "+");
+    const button = element("button", "number-step");
+    button.classList.toggle("number-step-increase", direction > 0);
     button.type = "button";
     button.setAttribute("aria-label", `${direction < 0 ? "减少" : "增加"}${label}`);
     button.addEventListener("click", () => {

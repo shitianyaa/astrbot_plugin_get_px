@@ -883,10 +883,10 @@ input:checked + .switch-track::after {
   transform: translateX(20px);
 }
 
-.switch:focus-within {
-  outline: 2px solid var(--focus-ring);
-  outline-offset: 2px;
-  border-radius: var(--radius-xs);
+.switch > input:focus-visible ~ .switch-text,
+.safety-r18-toggle:has(> input:focus-visible) .safety-r18-copy strong {
+  text-decoration: underline;
+  text-underline-offset: 3px;
 }
 
 .switch.is-disabled {
@@ -1809,7 +1809,15 @@ input::-webkit-inner-spin-button, input::-webkit-outer-spin-button { -webkit-app
 .number-control { display: flex; align-items: center; gap: 4px; width: 164px; max-width: 100%; padding: 4px; border: 1px solid var(--border); border-radius: 16px; background: var(--surface); }
 .number-control input { flex: 1; width: 40px; min-width: 0; min-height: 36px; padding: 6px 0; border: 0; background: transparent; text-align: center; border-radius: 8px; font-family: var(--font-sans); }
 .number-control:has(input.is-invalid) { border-color: var(--danger); }
-.number-step { position: relative; overflow: hidden; flex: none; display: grid; place-content: center; width: 36px; height: 36px; padding: 0; border: 0; border-radius: 11px; background: var(--surface-elevated); color: var(--accent); font-size: var(--text-title); box-shadow: 0 2px 5px var(--soft-shadow); transition: background-color var(--transition), transform var(--transition); }
+.number-step { position: relative; overflow: hidden; flex: none; display: grid; place-items: center; width: 36px; height: 36px; padding: 0; border: 0; border-radius: 11px; background: var(--surface-elevated); color: var(--accent); box-shadow: 0 2px 5px var(--soft-shadow); transition: background-color var(--transition), transform var(--transition); }
+.number-step::before,
+.number-step-increase::after {
+  content: "";
+  grid-area: 1 / 1;
+  width: 12px;
+  border-top: 2px solid currentColor;
+}
+.number-step-increase::after { transform: rotate(90deg); }
 .number-step:hover:not(:disabled) { background: var(--surface-sunken); }
 .number-step:active:not(:disabled) { transform: scale(.88); }
 .number-step:disabled { opacity: .35; cursor: not-allowed; }
