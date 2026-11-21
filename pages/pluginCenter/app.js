@@ -35,6 +35,7 @@ let memberBoostSelect = null;
 let memberNumberControls = [];
 let rankingRequest = 0;
 let memberRequest = 0;
+let pendingMemberRead = null;
 let reloadJob = null;
 // 宿主已给出主题（首帧注入或 theme 参数）时不再跟随系统偏好。
 let hostThemeKnown = document.documentElement.getAttribute("data-theme-source") === "host"
@@ -472,10 +473,12 @@ function renderMembersError(message = "成员资料读取失败，请重新加�
   els.memberList.innerHTML = `<div class="empty error">${escapeHtml(message)}</div>`;
 }
 
-async function loadMembers(page = state.memberPage, query = state.memberQuery) {
+async function loadMembers(
+  page = pendingMemberRead?.page ?? state.memberPage,
+  query = pendingMemberRead?.query ?? state.memberQuery,
+) {
   const request = ++memberRequest;
-  state.memberPage = page;
-  state.memberQuery = query;
+  pendingMemberRead = { page, query };
   state.membersLoading = true;
   updateMemberPager();
   els.memberList.setAttribute("aria-busy", "true");
@@ -510,6 +513,7 @@ async function loadMembers(page = state.memberPage, query = state.memberQuery) {
     throw error;
   } finally {
     if (request === memberRequest) {
+      pendingMemberRead = null;
       state.membersLoading = false;
       els.memberList.setAttribute("aria-busy", "false");
       updateMemberPager();

@@ -100,6 +100,13 @@ export function mountSafety({ apiGet, apiPost, escapeHtml, showToast, confirmAct
     dialog.showModal();
     $("safetyGroupName").focus();
   }
+  async function saveTerm(endpoint, term) {
+    const result = await apiPost(endpoint, { term });
+    ++loadSequence;
+    settings.global_safety_terms = result.global_safety_terms;
+    onChange(settings);
+    render();
+  }
   async function close() {
     if (busy) return;
     if (dirty() && !await confirmAction("放弃未保存修改", "关闭将丢弃当前分组草稿，确认继续吗？")) return;
@@ -118,7 +125,7 @@ export function mountSafety({ apiGet, apiPost, escapeHtml, showToast, confirmAct
     const button = event.target.closest("[data-remove-term]");
     if (!button || !await confirmAction("删除全局关键词", "删除后所有会话都不再使用此关键词，确认继续吗？")) return;
     button.disabled = true;
-    try { await apiPost("content-safety/terms/remove", { term: button.dataset.removeTerm }); await reload(); }
+    try { await saveTerm("content-safety/terms/remove", button.dataset.removeTerm); await reload(); }
     catch (error) { showToast(error.message, "error"); button.disabled = false; }
   });
   $("termForm").addEventListener("submit", async event => {
@@ -126,7 +133,7 @@ export function mountSafety({ apiGet, apiPost, escapeHtml, showToast, confirmAct
     const button = event.currentTarget.querySelector("button");
     button.disabled = true;
     $("termError").textContent = "";
-    try { await apiPost("content-safety/terms/add", { term: $("termInput").value.trim() }); $("termInput").value = ""; await reload(); }
+    try { await saveTerm("content-safety/terms/add", $("termInput").value.trim()); $("termInput").value = ""; await reload(); }
     catch (error) { $("termError").textContent = error.message; }
     finally { button.disabled = false; }
   });

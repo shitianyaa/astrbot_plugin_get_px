@@ -21,7 +21,7 @@ _CODE_TOKEN = re.compile(
     r"""(?P<comment>/\*[\s\S]*?\*/)|(?P<space>\s+)"""
     r"""|(?P<string>'(?:\\.|[^'\\])*'|"(?:\\.|[^"\\])*")"""
     r"""|(?P<template>`(?:\\.|[^`\\])*`)"""
-    r"""|(?P<word>[-\w$]+)|(?P<punct>.)""",
+    r"""|(?P<operator>\+\+|--)|(?P<word>[-\w$]+)|(?P<punct>.)""",
     re.DOTALL,
 )
 _REGEX_LITERAL = re.compile(r"/((?:\\.|\[(?:\\.|[^\]\\])*\]|[^/\\\r\n\[])+)/[A-Za-z]*")

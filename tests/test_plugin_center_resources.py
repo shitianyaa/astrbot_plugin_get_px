@@ -130,6 +130,25 @@ def test_resource_closure_rejects_paths_outside_page_directory(tmp_path: Path):
         gate.resource_closure(page / "index.html", page)
 
 
+@pytest.mark.parametrize(
+    "expression", ["count++", "count--", "count ++", "count --", "++count", "--count"]
+)
+def test_resource_closure_checks_import_after_update_and_division(
+    tmp_path: Path, expression: str,
+):
+    entry = tmp_path / "main.mjs"
+    entry.write_text(
+        f'let count = 4; const ratio = {expression} / 2; import "./needed.mjs";',
+        encoding="utf-8",
+    )
+    with pytest.raises(SystemExit, match="needed.mjs"):
+        gate.resource_closure(entry)
+    (tmp_path / "needed.mjs").write_text("", encoding="utf-8")
+    assert {path.name for path in gate.resource_closure(entry)} == {
+        "main.mjs", "needed.mjs",
+    }
+
+
 def test_resource_scan_ignores_comments_strings_and_html_examples(tmp_path: Path):
     (tmp_path / "index.html").write_text(
         '<!-- <script src="missing-comment.mjs"></script> -->'
