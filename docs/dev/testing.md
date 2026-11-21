@@ -19,7 +19,7 @@
 | JSON schema 检查 | 插件目录 | `python -m json.tool _conf_schema.json` |
 | JavaScript 语法检查 | 插件目录 | `node --check pages/pluginCenter/app.js`，并检查 `settings.mjs`、`safety.mjs`、`ui.mjs` |
 | 管理页状态测试 | 插件目录 | `node --test tests/js/safety.test.mjs tests/js/settings.test.mjs tests/js/ui.test.mjs` |
-| 管理页浏览器回归 | 插件目录 | `python -m pytest -q tests/test_plugin_center_browser.py`（缺 Playwright／Chromium 时跳过） |
+| 管理页浏览器回归 | 插件目录 | `python -m pytest -q tests/test_plugin_center_browser.py tests/test_plugin_center_edge_cases.py`（缺 Playwright／Chromium 时跳过） |
 | pytest 全部测试 | 插件目录 | `python -m pytest -v tests` |
 | pytest 快速测试 | 插件目录 | `python -m pytest -q tests` |
 | pytest 特定模块 | 插件目录 | `python -m pytest tests/test_checkin_*.py -v` |
@@ -38,6 +38,8 @@ PR 快速 CI（`AstrBot Plugin Quality Gate`，`.github/workflows/plugin-quality
 ```bash
 python scripts/ci/check_plugin_quality_gate.py
 ```
+
+页面资源检查解析真实 HTML 属性，并通过有界词法扫描识别 JS 字面量模块路径和 CSS 资源；跳过注释、普通字符串、模板文本及正则示例。动态拼接和模板表达式不执行，新增此类资源加载时需同步补充检查。浏览器回归另覆盖导入期间的成员读取、配置重入与失败恢复、并发安全设置、键盘焦点和小屏操作；延迟响应测试使用独立快照，避免共享对象掩盖竞态。
 
 ## PR 生命周期 CI
 

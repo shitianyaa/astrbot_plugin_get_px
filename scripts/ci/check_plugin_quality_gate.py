@@ -6,7 +6,8 @@ import re
 import shlex
 import subprocess
 import sys
-from collections.abc import Sequence
+from collections.abc import Iterator, Sequence
+from html.parser import HTMLParser
 from pathlib import Path
 from urllib.parse import urlsplit
 
@@ -15,20 +16,102 @@ REPOSITORY_ROOT = Path(__file__).resolve().parents[2]
 PAGE_DIR = REPOSITORY_ROOT / "pages" / "pluginCenter"
 JS_TEST_DIR = REPOSITORY_ROOT / "tests" / "js"
 
-# 相对引用：模块的静态/动态/副作用 import、HTML 的 src/href、CSS 的 url()/@import。
-# JS 只认 ./ 与 ../ 说明符，避免把裸模块名当本地文件；HTML／CSS 允许裸相对名。
-# 同时匹配 ../，交由 resource_closure 拒绝逃出页面目录。
-_JS_REFERENCE_PATTERNS = (
-    r"""from\s*['"]([^'"]+)['"]""",
-    r"""import\s*\(\s*['"]([^'"]+)['"]""",
-    r"""import\s+['"]([^'"]+)['"]""",
+# 有界词法扫描：先区分注释、字符串与代码，再识别字面量引用。
+_CODE_TOKEN = re.compile(
+    r"""(?P<comment>/\*[\s\S]*?\*/)|(?P<space>\s+)"""
+    r"""|(?P<string>'(?:\\.|[^'\\])*'|"(?:\\.|[^"\\])*")"""
+    r"""|(?P<template>`(?:\\.|[^`\\])*`)"""
+    r"""|(?P<word>[-\w$]+)|(?P<punct>.)""",
+    re.DOTALL,
 )
-_HTML_REFERENCE_PATTERN = r"""(?:src|href)\s*=\s*['"]([^'"]+)['"]"""
-_CSS_URL_PATTERN = r"""url\(\s*['"]?([^'")]+)['"]?\s*\)"""
-_CSS_IMPORT_PATTERN = r"""@import\s+(?:url\(\s*)?['"]([^'"]+)['"]"""
+_REGEX_LITERAL = re.compile(r"/((?:\\.|\[(?:\\.|[^\]\\])*\]|[^/\\\r\n\[])+)/[A-Za-z]*")
 
 # 外部地址、协议相对、根绝对、纯锚点与 data: 都不是页面目录内的资源。
 _EXTERNAL_REFERENCE = re.compile(r"^(?:[A-Za-z][A-Za-z0-9+.-]*:|//|/|#)")
+
+
+class _HTMLReferences(HTMLParser):
+    def __init__(self, source: str) -> None:
+        super().__init__(convert_charrefs=True)
+        self.references: list[str] = []
+        self.feed(source)
+
+    def handle_starttag(self, tag: str, attrs: list[tuple[str, str | None]]) -> None:
+        self.references.extend(
+            value for key, value in attrs if key in {"src", "href"} and value
+        )
+
+
+def _code_tokens(source: str, *, javascript: bool) -> list[tuple[str, str]]:
+    tokens: list[tuple[str, str]] = []
+    position = 0
+    while position < len(source):
+        if javascript and source.startswith("//", position):
+            newline = source.find("\n", position)
+            position = len(source) if newline < 0 else newline + 1
+            continue
+        previous_kind, previous = tokens[-1] if tokens else ("punct", "")
+        match = _CODE_TOKEN.match(source, position)
+        assert match is not None
+        kind, value = match.lastgroup, match.group()
+        if kind in {"space", "comment"}:
+            position = match.end()
+            continue
+        starts_expression = (
+            previous_kind == "punct" and previous not in {")", "]", "}"}
+        ) or previous in {"return", "throw", "case", "yield"}
+        if javascript and source[position] == "/" and starts_expression:
+            literal = _REGEX_LITERAL.match(source, position)
+            if literal:
+                tokens.append(("regex", literal.group()))
+                position = literal.end()
+                continue
+        position = match.end()
+        if kind == "string":
+            value = value[1:-1]
+        tokens.append((kind, value))
+    return tokens
+
+
+def _code_references(source: str, *, javascript: bool) -> Iterator[str]:
+    tokens = _code_tokens(source, javascript=javascript)
+    for index, (kind, value) in enumerate(tokens):
+        following = tokens[index + 1 : index + 4]
+        if javascript:
+            if kind != "word" or (index and tokens[index - 1] == ("punct", ".")):
+                continue
+            if (
+                value in {"from", "import"}
+                and following
+                and following[0][0] == "string"
+            ):
+                yield following[0][1]
+            elif (
+                value == "import"
+                and len(following) == 3
+                and following[0] == ("punct", "(")
+                and following[1][0] == "string"
+                and following[2][1] in {")", ","}
+            ):
+                yield following[1][1]
+        elif (
+            kind == "word"
+            and value.lower() == "url"
+            and following
+            and following[0] == ("punct", "(")
+        ):
+            end = index + 2
+            while end < len(tokens) and tokens[end] != ("punct", ")"):
+                end += 1
+            if end < len(tokens):
+                yield "".join(part for _, part in tokens[index + 2 : end])
+        elif (
+            (kind, value) == ("punct", "@")
+            and len(following) >= 2
+            and following[0] == ("word", "import")
+            and following[1][0] == "string"
+        ):
+            yield following[1][1]
 
 
 def _run_check(command: Sequence[str]) -> None:
@@ -74,16 +157,15 @@ def _local_reference(reference: str, *, relative_specifier: bool) -> str | None:
 def _local_resources(path: Path) -> set[Path]:
     """页面、样式或模块直接引用的同目录相对资源；忽略 query/hash 与绝对地址。"""
 
-    if path.suffix in {".js", ".mjs"}:
-        patterns, relative_specifier = _JS_REFERENCE_PATTERNS, True
-    elif path.suffix == ".html":
-        patterns, relative_specifier = (_HTML_REFERENCE_PATTERN,), False
-    elif path.suffix == ".css":
-        patterns, relative_specifier = (_CSS_URL_PATTERN, _CSS_IMPORT_PATTERN), False
-    else:
+    if path.suffix not in {".js", ".mjs", ".html", ".css"}:
         return set()
     source = path.read_text(encoding="utf-8")
-    references = {ref for pattern in patterns for ref in re.findall(pattern, source)}
+    relative_specifier = path.suffix in {".js", ".mjs"}
+    references = (
+        _HTMLReferences(source).references
+        if path.suffix == ".html"
+        else _code_references(source, javascript=relative_specifier)
+    )
     resolved = set()
     for reference in references:
         local = _local_reference(reference, relative_specifier=relative_specifier)

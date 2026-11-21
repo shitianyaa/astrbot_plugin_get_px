@@ -128,3 +128,47 @@ def test_resource_closure_rejects_paths_outside_page_directory(tmp_path: Path):
     )
     with pytest.raises(SystemExit):
         gate.resource_closure(page / "index.html", page)
+
+
+def test_resource_scan_ignores_comments_strings_and_html_examples(tmp_path: Path):
+    (tmp_path / "index.html").write_text(
+        '<!-- <script src="missing-comment.mjs"></script> -->'
+        '<div data-src="missing-data.png">示例</div>'
+        "<script>const text = '<img src=\"missing-string.png\">';</script>"
+        '<script type="module" src="main.mjs"></script>'
+        '<link rel="stylesheet" href="theme.css">',
+        encoding="utf-8",
+    )
+    (tmp_path / "main.mjs").write_text(
+        """// import './missing-line.mjs';
+/* export { x } from './missing-block.mjs'; */
+const example = "import './missing-string.mjs'";
+const template = `import './missing-template.mjs'`;
+const regex = /import '.\\/missing-regex.mjs'/;
+const ratio = 6 / 2;
+import /* comment */ './side.mjs';
+export { value } from './side.mjs';
+const lazy = import(/* comment */ './lazy.mjs');
+const dynamic = name => import('./' + name);
+""",
+        encoding="utf-8",
+    )
+    (tmp_path / "theme.css").write_text(
+        """/* @import "missing.css"; .example { background: url(missing.png); } */
+.example::before { content: 'url("missing-string.png")'; }
+@import /* comment */ "base.css";
+.hero { background: url(./hero.png?v=1); }
+""",
+        encoding="utf-8",
+    )
+    for name in ("side.mjs", "lazy.mjs", "base.css", "hero.png"):
+        (tmp_path / name).write_text("", encoding="utf-8")
+    assert {path.name for path in gate.resource_closure(tmp_path / "index.html")} == {
+        "index.html",
+        "main.mjs",
+        "theme.css",
+        "side.mjs",
+        "lazy.mjs",
+        "base.css",
+        "hero.png",
+    }

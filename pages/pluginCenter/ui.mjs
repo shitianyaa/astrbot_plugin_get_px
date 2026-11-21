@@ -178,10 +178,11 @@ export function createSelect({
   trigger.setAttribute("aria-haspopup", "listbox");
   trigger.setAttribute("aria-expanded", "false");
   trigger.setAttribute("aria-controls", listId);
-  if (labelledBy) trigger.setAttribute("aria-labelledby", labelledBy);
   if (describedBy) trigger.setAttribute("aria-describedby", describedBy);
 
   const labelNode = element("span", "dd-label");
+  labelNode.id = `${listId}-value`;
+  if (labelledBy) trigger.setAttribute("aria-labelledby", `${labelledBy} ${labelNode.id}`);
   const caret = document.createElementNS("http://www.w3.org/2000/svg", "svg");
   caret.classList.add("dd-caret");
   caret.setAttribute("viewBox", "0 0 24 24");
@@ -223,6 +224,8 @@ export function createSelect({
   }
 
   function renderList() {
+    const focusedValue = list.contains(document.activeElement)
+      ? document.activeElement.dataset.value : null;
     list.replaceChildren(...items.map((item) => {
       const option = element("button", "dd-option");
       option.type = "button";
@@ -238,6 +241,10 @@ export function createSelect({
       option.addEventListener("click", () => choose(item.value));
       return option;
     }));
+    if (focusedValue !== null) {
+      const target = focusableOptions().find(option => option.dataset.value === focusedValue);
+      (target || trigger).focus({ preventScroll: true });
+    }
   }
 
   function optionNodes() {
@@ -268,7 +275,9 @@ export function createSelect({
     current = value;
     syncTrigger();
     if (hidden) hidden.value = current;
-    if (expanded) renderList();
+    for (const option of optionNodes()) {
+      option.setAttribute("aria-selected", String(option.dataset.value === current));
+    }
     if (changed && notify && changeHandler) changeHandler(current);
   }
 
@@ -417,7 +426,9 @@ export function createSelect({
     set: (next) => setValue(next, false),
   });
   root.setOptions = (next) => {
-    items = normalizeSelectOptions(next);
+    const normalized = normalizeSelectOptions(next);
+    if (JSON.stringify(normalized) === JSON.stringify(items)) return;
+    items = normalized;
     if (!items.some((item) => item.value === current)) {
       current = items[0]?.value ?? "";
       if (hidden) hidden.value = current;

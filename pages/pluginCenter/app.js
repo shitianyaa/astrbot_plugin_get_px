@@ -19,7 +19,6 @@ const state = {
   membersLoading: false,
   selectedMember: null,
   memberDialogTrigger: null,
-  loading: false,
   loaded: {
     overview: false,
     groups: false,
@@ -36,6 +35,7 @@ let memberBoostSelect = null;
 let memberNumberControls = [];
 let rankingRequest = 0;
 let memberRequest = 0;
+let reloadJob = null;
 // 宿主已给出主题（首帧注入或 theme 参数）时不再跟随系统偏好。
 let hostThemeKnown = document.documentElement.getAttribute("data-theme-source") === "host"
   || new URLSearchParams(window.location.search).has("theme");
@@ -190,9 +190,12 @@ async function loadBlacklistThumbnails() {
   }
 }
 
-async function reloadAll() {
-  if (state.loading) return;
-  state.loading = true;
+function reloadAll() {
+  if (!reloadJob) reloadJob = refreshAll().finally(() => { reloadJob = null; });
+  return reloadJob;
+}
+
+async function refreshAll() {
   const refreshButton = $("refreshBtn");
   setButtonBusy(refreshButton, true, "正在刷新…", "刷新数据");
   hideGlobalError();
@@ -256,7 +259,7 @@ async function reloadAll() {
 
     if (rankingJob) await rankingJob;
 
-    if (state.loaded.members && !state.membersLoading) {
+    if (state.loaded.members || state.membersLoading) {
       try {
         await loadMembers();
       } catch (error) {
@@ -269,7 +272,6 @@ async function reloadAll() {
       showToast("部分数据加载失败，可重试", "error");
     }
   } finally {
-    state.loading = false;
     setButtonBusy(refreshButton, false, "正在刷新…", "刷新数据");
   }
 }
@@ -472,6 +474,8 @@ function renderMembersError(message = "成员资料读取失败，请重新加�
 
 async function loadMembers(page = state.memberPage, query = state.memberQuery) {
   const request = ++memberRequest;
+  state.memberPage = page;
+  state.memberQuery = query;
   state.membersLoading = true;
   updateMemberPager();
   els.memberList.setAttribute("aria-busy", "true");
@@ -981,6 +985,8 @@ function bindEvents() {
         回滚文件为 ${result.rollback_file || "未知"}。`;
       els.importFile.value = "";
       showToast("签到备份已成功恢复！");
+      // 已在途的刷新可能读取了导入前的数据，结束后再读取恢复结果。
+      await reloadJob;
       await reloadAll();
     } catch (error) {
       els.importResult.textContent = `恢复失败：${error.message || "未知错误"}`;

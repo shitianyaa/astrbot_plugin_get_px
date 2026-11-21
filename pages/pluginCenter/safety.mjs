@@ -38,6 +38,9 @@ export function mountSafety({ apiGet, apiPost, escapeHtml, showToast, confirmAct
       modeSelect.setDisabled(true);
       try {
         await apiPost("content-safety/global", { keyword_match_mode: next });
+        settings.keyword_match_mode = next;
+        mode();
+        onChange(settings);
         await reload();
         showToast("全局匹配方式已保存");
       } catch (error) {

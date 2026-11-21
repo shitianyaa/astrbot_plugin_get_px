@@ -2090,6 +2090,16 @@ dialog p:not(.eyebrow):not(.member-history-note) {
   .config-hint { order: 2; }
 }
 
+/* 极矮窗口让导航和工具条随页面滚动，保留全部控件的可达性。 */
+@media (max-height: 360px) {
+  html[data-view="settings"] { scroll-padding-top: 16px; }
+  html[data-view="settings"] .nav-shell,
+  .config-actionbar,
+  .config-nav { position: static; }
+  .config-actionbar::before { display: none; }
+  .config-nav { max-height: none; overflow-y: visible; }
+}
+
 @media (max-width: 680px) {
   :root {
     --page-bottom: 32px;

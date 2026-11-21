@@ -447,6 +447,7 @@ def test_settings_controls_expose_field_accessible_names(page):
     page.click('#settingsNav [data-group="pixiv_source"]')
     page.wait_for_selector("#setting-max_count")
     assert page.get_by_role("spinbutton", name="单次最大数量").count() == 1
+    expect(page.get_by_role("button", name="首选图片源 Lolicon", exact=True)).to_be_visible()
     assert page.get_by_label("Pixiv refresh token").count() == 1
     assert page.eval_on_selector(
         "#setting-max_count",
@@ -458,13 +459,8 @@ def test_settings_controls_expose_field_accessible_names(page):
     page.wait_for_selector("#setting-checkin_enabled")
     assert page.get_by_role("checkbox", name="签到总开关").count() == 1
     assert page.get_by_label("AI 问候提示词").count() == 1
-    assert (
-        page.eval_on_selector(
-            "#settingsGroupPicker .dd-trigger",
-            "node => node.getAttribute('aria-labelledby')",
-        )
-        == "settingsGroupPickerLabel"
-    )
+    page.set_viewport_size({"width": 390, "height": 700})
+    expect(page.get_by_role("button", name="配置分组 签到基础", exact=True)).to_be_visible()
 
 
 def test_invalid_number_counts_as_unsaved_edit_for_discard_and_reload(page):
@@ -811,7 +807,8 @@ def test_group_save_uses_authoritative_response_without_waiting_for_reload(page)
     page.click('#policyList [data-edit-group="g1"]')
     page.fill("#safetyGroupName", "已保存名称")
     page.evaluate("""() => {
-      const old = window.__responses['content-safety'];
+      const old = structuredClone(window.__responses['content-safety']);
+      if (old.safety_groups[0].name !== '日常插画') throw new Error('旧响应必须保留保存前名称');
       window.__getHandlers['content-safety'] = () => new Promise(resolve => {
         window.__resolveStaleSafety = () => resolve(old);
       });

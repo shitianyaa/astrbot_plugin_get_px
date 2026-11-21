@@ -181,6 +181,7 @@ export function createSettingsPage({ bridge, notify, navigate, confirm }) {
   const saveButton = byId("settingsSaveBtn");
   const reloadButton = byId("settingsReloadBtn");
   const mobileSlot = byId("settingsGroupSelect");
+  const fixInvalidButton = byId("settingsFixInvalidBtn");
 
   let groups = [];
   let draft = {};
@@ -196,6 +197,7 @@ export function createSettingsPage({ bridge, notify, navigate, confirm }) {
   let errorNotice = "";
   let mobileSelect = null;
   let busy = false;
+  let loadJob = null;
   // 冻结期间记录每个控件原本的 disabled，结束后逐项恢复：
   // 清除令牌勾选后密码框本就禁用，不能被统一的 false 解除。
   const busyStates = new Map();
@@ -243,6 +245,10 @@ export function createSettingsPage({ bridge, notify, navigate, confirm }) {
     saveButton.disabled = saving || loading || !count || invalid.size > 0;
     reloadButton.disabled = saving || loading;
     if (searchInput) searchInput.disabled = saving || loading;
+    fixInvalidButton.hidden = invalid.size === 0;
+    fixInvalidButton.disabled = busy;
+    fixInvalidButton.textContent = `定位待修正项（${invalid.size}）`;
+    const mobileOptions = [];
     for (const button of navNode.querySelectorAll("[data-group]")) {
       const group = groupOf(button.dataset.group);
       if (!group) continue;
@@ -253,6 +259,10 @@ export function createSettingsPage({ bridge, notify, navigate, confirm }) {
       // 无效草稿可能停在别的分组：导航徽标要能把它标出来。
       const groupInvalid = [...invalid.keys()]
         .filter((key) => group.fields.some((field) => field.key === key)).length;
+      mobileOptions.push({
+        value: group.key,
+        label: groupInvalid ? `${group.label}（${groupInvalid} 项待修正）` : group.label,
+      });
       const hits = filterSettingsFields(group.fields, query).length;
       const badge = button.querySelector(".config-nav-badge");
       if (badge) {
@@ -268,6 +278,7 @@ export function createSettingsPage({ bridge, notify, navigate, confirm }) {
         Boolean(query.trim()) && !settingsGroupMatches(group, query),
       );
     }
+    mobileSelect?.setOptions(mobileOptions);
     const active = groupOf(activeKey);
     if (groupTitle) groupTitle.textContent = active?.label || "插件配置";
     if (groupCount) {
@@ -295,7 +306,6 @@ export function createSettingsPage({ bridge, notify, navigate, confirm }) {
     activeKey = key;
     if (fromUser) pinned = true;
     if (mobileSelect && mobileSelect.value !== key) mobileSelect.value = key;
-    renderNav();
     renderFields();
     animateContent(fieldsNode);
     updateChrome();
@@ -496,7 +506,7 @@ export function createSettingsPage({ bridge, notify, navigate, confirm }) {
       value: String(valueOf(field) ?? ""),
       options: normalizeChoiceOptions(
         field.options,
-        String(valueOf(field) ?? ""),
+        String(field.value ?? ""),
         field.special === "select_provider",
       ),
       onChange: (next) => commit(field.key, next),
@@ -690,8 +700,14 @@ export function createSettingsPage({ bridge, notify, navigate, confirm }) {
     form.setAttribute("aria-busy", String(value));
   }
 
-  async function load() {
-    if (busy) return;
+  function load() {
+    if (loadJob) return loadJob;
+    if (busy) return Promise.reject(new Error("正在保存设置，请稍后再试。"));
+    loadJob = readSettings().finally(() => { loadJob = null; });
+    return loadJob;
+  }
+
+  async function readSettings() {
     loading = true;
     setBusy(true);
     status.textContent = "正在读取设置…";
@@ -699,8 +715,12 @@ export function createSettingsPage({ bridge, notify, navigate, confirm }) {
     try {
       const snapshot = await bridge.apiGet("settings");
       if (snapshot?.success === false) throw new Error(snapshot.error || "设置读取失败");
-      groups = Array.isArray(snapshot?.groups) ? snapshot.groups : [];
-      if (!groups.length) throw new Error("设置数据异常，请重试。");
+      const nextGroups = snapshot?.groups;
+      if (!Array.isArray(nextGroups) || !nextGroups.length || nextGroups.some(
+        group => typeof group?.key !== "string" || !group.key || !Array.isArray(group.fields)
+          || group.fields.some(field => typeof field?.key !== "string" || !field.key),
+      )) throw new Error("设置数据异常，请重试。");
+      groups = nextGroups;
       draft = {};
       clears = new Set();
       invalid = new Map();
@@ -731,11 +751,14 @@ export function createSettingsPage({ bridge, notify, navigate, confirm }) {
     if (!key) return;
     const field = fieldOf(key);
     const group = field ? groups.find((item) => item.fields.includes(field)) : null;
-    if (group && group.key !== activeKey) {
+    if (group) {
+      query = "";
+      if (searchInput) searchInput.value = "";
       pinned = true;
       activeKey = group.key;
-      renderNav();
+      if (mobileSelect) mobileSelect.value = activeKey;
       renderFields();
+      updateChrome();
     }
     const input = fieldsNode.querySelector(`[data-field-key="${CSS.escape(key)}"] input`);
     input?.focus();
@@ -771,7 +794,7 @@ export function createSettingsPage({ bridge, notify, navigate, confirm }) {
         const group = groupOf(groupKey);
         for (const [key, value] of Object.entries(values)) {
           const field = group?.fields.find((item) => item.key === key);
-          if (field) field.value = value;
+          if (field && !field.secret) field.value = value;
         }
       }
       for (const key of clearSecrets) {
@@ -849,6 +872,7 @@ export function createSettingsPage({ bridge, notify, navigate, confirm }) {
   form.addEventListener("submit", save);
   searchInput?.addEventListener("input", onSearch);
   reloadButton.addEventListener("click", () => { reload(); });
+  fixInvalidButton.addEventListener("click", focusFirstInvalid);
   const discardButton = byId("settingsDiscardBtn");
   discardButton?.addEventListener("click", () => { discard(); });
   fieldsNode.addEventListener("click", (event) => {
