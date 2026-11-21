@@ -2,7 +2,7 @@ name: astrbot_plugin_get_px
 display_name: 画境拾珍
 short_desc: 支持模型原生取图、Lolicon/Pixiv 自动回退的安全发图与签到插件
 desc: 从 Lolicon 和 Pixiv 获取插画，支持模型取图和按会话设置内容安全。提供每日签到、群排行、主题商店和 WebUI 管理中心，可联动万象画卷。
-version: v3.8.8
+version: v3.9.0
 author: Sham1k0
 repo: https://github.com/shitianyaa/astrbot_plugin_get_px
 astrbot_version: ">=4.16"

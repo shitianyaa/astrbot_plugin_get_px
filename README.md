@@ -7,7 +7,7 @@
 AstrBot 图片与签到插件，支持 Lolicon / Pixiv 搜图、模型取图、每日签到和金币商店。
 
 ![AstrBot](https://img.shields.io/badge/AstrBot-plugin-5865f2?style=flat-square)
-![Version](https://img.shields.io/badge/version-3.8.8-22c55e?style=flat-square)
+![Version](https://img.shields.io/badge/version-3.9.0-22c55e?style=flat-square)
 ![Python](https://img.shields.io/badge/Python-3.10%2B-3776ab?style=flat-square)
 ![Platform](https://img.shields.io/badge/platform-OneBot%20%2F%20aiocqhttp-f97316?style=flat-square)
 ![License](https://img.shields.io/badge/license-MIT-3b82f6?style=flat-square)
@@ -64,7 +64,7 @@ AstrBot 图片与签到插件，支持 Lolicon / Pixiv 搜图、模型取图、�
 ### 升级提醒
 
 > [!WARNING]
-> 升级前备份插件配置和数据目录。早于 v3.8.0 的版本须先升级到 v3.8.0 并确认配置迁移成功；v2.8.x 或已有数据库无版本号时，还须先经过 v3.0.0 完成数据迁移。新代理地址默认留空，仍使用直连；图片去重改为固定窗口，不再提供期限配置。详见[配置升级基线](docs/project/configuration.md#升级基线)及[本次版本说明](CHANGELOG.md#v388-2026-11-15)。
+> 升级前备份插件配置和数据目录。早于 v3.8.0 的版本须先升级到 v3.8.0 并确认配置迁移成功；v2.8.x 或已有数据库无版本号时，还须先经过 v3.0.0 完成数据迁移。代理地址默认留空，仍使用直连；图片去重使用固定窗口。管理中心改用系统字体，原在线字体设置不再生效。详见[配置升级基线](docs/project/configuration.md#升级基线)及[本次版本说明](CHANGELOG.md#v390-2026-11-20)。
 
 ## 图片获取
 
@@ -244,7 +244,7 @@ OneBot、模型、T2I 和浏览器请求由各自配置管理。容器中的 `12
 | [缓存与去重](docs/project/cache-and-dedupe.md) | 去重范围、缓存与清理 |
 | [项目架构](docs/project/architecture.md) | 模块划分与发送流程 |
 | [T2I 渲染说明](docs/dev/t2i-rendering.md) | 自建服务与渲染排查 |
-| [更新日志](CHANGELOG.md#v388-2026-11-15) | 各版本变化 |
+| [更新日志](CHANGELOG.md#v390-2026-11-20) | 各版本变化 |
 
 ### 依赖
 
