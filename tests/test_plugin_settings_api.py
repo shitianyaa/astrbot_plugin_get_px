@@ -14,30 +14,6 @@ from plugin_api.api import PluginWebApi
 from plugin_api.settings import SAFETY_KEYS, save_settings, settings_snapshot
 
 
-@pytest.mark.asyncio
-@pytest.mark.parametrize(
-    "runtime", [{}, {"webui_font_source": "mirror"}, {"webui_font_source": "official"}]
-)
-async def test_legacy_font_endpoint_always_returns_system_font(runtime):
-    target = plugin(Config(runtime=deepcopy(runtime)))
-    api = PluginWebApi(
-        target, plugin_name="x", log_prefix="[x]", internal_error_message="internal"
-    )
-    app = Quart(__name__)
-    app.add_url_rule("/config", view_func=api.config, methods=["GET"])
-    response = await app.test_client().get("/config")
-    assert response.status_code == 200
-    assert await response.get_json() == {
-        "success": True,
-        "font_source": "none",
-        "font_url": "",
-        "font_family": "",
-        "font_label": "系统字体",
-    }
-    assert target.config["runtime"] == runtime
-    assert target.config.saves == 0
-
-
 class Config(dict):
     saves = 0
     fail_save = False
@@ -69,7 +45,7 @@ def plugin(config=None):
     return result
 
 
-def test_settings_snapshot_hides_legacy_fields_and_redacts_secret():
+def test_settings_snapshot_hides_legacy_fields_and_returns_current_values():
     secret = "private-token-value"
     target = plugin(
         Config(pixiv_refresh_token=secret, runtime={"webui_font_source": "official"})
@@ -78,11 +54,8 @@ def test_settings_snapshot_hides_legacy_fields_and_redacts_secret():
     fields = {
         field["key"]: field for group in result["groups"] for field in group["fields"]
     }
-    assert fields["pixiv_refresh_token"]["configured"] is True
-    assert fields["pixiv_refresh_token"]["secret"] is True
-    assert "value" not in fields["pixiv_refresh_token"]
-    assert "default" not in fields["pixiv_refresh_token"]
-    assert secret not in repr(result)
+    assert fields["pixiv_refresh_token"]["value"] == secret
+    assert fields["pixiv_refresh_token"]["default"] == ""
     assert "checkin_avatar_enabled" in fields
     assert "group_content_safety_policies" not in fields
     assert "webui_font_source" not in fields
@@ -330,7 +303,7 @@ def _real_config(tmp_path, failing=False):
     return config, schema
 
 
-def test_real_astrbot_config_persists_partial_settings_and_never_exposes_token(
+def test_real_astrbot_config_persists_and_reads_partial_settings(
     tmp_path,
 ):
     config, schema = _real_config(tmp_path)
@@ -372,45 +345,34 @@ def test_real_astrbot_config_persists_partial_settings_and_never_exposes_token(
 
     snapshot = settings_snapshot(target)
     proxy = _field(snapshot, "network_proxy_url")
-    assert proxy["configured"] is True and proxy["secret"] is True
-    assert "value" not in proxy and "default" not in proxy
-    assert "fixture-password" not in json.dumps(snapshot, ensure_ascii=False)
+    assert proxy["value"] == reloaded["runtime"]["network_proxy_url"]
+    assert proxy["default"] == ""
     fields = {field["key"] for group in snapshot["groups"] for field in group["fields"]}
     assert {"dedupe_days", "auto_trigger_enabled"}.isdisjoint(fields)
-    save_settings(target, {}, ["network_proxy_url"])
+    save_settings(target, {"runtime": {"network_proxy_url": ""}})
     reloaded = AstrBotConfig(
         config_path=str(tmp_path / "plugin.json"), schema=deepcopy(schema)
     )
     assert reloaded["runtime"]["network_proxy_url"] == ""
     assert reloaded["runtime"]["network_proxy_mode"] == "Lolicon API 不走代理"
-    secret = _field(snapshot, "pixiv_refresh_token")
-    assert secret["configured"] is True
-    assert secret["secret"] is True
-    assert "value" not in secret and "default" not in secret
-    assert "fresh-token" not in json.dumps(snapshot, ensure_ascii=False)
+    assert _field(snapshot, "pixiv_refresh_token")["value"] == "fresh-token"
 
 
-def test_secret_blank_keeps_value_and_clear_is_a_separate_request_field():
-    target = plugin(Config(pixiv_source={"pixiv_refresh_token": "old-token"}))
-    before = deepcopy(target.config)
-    with pytest.raises(ValueError):
-        save_settings(target, {"pixiv_source": {"pixiv_refresh_token": ""}})
-    assert target.config == before and target.config.saves == 0
-
-    save_settings(target, {}, ["pixiv_refresh_token"])
-    assert target.config["pixiv_source"]["pixiv_refresh_token"] == ""
-    save_settings(target, {"pixiv_source": {"pixiv_refresh_token": "  new-token  "}})
-    assert target.config["pixiv_source"]["pixiv_refresh_token"] == "new-token"
-
-    for patch, clears in (
-        ({"pixiv_source": {"pixiv_refresh_token": "x"}}, ["pixiv_refresh_token"]),
-        ({"pixiv_source": {"pixiv_refresh_token": "x"}}, ["unknown"]),
-        ({}, "pixiv_refresh_token"),
-        ({}, []),
-    ):
-        with pytest.raises(ValueError):
-            save_settings(target, patch, clears)
-    assert target.config["pixiv_source"]["pixiv_refresh_token"] == "new-token"
+@pytest.mark.parametrize(
+    "group,key,value,normalized",
+    [
+        ("pixiv_source", "pixiv_refresh_token", "  new-token  ", "new-token"),
+        ("runtime", "network_proxy_url", "socks5h://proxy.invalid:1080", "socks5://proxy.invalid:1080"),
+    ],
+)
+def test_text_settings_return_saved_values_and_can_be_cleared(group, key, value, normalized):
+    target = plugin(Config())
+    saved = save_settings(target, {group: {key: value}})
+    assert saved == {group: {key: normalized}}
+    assert _field(settings_snapshot(target), key)["value"] == normalized
+    save_settings(target, {group: {key: ""}})
+    assert target.config[group][key] == ""
+    assert _field(settings_snapshot(target), key)["value"] == ""
 
 
 def test_provider_field_uses_public_enumeration_and_keeps_stale_id():
@@ -530,7 +492,7 @@ def test_failed_real_save_restores_group_container_and_list_reference(tmp_path):
 
 
 @pytest.mark.asyncio
-async def test_settings_update_rejects_delegated_hidden_and_blank_secret():
+async def test_settings_update_rejects_delegated_fields_and_returns_saved_values():
     target = plugin(Config(pixiv_source={"pixiv_refresh_token": "old-token"}))
     target._cfg_str = lambda key, default="": default
     target.checkin_store = None
@@ -550,16 +512,23 @@ async def test_settings_update_rejects_delegated_hidden_and_blank_secret():
         {"content_dedupe": {"global_blacklisted_illust_ids": []}},
         {"content_dedupe": {"safety_groups": []}},
         {"content_dedupe": {"safety_rules_version": 1}},
-        {"pixiv_source": {"pixiv_refresh_token": ""}},
     ):
         response = await client.post("/settings/update", json={"groups": patch})
         assert response.status_code == 400
     assert target.config.saves == 0
     assert target.config["pixiv_source"]["pixiv_refresh_token"] == "old-token"
 
+    updated = await client.post(
+        "/settings/update",
+        json={"groups": {"pixiv_source": {"pixiv_refresh_token": "  new-token  "}}},
+    )
+    assert updated.status_code == 200
+    assert (await updated.get_json())["values"] == {
+        "pixiv_source": {"pixiv_refresh_token": "new-token"}
+    }
     cleared = await client.post(
         "/settings/update",
-        json={"groups": {}, "clear_secrets": ["pixiv_refresh_token"]},
+        json={"groups": {"pixiv_source": {"pixiv_refresh_token": ""}}},
     )
     assert cleared.status_code == 200
     assert (await cleared.get_json())["reload_required"] is True

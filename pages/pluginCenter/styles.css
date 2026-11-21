@@ -1732,7 +1732,6 @@ input[type="file"]::file-selector-button {
   min-width: 0;
 }
 .config-item-control .dd { width: 100%; }
-.config-item-control .config-secret-state { order: -1; }
 .config-item-control > .config-error { order: 4; }
 .config-item-control > .config-warning { order: 5; }
 .config-item-delegated .config-item-control { align-items: flex-end; }
@@ -1787,11 +1786,6 @@ input[type="file"]::file-selector-button {
   color: var(--text-muted);
   font: var(--text-small)/1.5 var(--font-sans);
   overflow-wrap: anywhere;
-}
-
-.config-secret-state {
-  color: var(--text-subtle);
-  font-size: var(--text-small);
 }
 
 .config-input {

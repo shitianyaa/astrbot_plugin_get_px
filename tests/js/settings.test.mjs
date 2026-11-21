@@ -27,7 +27,7 @@ const groups = () => [
       { key: 'checkin_enabled', label: '签到总开关', type: 'bool', value: true },
       { key: 'checkin_hitokoto_categories', label: '一言类型', type: 'list', value: ['全部', '动画', '旧分类'], options: ['全部', '动画', '文学'] },
       { key: 'checkin_ai_greeting_prompt', label: 'AI 问候提示词', type: 'text', value: '原始提示词' },
-      { key: 'pixiv_refresh_token', label: 'Pixiv 令牌', type: 'string', secret: true, configured: true },
+      { key: 'pixiv_refresh_token', label: 'Pixiv 令牌', type: 'string', value: 'old-token' },
     ],
   },
 ];
@@ -122,10 +122,10 @@ test('list selections keep declared order and append preserved legacy values', (
   assert.deepEqual(collectListSelection(['全部'], [], []), []);
 });
 
-test('partial patch keeps only changed fields and separates explicit secret clearing', () => {
+test('partial patch keeps only changed fields without mutating the snapshot', () => {
   const list = groups();
   const snapshot = JSON.stringify(list);
-  const { patch, clearSecrets } = collectSettingsPatch(
+  const patch = collectSettingsPatch(
     list,
     {
       dedupe_days: 3,
@@ -133,31 +133,29 @@ test('partial patch keeps only changed fields and separates explicit secret clea
       checkin_ai_greeting_prompt: '新提示词',
       pixiv_refresh_token: '  new-token  ',
     },
-    new Set(['pixiv_refresh_token']),
   );
   assert.deepEqual(patch, {
     content_dedupe: { dedupe_days: 3 },
-    checkin_basic: { checkin_ai_greeting_prompt: '新提示词' },
+    checkin_basic: { checkin_ai_greeting_prompt: '新提示词', pixiv_refresh_token: '  new-token  ' },
   });
-  assert.deepEqual(clearSecrets, ['pixiv_refresh_token']);
   assert.equal(JSON.stringify(list), snapshot);
 });
 
 test('reverting a field to its saved value yields no patch, including list order changes', () => {
   const list = groups();
   assert.deepEqual(
-    collectSettingsPatch(list, { dedupe_days: 1, checkin_enabled: true }),
-    { patch: {}, clearSecrets: [] },
+    collectSettingsPatch(list, { dedupe_days: 1, checkin_enabled: true, pixiv_refresh_token: 'old-token' }),
+    {},
   );
   const reordered = collectSettingsPatch(list, {
     checkin_hitokoto_categories: ['动画', '全部', '旧分类'],
   });
-  assert.deepEqual(reordered.patch, {});
+  assert.deepEqual(reordered, {});
 });
 
 test('multi-select keeps preserved legacy values when another option changes', () => {
   const list = groups();
-  const { patch } = collectSettingsPatch(list, {
+  const patch = collectSettingsPatch(list, {
     checkin_hitokoto_categories: collectListSelection(
       ['全部', '动画', '文学'],
       ['旧分类'],
@@ -169,14 +167,14 @@ test('multi-select keeps preserved legacy values when another option changes', (
   });
 });
 
-test('delegated fields and blank secrets never enter the patch', () => {
+test('delegated fields are skipped while cleared text stays in the patch', () => {
   const list = groups();
   assert.deepEqual(
     collectSettingsPatch(list, {
       global_safety_terms: ['x'],
       pixiv_refresh_token: '',
     }),
-    { patch: {}, clearSecrets: [] },
+    { checkin_basic: { pixiv_refresh_token: '' } },
   );
 });
 

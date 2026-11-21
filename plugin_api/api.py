@@ -132,7 +132,6 @@ class PluginWebApi:
                 ["POST"],
                 "Clear temporary cache storage",
             ),
-            ("config", self.config, ["GET"], "Get management center configuration"),
             ("settings", self.settings, ["GET"], "Get plugin settings for the management center"),
             ("settings/update", self.settings_update, ["POST"], "Update plugin settings from the management center"),
         )
@@ -592,18 +591,6 @@ class PluginWebApi:
         except Exception as exc:
             return self.internal_error("导入签到备份", exc)
 
-    async def config(self):
-        # 旧版 Pages 仍可能调用此接口，只返回系统字体。
-        return jsonify(
-            {
-                "success": True,
-                "font_source": "none",
-                "font_url": "",
-                "font_family": "",
-                "font_label": "系统字体",
-            }
-        )
-
     async def settings(self):
         try:
             return jsonify(settings_snapshot(self.plugin))
@@ -615,10 +602,8 @@ class PluginWebApi:
             payload = await request.get_json(silent=True)
             if not isinstance(payload, dict) or not isinstance(payload.get("groups"), dict):
                 raise ValueError("设置内容格式不正确")
-            save_settings(
-                self.plugin, payload["groups"], payload.get("clear_secrets", ())
-            )
-            return jsonify({"success": True, "reload_required": True})
+            values = save_settings(self.plugin, payload["groups"])
+            return jsonify({"success": True, "reload_required": True, "values": values})
         except ValueError as exc:
             return jsonify({"success": False, "error": str(exc)}), 400
         except Exception as exc:

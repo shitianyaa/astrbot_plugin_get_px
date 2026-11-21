@@ -18,7 +18,6 @@ except ImportError:
 
 SCHEMA_PATH = Path(__file__).resolve().parents[1] / "_conf_schema.json"
 LOG_PREFIX = "[GetPx]"
-SECRET_KEYS = frozenset({"pixiv_refresh_token", "network_proxy_url"})
 PROVIDER_SPECIAL = "select_provider"
 # 全局安全规则与会话安全分组由 SessionSafetyService 独占读写；
 # 通用设置页只展示跳转入口，禁止通过通用接口写入，避免覆盖安全列表引用。
@@ -52,31 +51,6 @@ def _visible_groups(schema: dict[str, Any]) -> dict[str, dict[str, Any]]:
         if group.get("type") == "object"
         and not group.get("invisible")
         and isinstance(group.get("items"), dict)
-    }
-
-
-def _effective(plugin: Any, key: str, default: Any) -> Any:
-    getter = getattr(plugin, "_cfg_get", None)
-    if callable(getter):
-        try:
-            return getter(key, default)
-        except Exception:
-            return default
-    config = getattr(plugin, "config", {})
-    for group in _visible_groups(load_schema()):
-        nested = config.get(group, {})
-        if isinstance(nested, dict) and key in nested:
-            return nested[key]
-    return config.get(key, default)
-
-
-def _secret_groups(schema: dict[str, Any]) -> dict[str, str]:
-    """令牌键所在分组，用于把显式清除写入同一嵌套容器。"""
-    return {
-        key: group_key
-        for group_key, group in _visible_groups(schema).items()
-        for key in group["items"]
-        if key in SECRET_KEYS
     }
 
 
@@ -133,17 +107,12 @@ def settings_snapshot(plugin: Any) -> dict[str, Any]:
                 "options": deepcopy(spec.get("options", [])),
                 "slider": deepcopy(spec.get("slider")),
             }
-            if key in SECRET_KEYS:
-                descriptor["secret"] = True
-                descriptor["configured"] = bool(
-                    str(_effective(plugin, key, "") or "").strip()
-                )
-            elif key in SAFETY_KEYS or spec.get("type") == "template_list":
+            if key in SAFETY_KEYS or spec.get("type") == "template_list":
                 descriptor["delegated"] = True
                 descriptor["view"] = DELEGATED_VIEWS.get(key, "policies")
             elif spec.get("_special") == PROVIDER_SPECIAL:
                 choices, warning = _provider_choices(plugin)
-                current = str(_effective(plugin, key, "") or "").strip()
+                current = str(plugin._cfg_get(key, "") or "").strip()
                 if current and all(item["value"] != current for item in choices):
                     choices.insert(
                         0,
@@ -160,7 +129,7 @@ def settings_snapshot(plugin: Any) -> dict[str, Any]:
                     descriptor["warning"] = warning
             else:
                 descriptor["default"] = deepcopy(spec.get("default"))
-                value = deepcopy(_effective(plugin, key, descriptor["default"]))
+                value = deepcopy(plugin._cfg_get(key, descriptor["default"]))
                 if descriptor["type"] == "list":
                     if descriptor["options"]:
                         # 已保存的旧值原样返回供页面勾选保留；新写入仍只接受
@@ -196,12 +165,9 @@ def _validate_value(
 ) -> Any:
     label = spec.get("description", key)
     kind = spec.get("type")
-    if key in SECRET_KEYS:
+    if key in {"pixiv_refresh_token", "network_proxy_url"}:
         if not isinstance(value, str):
             raise ValueError(f"{label}必须为文本")
-        if not value.strip():
-            # 空文本代表“保持不变”，清除必须走独立字段，避免误清已存令牌。
-            raise ValueError(f"{label}留空表示保持不变；如需删除请勾选清除")
         return (
             normalize_proxy_url(value) if key == "network_proxy_url" else value.strip()
         )
@@ -246,29 +212,11 @@ def _validate_value(
     return value
 
 
-def _normalize_clear_secrets(clear_secrets: Any) -> list[str]:
-    if clear_secrets is None:
-        return []
-    if isinstance(clear_secrets, str) or not isinstance(clear_secrets, (list, tuple)):
-        raise ValueError("清除凭据的请求格式不正确")
-    cleared: list[str] = []
-    for key in clear_secrets:
-        if not isinstance(key, str) or key not in SECRET_KEYS:
-            raise ValueError("只能清除本页支持的凭据项")
-        if key not in cleared:
-            cleared.append(key)
-    return cleared
-
-
-def save_settings(plugin: Any, patch: Any, clear_secrets: Any = ()) -> None:
-    if not isinstance(patch, dict):
-        raise ValueError("设置内容格式不正确")
-    cleared = _normalize_clear_secrets(clear_secrets)
-    if not patch and not cleared:
+def save_settings(plugin: Any, patch: Any) -> dict[str, dict[str, Any]]:
+    if not isinstance(patch, dict) or not patch:
         raise ValueError("设置内容格式不正确")
     schema = load_schema()
     groups = _visible_groups(schema)
-    secret_groups = _secret_groups(schema)
     validated: dict[str, dict[str, Any]] = {}
     for group_key, values in patch.items():
         if group_key not in groups or not isinstance(values, dict) or not values:
@@ -287,7 +235,7 @@ def save_settings(plugin: Any, patch: Any, clear_secrets: Any = ()) -> None:
             # 用户不能借旧值通道注入任意新值。
             allowed_extra: tuple[str, ...] = ()
             if spec.get("type") == "list" and spec.get("options"):
-                stored = _effective(plugin, key, spec.get("default"))
+                stored = plugin._cfg_get(key, spec.get("default"))
                 if isinstance(stored, list):
                     allowed_extra = tuple(
                         item for item in stored if isinstance(item, str)
@@ -295,13 +243,6 @@ def save_settings(plugin: Any, patch: Any, clear_secrets: Any = ()) -> None:
             validated.setdefault(group_key, {})[key] = _validate_value(
                 key, value, spec, allowed_extra
             )
-    for key in cleared:
-        if key not in secret_groups:
-            raise ValueError("只能清除本页支持的凭据项")
-        if any(key in values for values in validated.values()):
-            raise ValueError("同一个凭据不能同时替换和清除")
-        validated.setdefault(secret_groups[key], {})[key] = ""
-
     config = getattr(plugin, "config", None)
     if config is None or not hasattr(config, "save_config"):
         raise RuntimeError("配置保存服务不可用")
@@ -358,6 +299,6 @@ def save_settings(plugin: Any, patch: Any, clear_secrets: Any = ()) -> None:
     logger.info(
         f"{LOG_PREFIX} 管理页设置已保存: "
         f"groups={','.join(sorted(validated)) or 'none'} "
-        f"fields={sum(len(values) for values in validated.values())} "
-        f"cleared_secrets={len(cleared)}"
+        f"fields={sum(len(values) for values in validated.values())}"
     )
+    return validated

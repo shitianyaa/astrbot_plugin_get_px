@@ -282,9 +282,9 @@ python -m pytest -q tests/test_checkin_cache.py tests/test_checkin_calendar.py t
 
 ## 管理中心设置与界面
 
-`tests/test_plugin_settings_api.py` 覆盖当前六组 schema、部分保存、类型／范围／选项／步长校验、真实 AstrBotConfig 保存重载和失败引用回滚。安全四键与隐藏键拒绝通用写入；Pixiv Token 和代理 URL 不回显，替换／显式清除分离，代理复用正式校验；废弃的自动触发与去重天数不能写入。签到奖励保持主线规则。
+`tests/test_plugin_settings_api.py` 覆盖当前六组 schema、部分保存、类型／范围／选项／步长校验、真实 AstrBotConfig 保存重载和失败引用回滚。安全四键与隐藏键拒绝通用写入；文本设置读取当前值、返回规范化后的保存值并允许清空，代理复用正式校验；废弃的自动触发与去重天数不能写入。签到奖励保持主线规则。
 
-`tests/test_plugin_center_resources.py` 校验打包资源递归闭包与相对 bridge 端点；`tests/js/settings.test.mjs`、`ui.test.mjs` 验证草稿、选项及键盘纯函数。`tests/test_plugin_center_browser.py` 以真实 Chromium 和合成 bridge 验证保存期间控件冻结、失败保留草稿、刷新不丢修改、数字步长、可访问名、沙箱和导航，并验证旧字体响应不会触发字体请求。布局回归覆盖长短分组宽度、工具条在滚动及修改状态变化时的位置和高度，以及矮窗口中分组栏独立滚动。交互回归覆盖成员翻页、分页内编辑、搜索重置，以及切群时保留当前内容并拒绝旧请求覆盖新榜单。测试不访问生产 AstrBot、QQ、Pixiv 或真实用户配置；实际宿主集成需另验。
+`tests/test_plugin_center_resources.py` 校验打包资源递归闭包与相对 bridge 端点；`tests/js/settings.test.mjs`、`ui.test.mjs` 验证草稿、选项及键盘纯函数。浏览器回归使用真实 Chromium 和合成 bridge，按配置编辑／保存／放弃／清空、安全规则增删及旧响应隔离等业务流程组织，共用场景覆盖不同字段；已退役控件、兼容接口及重复竞态用例随实现一起删除。布局回归覆盖长短分组宽度、工具条在滚动及修改状态变化时的位置和高度，以及矮窗口中分组栏独立滚动。交互回归覆盖成员翻页、分页内编辑、搜索重置，以及切群时保留当前内容并拒绝旧请求覆盖新榜单。测试不访问生产 AstrBot、QQ、Pixiv 或真实用户配置；实际宿主集成需另验。
 
 ## OneBot 自动传输与超时结算
 

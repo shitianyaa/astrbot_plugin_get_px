@@ -122,22 +122,11 @@ export function collectListSelection(optionValues, legacyValues, checkedValues) 
 }
 
 /** 只提交真正改动过的字段；与已保存值相同的草稿不产生补丁。 */
-export function collectSettingsPatch(groups, draft, clears = new Set()) {
+export function collectSettingsPatch(groups, draft) {
   const patch = {};
-  const clearSecrets = [];
   for (const group of groups) {
     const values = {};
     for (const field of group.fields) {
-      if (field.secret) {
-        if (clears.has(field.key)) {
-          clearSecrets.push(field.key);
-          continue;
-        }
-        if (!hasOwn(draft, field.key)) continue;
-        const next = draft[field.key];
-        if (typeof next === "string" && next.trim()) values[field.key] = next.trim();
-        continue;
-      }
       if (field.delegated || field.editable === false) continue;
       if (!hasOwn(draft, field.key)) continue;
       const next = draft[field.key];
@@ -146,11 +135,11 @@ export function collectSettingsPatch(groups, draft, clears = new Set()) {
     }
     if (Object.keys(values).length) patch[group.key] = values;
   }
-  return { patch, clearSecrets };
+  return patch;
 }
 
-function patchCount(patch, clearSecrets) {
-  let total = clearSecrets.length;
+function patchCount(patch) {
+  let total = 0;
   for (const values of Object.values(patch)) total += Object.keys(values).length;
   return total;
 }
@@ -185,7 +174,6 @@ export function createSettingsPage({ bridge, notify, navigate, confirm }) {
 
   let groups = [];
   let draft = {};
-  let clears = new Set();
   let invalid = new Map();
   let activeKey = "";
   let query = "";
@@ -198,8 +186,7 @@ export function createSettingsPage({ bridge, notify, navigate, confirm }) {
   let mobileSelect = null;
   let busy = false;
   let loadJob = null;
-  // 冻结期间记录每个控件原本的 disabled，结束后逐项恢复：
-  // 清除令牌勾选后密码框本就禁用，不能被统一的 false 解除。
+  // 冻结期间记录控件原本的 disabled，结束后逐项恢复。
   const busyStates = new Map();
   let customControls = [];
 
@@ -220,13 +207,12 @@ export function createSettingsPage({ bridge, notify, navigate, confirm }) {
   }
 
   function changedCount() {
-    const { patch, clearSecrets } = collectSettingsPatch(groups, draft, clears);
-    return patchCount(patch, clearSecrets);
+    return patchCount(collectSettingsPatch(groups, draft));
   }
 
   function updateChrome() {
-    const { patch, clearSecrets } = collectSettingsPatch(groups, draft, clears);
-    const count = patchCount(patch, clearSecrets);
+    const patch = collectSettingsPatch(groups, draft);
+    const count = patchCount(patch);
     status.textContent = statusLabel({
       count,
       invalidCount: invalid.size,
@@ -254,7 +240,6 @@ export function createSettingsPage({ bridge, notify, navigate, confirm }) {
       if (!group) continue;
       const groupDirty = patchCount(
         patch[group.key] ? { [group.key]: patch[group.key] } : {},
-        clearSecrets.filter((key) => group.fields.some((field) => field.key === key)),
       );
       // 无效草稿可能停在别的分组：导航徽标要能把它标出来。
       const groupInvalid = [...invalid.keys()]
@@ -379,54 +364,6 @@ export function createSettingsPage({ bridge, notify, navigate, confirm }) {
     const values = Array.isArray(field.value) ? field.value.join("、") : String(field.value ?? "");
     row.append(element("p", "config-readonly", values || "（空）"));
     row.append(element("p", "config-hint", "该列表没有可选清单，需在配置文件中维护，本页不写入。"));
-    return row;
-  }
-
-  function buildSecret(field) {
-    const row = element("div", "config-item");
-    const head = element("div", "config-item-head");
-    const labelId = `setting-label-${field.key}`;
-    const label = element("span", "config-item-label", fieldLabel(field));
-    label.id = labelId;
-    head.append(label);
-    head.append(element("span", "config-item-key", field.key));
-    row.append(head);
-    row.append(element(
-      "p",
-      "config-secret-state",
-      field.configured ? "已配置；留空表示保持不变" : "尚未配置",
-    ));
-    const input = element("input", "config-input");
-    input.type = "password";
-    input.autocomplete = "new-password";
-    input.spellcheck = false;
-    input.name = field.key;
-    input.id = `setting-${field.key}`;
-    input.setAttribute("aria-labelledby", labelId);
-    input.value = hasOwn(draft, field.key) ? String(draft[field.key] ?? "") : "";
-    // 已勾选清除时密码框从首次渲染起就不可输入，切组/搜索重渲同样保持。
-    input.disabled = clears.has(field.key);
-    input.addEventListener("input", () => commit(field.key, input.value));
-    row.append(input);
-    const clearLabel = element("label", "config-check");
-    const clear = element("input");
-    clear.type = "checkbox";
-    clear.name = `clear-${field.key}`;
-    clear.checked = clears.has(field.key);
-    clear.addEventListener("change", () => {
-      if (clear.checked) {
-        clears.add(field.key);
-        delete draft[field.key];
-        input.value = "";
-        input.disabled = true;
-      } else {
-        clears.delete(field.key);
-        input.disabled = false;
-      }
-      updateChrome();
-    });
-    clearLabel.append(clear, element("span", "", field.key === "network_proxy_url" ? "清除代理地址（重载后直连）" : "清除已保存的令牌"));
-    row.append(clearLabel);
     return row;
   }
 
@@ -583,7 +520,6 @@ export function createSettingsPage({ bridge, notify, navigate, confirm }) {
   function buildField(field) {
     if (field.delegated) return buildDelegation(field);
     if (field.editable === false) return buildReadonly(field);
-    if (field.secret) return buildSecret(field);
     if (field.type === "bool") return buildBool(field);
     if (field.type === "list" && Array.isArray(field.options) && field.options.length) {
       return buildList(field);
@@ -722,7 +658,6 @@ export function createSettingsPage({ bridge, notify, navigate, confirm }) {
       )) throw new Error("设置数据异常，请重试。");
       groups = nextGroups;
       draft = {};
-      clears = new Set();
       invalid = new Map();
       if (!groupOf(activeKey)) activeKey = groups[0].key;
       loaded = true;
@@ -773,8 +708,8 @@ export function createSettingsPage({ bridge, notify, navigate, confirm }) {
       focusFirstInvalid();
       return;
     }
-    const { patch, clearSecrets } = collectSettingsPatch(groups, draft, clears);
-    const count = patchCount(patch, clearSecrets);
+    const patch = collectSettingsPatch(groups, draft);
+    const count = patchCount(patch);
     if (!count) {
       status.textContent = "没有需要保存的修改";
       return;
@@ -787,28 +722,16 @@ export function createSettingsPage({ bridge, notify, navigate, confirm }) {
     try {
       const result = await bridge.apiPost("settings/update", {
         groups: patch,
-        clear_secrets: clearSecrets,
       });
       if (result?.success === false) throw new Error(result.error || "设置保存失败");
-      for (const [groupKey, values] of Object.entries(patch)) {
+      for (const [groupKey, values] of Object.entries(result.values)) {
         const group = groupOf(groupKey);
         for (const [key, value] of Object.entries(values)) {
           const field = group?.fields.find((item) => item.key === key);
-          if (field && !field.secret) field.value = value;
-        }
-      }
-      for (const key of clearSecrets) {
-        const field = fieldOf(key);
-        if (field) field.configured = false;
-      }
-      for (const groupKey of Object.keys(patch)) {
-        const group = groupOf(groupKey);
-        for (const field of group?.fields || []) {
-          if (field.secret && hasOwn(patch[groupKey], field.key)) field.configured = true;
+          if (field) field.value = value;
         }
       }
       draft = {};
-      clears = new Set();
       invalid = new Map();
       saved = true;
       renderFields();
@@ -836,7 +759,6 @@ export function createSettingsPage({ bridge, notify, navigate, confirm }) {
     });
     if (!confirmed) return;
     draft = {};
-    clears = new Set();
     invalid = new Map();
     saved = false;
     errorNotice = "";

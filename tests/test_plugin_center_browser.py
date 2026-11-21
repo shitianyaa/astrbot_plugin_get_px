@@ -62,11 +62,11 @@ SETTINGS = {
                     "key": "pixiv_refresh_token",
                     "label": "Pixiv refresh token",
                     "type": "string",
-                    "hint": "留空保持",
+                    "hint": "测试用文本项",
                     "options": [],
                     "slider": None,
-                    "secret": True,
-                    "configured": True,
+                    "default": "",
+                    "value": "saved-test-token",
                 },
             ],
         },
@@ -111,6 +111,16 @@ SETTINGS = {
             "label": "运行参数",
             "fields": [
                 {
+                    "key": "network_proxy_url",
+                    "label": "出站代理地址",
+                    "type": "string",
+                    "hint": "测试用代理地址",
+                    "options": [],
+                    "slider": None,
+                    "default": "",
+                    "value": "http://fixture-user:fixture-password@proxy.invalid:1080",
+                },
+                {
                     "key": "request_timeout",
                     "label": "网络请求超时（秒）",
                     "type": "float",
@@ -153,13 +163,6 @@ RESPONSES = {
     "content-safety": SAFETY,
     "image-blacklist": {"success": True, "records": []},
     "checkin-members": {"success": True, "members": [], "total": 0},
-    # 模拟旧服务端仍声明在线字体，当前页面不得读取或加载。
-    "config": {
-        "success": True,
-        "font_source": "mirror",
-        "font_url": "https://font.test/legacy.css",
-        "font_family": "MiSans",
-    },
     "cache-storage": {
         "success": True,
         "total_human": "0 B",
@@ -189,7 +192,7 @@ window.AstrBotPluginPage = {
     window.__posts.push({ endpoint, body });
     return window.__postHandlers[endpoint]
       ? window.__postHandlers[endpoint](body)
-      : Promise.resolve({ success: true });
+      : Promise.resolve(endpoint === 'settings/update' ? { success: true, values: body.groups } : { success: true });
   },
   download: () => Promise.resolve(),
   upload: () => Promise.resolve({ success: true }),
@@ -274,8 +277,8 @@ def _open_checkin_group(page) -> None:
 def _start_pending_update(page) -> None:
     page.evaluate(
         """() => {
-          window.__postHandlers["settings/update"] = () => new Promise((resolve) => {
-            window.__resolveUpdate = resolve;
+          window.__postHandlers["settings/update"] = body => new Promise((resolve) => {
+            window.__resolveUpdate = result => resolve({ values: body.groups, ...result });
           });
         }"""
     )
@@ -306,7 +309,6 @@ def test_save_freezes_draft_controls_and_restores_original_disabled_state(page):
         "#setting-max_count",
         "#setting-preferred_image_source .dd-trigger",
         "#setting-pixiv_refresh_token",
-        '[name="clear-pixiv_refresh_token"]',
         "#settingsSearch",
         "#settingsGroupPicker .dd-trigger",
         "#settingsDiscardBtn",
@@ -360,31 +362,6 @@ def test_failed_save_keeps_draft_and_restores_controls(page):
     assert not _disabled(page, "#settingsSaveBtn")
 
 
-def test_failed_reload_keeps_secret_clear_disabled_state(page):
-    page.click('#settingsNav [data-group="pixiv_source"]')
-    page.wait_for_selector('[name="clear-pixiv_refresh_token"]')
-    page.check('[name="clear-pixiv_refresh_token"]')
-    assert _disabled(page, "#setting-pixiv_refresh_token")
-    page.evaluate(
-        """() => {
-          window.__getHandlers["settings"] = () => Promise.resolve({
-            success: false, error: "模拟读取失败",
-          });
-        }"""
-    )
-    page.click("#settingsReloadBtn")
-    page.wait_for_selector("#confirmDialog[open]")
-    page.click("#dialogConfirm")
-    page.wait_for_function(
-        "document.querySelector('#settingsStatus').textContent.includes('模拟读取失败')"
-    )
-    assert page.is_checked('[name="clear-pixiv_refresh_token"]')
-    assert _disabled(page, "#setting-pixiv_refresh_token")
-    assert not _disabled(page, '[name="clear-pixiv_refresh_token"]')
-    page.uncheck('[name="clear-pixiv_refresh_token"]')
-    assert not _disabled(page, "#setting-pixiv_refresh_token")
-
-
 def test_topbar_refresh_keeps_unsaved_settings_draft(page):
     _open_checkin_group(page)
     page.fill("#setting-checkin_ai_greeting_prompt", "刷新后保留")
@@ -420,29 +397,6 @@ def test_background_refresh_keeps_safety_group_dialog_draft(page):
     assert page.input_value("#safetyGroupName") == "草稿名称"
 
 
-def test_secret_clear_stays_disabled_across_rerender(page):
-    page.click('#settingsNav [data-group="pixiv_source"]')
-    page.wait_for_selector('[name="clear-pixiv_refresh_token"]')
-    page.check('[name="clear-pixiv_refresh_token"]')
-    assert _disabled(page, "#setting-pixiv_refresh_token")
-
-    page.click('#settingsNav [data-group="checkin_basic"]')
-    page.wait_for_selector("#setting-checkin_ai_greeting_prompt")
-    page.click('#settingsNav [data-group="pixiv_source"]')
-    page.wait_for_selector('[name="clear-pixiv_refresh_token"]')
-    assert page.is_checked('[name="clear-pixiv_refresh_token"]')
-    assert _disabled(page, "#setting-pixiv_refresh_token")
-
-    page.fill("#settingsSearch", "留空")
-    page.wait_for_selector('[name="clear-pixiv_refresh_token"]')
-    assert page.is_checked('[name="clear-pixiv_refresh_token"]')
-    assert _disabled(page, "#setting-pixiv_refresh_token")
-    page.fill("#settingsSearch", "")
-
-    page.uncheck('[name="clear-pixiv_refresh_token"]')
-    assert not _disabled(page, "#setting-pixiv_refresh_token")
-
-
 def test_settings_controls_expose_field_accessible_names(page):
     page.click('#settingsNav [data-group="pixiv_source"]')
     page.wait_for_selector("#setting-max_count")
@@ -453,7 +407,6 @@ def test_settings_controls_expose_field_accessible_names(page):
         "#setting-max_count",
         "node => node.getAttribute('aria-describedby')",
     ).startswith("setting-error-max_count")
-    assert page.get_by_role("checkbox", name="清除已保存的令牌").count() == 1
 
     page.click('#settingsNav [data-group="checkin_basic"]')
     page.wait_for_selector("#setting-checkin_enabled")
@@ -802,23 +755,40 @@ def test_ranking_switch_keeps_current_content_and_ignores_late_response(page):
     expect(data).to_have_attribute("aria-busy", "false")
 
 
-def test_group_save_uses_authoritative_response_without_waiting_for_reload(page):
-    page.click('.nav-tabs [data-view="policies"]')
-    page.click('#policyList [data-edit-group="g1"]')
-    page.fill("#safetyGroupName", "已保存名称")
+def test_safety_changes_apply_saved_results_and_ignore_stale_reads(page):
     page.evaluate("""() => {
       const old = structuredClone(window.__responses['content-safety']);
-      if (old.safety_groups[0].name !== '日常插画') throw new Error('旧响应必须保留保存前名称');
       window.__getHandlers['content-safety'] = () => new Promise(resolve => {
         window.__resolveStaleSafety = () => resolve(old);
+      });
+      window.__postHandlers['content-safety/terms/add'] = () => new Promise(resolve => {
+        window.__resolveTermAdd = () => resolve({ success: true, global_safety_terms: ['新词', '示例词'] });
+      });
+      window.__postHandlers['content-safety/terms/remove'] = () => Promise.resolve({
+        success: true, global_safety_terms: ['新词'],
       });
       window.__postHandlers['content-safety/groups/save'] = body => new Promise(resolve => {
         window.__resolveGroupSave = () => resolve({ success: true, group: { ...body, name: '已保存名称' } });
       });
     }""")
-    # 模拟已打开弹窗时到达的后台刷新，不穿过原生 modal 点击背景。
-    page.evaluate("document.querySelector('#refreshBtn').click()")
+    page.click("#refreshBtn")
     page.wait_for_function("typeof window.__resolveStaleSafety === 'function'")
+    page.click("#tab-safety")
+    page.click("#keywordMatchMode .dd-trigger")
+    page.click('#keywordMatchMode [data-value="严格"]')
+    expect(page.locator("#keywordMatchMode .dd-trigger")).to_be_enabled()
+    page.fill("#termInput", "新词")
+    page.locator("#termForm button").click()
+    expect(page.locator("#termInput")).to_be_disabled()
+    expect(page.locator("#customTerms [data-remove-term]")).to_be_disabled()
+    page.evaluate("window.__resolveTermAdd()")
+    expect(page.locator("#customTerms strong")).to_have_text(["新词", "示例词"])
+    page.locator('#customTerms [data-remove-term="示例词"]').click()
+    page.click("#dialogConfirm")
+    expect(page.locator("#customTerms strong")).to_have_text(["新词"])
+    page.click("#tab-policies")
+    page.click('#policyList [data-edit-group="g1"]')
+    page.fill("#safetyGroupName", "已保存名称")
     page.locator('#safetyGroupForm button[type="submit"]').click()
     assert page.get_attribute("#safetyGroupForm", "aria-busy") == "true"
     assert page.locator("#safetyGroupName").is_disabled()
@@ -838,6 +808,8 @@ def test_group_save_uses_authoritative_response_without_waiting_for_reload(page)
         page.locator('#policyList [data-edit-group="g1"] strong').inner_text()
         == "已保存名称"
     )
+    expect(page.locator("#keywordMatchMode .dd-label")).to_have_text("严格")
+    expect(page.locator("#customTerms strong")).to_have_text(["新词"])
 
     page.evaluate("""() => {
       window.__postHandlers['content-safety/groups/save'] = body => Promise.resolve({
@@ -995,22 +967,3 @@ def test_member_pager_preserves_page_on_edit_and_resets_on_search(page):
         ["成员 21", 20, 0],
         ["", 20, 0],
     ]
-
-
-def test_pages_use_system_fonts_even_with_legacy_font_response(page):
-    font_requests = []
-
-    def track_font(request):
-        if request.resource_type == "font" or request.url.startswith(
-            "https://font.test/"
-        ):
-            font_requests.append(request.url)
-
-    page.route("https://font.test/**", lambda route: route.abort())
-    page.on("request", track_font)
-    page.reload(wait_until="networkidle")
-    page.click('#settingsNav [data-group="runtime"]')
-    expect(page.locator("#setting-request_timeout")).to_be_visible()
-    expect(page.get_by_text("界面字体线路")).to_have_count(0)
-    assert page.evaluate("document.fonts.size") == 0
-    assert font_requests == []

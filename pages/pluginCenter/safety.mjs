@@ -28,6 +28,7 @@ export function mountSafety({ apiGet, apiPost, escapeHtml, showToast, confirmAct
   let settings = { safety_groups: [], global_safety_terms: [], keyword_match_mode: "宽松" };
   let draft = null, baseline = null, busy = false, trigger = null;
   let loadSequence = 0, restoreTrigger = true;
+  let termsSaving = false;
   const dialog = $("safetyGroupDialog");
   const form = $("safetyGroupForm");
   const modeSelect = createSelect({
@@ -38,10 +39,7 @@ export function mountSafety({ apiGet, apiPost, escapeHtml, showToast, confirmAct
       modeSelect.setDisabled(true);
       try {
         await apiPost("content-safety/global", { keyword_match_mode: next });
-        settings.keyword_match_mode = next;
-        mode();
-        onChange(settings);
-        await reload();
+        applySaved({ keyword_match_mode: next });
         showToast("全局匹配方式已保存");
       } catch (error) {
         mode();
@@ -66,6 +64,18 @@ export function mountSafety({ apiGet, apiPost, escapeHtml, showToast, confirmAct
     const query = $("policySearch").value.trim().toLocaleLowerCase();
     const groups = settings.safety_groups.filter(group => `${group.name} ${group.sessions.join(" ")}`.toLocaleLowerCase().includes(query));
     $("policyList").innerHTML = groups.map(group => `<button type="button" class="safety-group-card" data-edit-group="${escapeHtml(group.group_id)}"><strong>${escapeHtml(group.name)}</strong><span class="safety-rating ${group.allow_r18 ? "sensitive" : ""}">${group.allow_r18 ? "允许 R18" : "仅普通分级"}</span><span>${group.sessions.length} 个会话 · ${group.custom_terms.length} 个附加关键词</span><small>${group.sessions.length ? escapeHtml(group.sessions[0]) : "尚未关联会话"}</small></button>`).join("") || '<div class="empty">暂无匹配分组。未分组会话仍遵循全局规则，R18 关闭。</div>';
+    setTermsBusy(termsSaving);
+  }
+  function setTermsBusy(value) {
+    termsSaving = value;
+    document.querySelectorAll("#termForm input, #termForm button, #customTerms button")
+      .forEach(control => { control.disabled = value; });
+  }
+  function applySaved(values) {
+    ++loadSequence;
+    Object.assign(settings, values);
+    onChange(settings);
+    render();
   }
   async function reload() {
     const sequence = ++loadSequence;
@@ -101,11 +111,12 @@ export function mountSafety({ apiGet, apiPost, escapeHtml, showToast, confirmAct
     $("safetyGroupName").focus();
   }
   async function saveTerm(endpoint, term) {
-    const result = await apiPost(endpoint, { term });
-    ++loadSequence;
-    settings.global_safety_terms = result.global_safety_terms;
-    onChange(settings);
-    render();
+    if (termsSaving) throw new Error("正在保存全局关键词，请稍后再试");
+    setTermsBusy(true);
+    try {
+      const result = await apiPost(endpoint, { term });
+      applySaved({ global_safety_terms: result.global_safety_terms });
+    } finally { setTermsBusy(false); }
   }
   async function close() {
     if (busy) return;
@@ -124,18 +135,14 @@ export function mountSafety({ apiGet, apiPost, escapeHtml, showToast, confirmAct
   $("customTerms").addEventListener("click", async event => {
     const button = event.target.closest("[data-remove-term]");
     if (!button || !await confirmAction("删除全局关键词", "删除后所有会话都不再使用此关键词，确认继续吗？")) return;
-    button.disabled = true;
-    try { await saveTerm("content-safety/terms/remove", button.dataset.removeTerm); await reload(); }
-    catch (error) { showToast(error.message, "error"); button.disabled = false; }
+    try { await saveTerm("content-safety/terms/remove", button.dataset.removeTerm); }
+    catch (error) { showToast(error.message, "error"); }
   });
   $("termForm").addEventListener("submit", async event => {
     event.preventDefault();
-    const button = event.currentTarget.querySelector("button");
-    button.disabled = true;
     $("termError").textContent = "";
-    try { await saveTerm("content-safety/terms/add", $("termInput").value.trim()); $("termInput").value = ""; await reload(); }
+    try { await saveTerm("content-safety/terms/add", $("termInput").value.trim()); $("termInput").value = ""; }
     catch (error) { $("termError").textContent = error.message; }
-    finally { button.disabled = false; }
   });
   function setBusy(value, action = "save") {
     busy = value;
@@ -157,24 +164,16 @@ export function mountSafety({ apiGet, apiPost, escapeHtml, showToast, confirmAct
       setBusy(true);
       const result = await apiPost("content-safety/groups/save", payload);
       const savedGroup = result.group;
-      if (savedGroup) {
-        ++loadSequence;
-        settings.safety_groups = settings.safety_groups.filter(
+      applySaved({
+        safety_groups: settings.safety_groups.filter(
           group => group.group_id !== savedGroup.group_id,
-        ).concat(savedGroup);
-        baseline = createGroupDraft(savedGroup);
-        onChange(settings);
-        render();
-      }
+        ).concat(savedGroup),
+      });
+      baseline = createGroupDraft(savedGroup);
       restoreTrigger = false;
       await closeDialog(dialog);
-      focusGroup(savedGroup?.group_id);
+      focusGroup(savedGroup.group_id);
       showToast("安全分组已保存");
-      // 当前接口返回规范化分组，无需再等一轮 GET；旧响应才补读。
-      if (!savedGroup) {
-        try { await reload(); }
-        catch { showToast("安全分组已保存，列表刷新失败，请刷新数据", "error"); }
-      }
     } catch (error) { if (dialog.open) $("safetyGroupError").textContent = error.message; else showToast(error.message, "error"); }
     finally { setBusy(false); }
   });
@@ -184,10 +183,7 @@ export function mountSafety({ apiGet, apiPost, escapeHtml, showToast, confirmAct
     try {
       const groupId = draft.group_id;
       await apiPost("content-safety/groups/remove", { group_id: groupId });
-      ++loadSequence;
-      settings.safety_groups = settings.safety_groups.filter(group => group.group_id !== groupId);
-      onChange(settings);
-      render();
+      applySaved({ safety_groups: settings.safety_groups.filter(group => group.group_id !== groupId) });
       restoreTrigger = false;
       await closeDialog(dialog);
       focusGroup();
@@ -196,5 +192,5 @@ export function mountSafety({ apiGet, apiPost, escapeHtml, showToast, confirmAct
     catch (error) { if (dialog.open) $("safetyGroupError").textContent = error.message; else showToast(error.message, "error"); }
     finally { setBusy(false); }
   });
-  return { reload, update(value) { ++loadSequence; settings = value; onChange(settings); render(); } };
+  return { reload };
 }

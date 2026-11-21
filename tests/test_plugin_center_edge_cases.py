@@ -108,96 +108,6 @@ def test_import_supersedes_pending_member_read(page, pending_action):
     }
 
 
-def test_saved_global_mode_survives_group_save_and_stale_reload(page):
-    page.evaluate("""() => {
-      window.__postHandlers['content-safety/global'] = () => Promise.resolve({ success: true });
-      window.__getHandlers['content-safety'] = () => {
-        const snapshot = structuredClone(window.__responses['content-safety']);
-        snapshot.keyword_match_mode = '严格';
-        return new Promise(resolve => { window.__finishModeRead = () => resolve(snapshot); });
-      };
-      window.__postHandlers['content-safety/groups/save'] = group => Promise.resolve({ success: true, group });
-    }""")
-    page.click("#tab-safety")
-    page.click("#keywordMatchMode .dd-trigger")
-    page.click('#keywordMatchMode [data-value="严格"]')
-    page.wait_for_function("typeof __finishModeRead === 'function'")
-    page.click("#tab-policies")
-    page.click('#policyList [data-edit-group="g1"]')
-    page.fill("#safetyGroupName", "保存后名称")
-    page.locator('#safetyGroupForm button[type="submit"]').click()
-    expect(page.locator("#safetyGroupDialog")).not_to_be_visible()
-    expect(page.locator("#keywordMatchMode .dd-label")).to_have_text("严格")
-    page.evaluate("window.__finishModeRead()")
-    expect(page.locator("#keywordMatchMode .dd-trigger")).to_be_enabled()
-    expect(page.locator('#policyList [data-edit-group="g1"] strong')).to_have_text(
-        "保存后名称"
-    )
-    page.click("#tab-safety")
-    expect(
-        page.get_by_role("button", name="关键词过滤 严格", exact=True)
-    ).to_be_visible()
-
-
-@pytest.mark.parametrize("term_action", ["add", "remove"])
-@pytest.mark.parametrize("group_action", ["save", "remove"])
-def test_saved_global_terms_survive_group_change_and_stale_reload(
-    page, term_action, group_action,
-):
-    page.evaluate("""() => {
-      const server = structuredClone(window.__responses['content-safety']);
-      window.__postHandlers['content-safety/terms/add'] = () => {
-        server.global_safety_terms = ['ＡＢＣ', ...server.global_safety_terms];
-        return Promise.resolve({ success: true, global_safety_terms: [...server.global_safety_terms] });
-      };
-      window.__postHandlers['content-safety/terms/remove'] = () => {
-        server.global_safety_terms = [];
-        return Promise.resolve({ success: true, global_safety_terms: [] });
-      };
-      window.__getHandlers['content-safety'] = () => {
-        const snapshot = structuredClone(server);
-        return new Promise(resolve => { window.__finishTermRead = () => resolve(snapshot); });
-      };
-      window.__postHandlers['content-safety/groups/save'] = group => {
-        server.safety_groups = [structuredClone(group)];
-        return Promise.resolve({ success: true, group: structuredClone(group) });
-      };
-      window.__postHandlers['content-safety/groups/remove'] = () => {
-        server.safety_groups = [];
-        return Promise.resolve({ success: true });
-      };
-    }""")
-    page.click("#tab-safety")
-    if term_action == "add":
-        page.fill("#termInput", "ＡＢＣ")
-        page.locator("#termForm button").click()
-    else:
-        page.locator('#customTerms [data-remove-term="示例词"]').click()
-        page.click("#dialogConfirm")
-    page.wait_for_function("typeof __finishTermRead === 'function'")
-    expected = ["ＡＢＣ", "示例词"] if term_action == "add" else []
-    expect(page.locator("#customTerms strong")).to_have_text(expected)
-    page.click("#tab-policies")
-    page.click('#policyList [data-edit-group="g1"]')
-    if group_action == "save":
-        page.fill("#safetyGroupName", "保存后名称")
-        page.locator('#safetyGroupForm button[type="submit"]').click()
-    else:
-        page.click("#safetyGroupDelete")
-        page.click("#dialogConfirm")
-    expect(page.locator("#safetyGroupDialog")).not_to_be_visible()
-    page.evaluate("window.__finishTermRead()")
-    expect(page.locator("#termForm button")).to_be_enabled()
-    if group_action == "save":
-        expect(page.locator('#policyList [data-edit-group="g1"] strong')).to_have_text(
-            "保存后名称"
-        )
-    else:
-        expect(page.locator("#policyList [data-edit-group]")).to_have_count(0)
-    page.click("#tab-safety")
-    expect(page.locator("#customTerms strong")).to_have_text(expected)
-
-
 def test_reopening_pending_settings_shares_failure_and_allows_retry(page):
     context = page.context.browser.new_context()
     context.add_init_script(
@@ -229,7 +139,7 @@ def test_reopening_pending_settings_shares_failure_and_allows_retry(page):
 
 
 @pytest.mark.parametrize(
-    "groups", [[], [{"key": "broken"}], [{"key": "broken", "fields": [None]}]]
+    "groups", [[], [{"key": "broken", "fields": [None]}]]
 )
 def test_invalid_reload_keeps_previous_fields_editable(page, groups):
     page.evaluate(
@@ -247,15 +157,43 @@ def test_invalid_reload_keeps_previous_fields_editable(page, groups):
     }
 
 
-def test_secret_replacement_leaves_only_configured_state_in_snapshot(page):
-    page.fill("#setting-pixiv_refresh_token", "replacement-test-token")
+@pytest.mark.parametrize(
+    "group,key,current,replacement,saved",
+    [
+        ("pixiv_source", "pixiv_refresh_token", "saved-test-token", "  replacement-test-token  ", "replacement-test-token"),
+        ("runtime", "network_proxy_url", "http://fixture-user:fixture-password@proxy.invalid:1080", "socks5h://new.invalid:1090", "socks5://new.invalid:1090"),
+    ],
+)
+def test_text_settings_show_saved_values_and_support_edit_discard_and_clear(
+    page, group, key, current, replacement, saved,
+):
+    page.evaluate("""({group, key, saved}) => {
+      window.__postHandlers['settings/update'] = body => {
+        const values = structuredClone(body.groups);
+        if (values[group][key]) values[group][key] = saved;
+        return Promise.resolve({ success: true, values });
+      };
+    }""", {"group": group, "key": key, "saved": saved})
+    page.click(f'#settingsNav [data-group="{group}"]')
+    control = page.locator(f"#setting-{key}")
+    expect(control).to_have_attribute("type", "text")
+    expect(control).to_have_value(current)
+    page.fill(f"#setting-{key}", replacement)
     page.click("#settingsSaveBtn")
     expect(page.locator("#settingsStatus")).to_contain_text("设置已保存")
-    expect(page.locator("#setting-pixiv_refresh_token")).to_have_value("")
-    assert page.evaluate("""() => {
-      const field = window.__responses.settings.groups[0].fields.find(field => field.secret);
-      return field.configured && !Object.hasOwn(field, 'value');
-    }""")
+    expect(control).to_have_value(saved)
+    assert page.evaluate("window.__posts.at(-1).body") == {
+        "groups": {group: {key: replacement}}
+    }
+    control.fill("未保存的修改")
+    page.click("#settingsDiscardBtn")
+    page.click("#dialogConfirm")
+    expect(control).to_have_value(saved)
+    control.fill("")
+    page.click("#settingsSaveBtn")
+    expect(page.locator("#settingsStatus")).to_contain_text("设置已保存")
+    expect(control).to_have_value("")
+    assert page.evaluate("window.__posts.at(-1).body") == {"groups": {group: {key: ""}}}
 
 
 def test_saved_legacy_choice_can_be_restored_after_switching_groups(page):

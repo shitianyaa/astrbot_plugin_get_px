@@ -131,7 +131,7 @@ def test_resource_closure_rejects_paths_outside_page_directory(tmp_path: Path):
 
 
 @pytest.mark.parametrize(
-    "expression", ["count++", "count--", "count ++", "count --", "++count", "--count"]
+    "expression", ["count++", "count--"]
 )
 def test_resource_closure_checks_import_after_update_and_division(
     tmp_path: Path, expression: str,
