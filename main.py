@@ -67,7 +67,7 @@ from .plugin_api import PluginWebApi
 
 LOG_PREFIX = "[GetPx]"
 PLUGIN_NAME = "astrbot_plugin_get_px"
-PLUGIN_VERSION = "v3.8.8"
+PLUGIN_VERSION = "v3.9.0"
 WEB_INTERNAL_ERROR_MESSAGE = "服务内部错误，请稍后重试"
 
 CHECKIN_REGEX_PATTERN = r"^(?!/)签到$"

@@ -3,288 +3,387 @@
   <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <meta name="color-scheme" content="light" />
-    <meta name="theme-color" content="#fdfbfc" />
-    <meta name="description" content="AstrBot 插件 GetPx 插件管理中心 - 管理群签到排行、成员数值、内容安全过滤和签到备份数据。" />
-    <title>插件管理中心</title>
+    <meta name="color-scheme" content="light dark" />
+    <meta name="theme-color" content="#ffffff" />
+    <meta name="description" content="AstrBot 插件 GetPx 管理中心：群签到排行、成员数值、内容安全、安全分组、签到备份与插件配置。" />
+    <title>GetPx 管理中心</title>
     <link rel="stylesheet" href="./styles.css" />
     <link rel="stylesheet" href="./safety.css" />
+    <script>
+      // 首帧即落主题：宿主注入的 data-theme 优先，其次 URL 的 theme 参数，
+      // 独立预览回退系统偏好；不读取浏览器存储。
+      (function () {
+        var root = document.documentElement;
+        var injected = root.getAttribute("data-theme");
+        var hostKnown = injected === "dark" || injected === "light";
+        var theme = hostKnown
+          ? injected
+          : new URLSearchParams(window.location.search).get("theme");
+        var dark = theme === "dark"
+          || (theme !== "light" && !!(window.matchMedia && window.matchMedia("(prefers-color-scheme: dark)").matches));
+        root.setAttribute("data-theme", dark ? "dark" : "light");
+        // 宿主已给出主题时不再跟随系统偏好，避免后续系统切换覆盖宿主。
+        if (hostKnown) root.setAttribute("data-theme-source", "host");
+      })();
+    </script>
   </head>
   <body>
     <a class="skip-link" href="#mainContent">跳到主要内容</a>
-    <div class="shell">
-      <header class="topbar">
-        <div>
-          <p class="kicker">GET PX / CONTROL CONSOLE</p>
-          <h1>插件管理中心</h1>
-          <p class="subtitle">查看群签到活动，调整成员当前数值，管理安全策略并备份签到数据。</p>
+
+    <div class="nav-shell">
+      <header class="nav-primary">
+        <div class="brand">
+          <!-- AstrBot 双星标识，来自官方 dashboard/ChatUILogo.vue。 -->
+          <svg class="brand-mark" viewBox="0 0 24 24" aria-hidden="true" focusable="false">
+            <g transform="matrix(0.048 0 0 0.048 1.8 0.16)">
+              <g transform="translate(0.8 32.9)">
+                <path d="m246.3 328.1-17.8 41.2c-6.4 14.8-26.9 14.8-33.3 0l-17.8-41.2c-14.9-34.2-41.8-61.4-75.3-76.3l-48.8-21.6c-14.7-6.5-14.7-27.9 0-34.4l47.2-21c34.4-15.3 61.7-43.5 76.4-78.8l18-43.7c6.3-15.2 27.3-15.2 33.6 0l18 43.7c14.7 35.3 42 63.6 76.4 78.8l47.2 21c14.7 6.5 14.7 27.9 0 34.4l-48.8 21.6c-33.5 14.8-60.4 42.1-75.3 76.2z" transform="translate(0 35)" />
+                <path d="m402.2 449.3-5.3 12.2c-3.5 7.9-14.4 7.9-17.9 0l-5.3-12.2c-8.4-19.3-23.6-34.6-42.4-43l-15.4-6.9c-7.9-3.5-7.9-14.9 0-18.4l14.5-6.5c19.4-8.6 34.8-24.5 43.1-44.5l5.4-13.1c3.4-8.1 14.6-8.1 18 0l5.4 13.1c8.3 19.9 23.7 35.8 43.1 44.5l14.5 6.5c7.9 3.5 7.9 14.9 0 18.4l-15.4 6.9c-19 8.3-34.1 23.7-42.5 43z" transform="matrix(0.95 0 0 0.95 22 -278)" />
+              </g>
+            </g>
+          </svg>
+          <div class="nav-crumb">
+            <span class="org">AstrBot</span>
+            <span class="slash">/</span>
+            <span class="proj">GetPx</span>
+          </div>
         </div>
-        <div class="safety-lock" role="status" aria-label="内容安全状态">
-          <span class="pulse" aria-hidden="true"></span>
-          <span><strong>全局规则与安全分组</strong><span id="safetyStatusSummary">未分组会话默认关闭 R18；全局规则始终生效</span></span>
+        <div class="nav-actions">
+          <div class="safety-summary" role="status" aria-label="内容安全摘要">
+            <span class="safety-dot" aria-hidden="true"></span>
+            <span class="safety-summary-text">
+              <strong>内容安全</strong>
+              <span id="safetyStatusSummary">全局规则生效 · 未分组默认关闭 R18</span>
+            </span>
+          </div>
+          <button id="refreshBtn" class="btn" type="button">刷新数据</button>
         </div>
       </header>
 
-      <section id="overview" class="status-line" aria-label="系统运行概览"></section>
-
-      <section id="globalError" class="global-error" role="alert" hidden>
-        <span id="globalErrorMessage">部分数据加载失败。</span>
-        <button id="retryAllBtn" type="button">重新加载</button>
-      </section>
-
-      <nav class="workspace-nav" aria-label="功能模块导航">
-        <button class="active" data-view="ranking" type="button">群排行</button>
-        <button data-view="members" type="button">成员数值</button>
-        <button data-view="safety" type="button">内容安全</button>
-        <button data-view="policies" type="button">安全分组</button>
-        <button data-view="data" type="button">数据管理</button>
-        <button id="refreshBtn" class="refresh" type="button">刷新数据</button>
+      <nav class="nav-tabs" id="navTabs" role="tablist" aria-label="功能模块导航">
+        <button class="tab active" id="tab-ranking" data-view="ranking" type="button" role="tab" aria-selected="true" aria-controls="rankingView" tabindex="0">群排行</button>
+        <button class="tab" id="tab-members" data-view="members" type="button" role="tab" aria-selected="false" aria-controls="membersView" tabindex="-1">成员数值</button>
+        <button class="tab" id="tab-safety" data-view="safety" type="button" role="tab" aria-selected="false" aria-controls="safetyView" tabindex="-1">内容安全</button>
+        <button class="tab" id="tab-policies" data-view="policies" type="button" role="tab" aria-selected="false" aria-controls="policiesView" tabindex="-1">安全分组</button>
+        <button class="tab" id="tab-data" data-view="data" type="button" role="tab" aria-selected="false" aria-controls="dataView" tabindex="-1">数据管理</button>
+        <button class="tab" id="tab-settings" data-view="settings" type="button" role="tab" aria-selected="false" aria-controls="settingsView" tabindex="-1">插件配置</button>
       </nav>
-
-      <main id="mainContent" tabindex="-1">
-        <!-- 群排行模块 -->
-        <section id="rankingView" class="workspace active" aria-labelledby="rankingTitle">
-          <div class="ranking-layout">
-            <aside class="group-rail">
-              <div class="section-heading">
-                <p>GROUP SCOPE</p>
-                <h2 id="rankingTitle">选择群聊</h2>
-              </div>
-              <div id="groupList" class="group-list"></div>
-            </aside>
-
-            <div class="ranking-main">
-              <div class="ranking-toolbar">
-                <div>
-                  <p id="selectedGroupMeta" class="eyebrow">尚未选择群聊</p>
-                  <h2 id="selectedGroupName">群签到轨道</h2>
-                </div>
-                <div class="segmented" aria-label="榜单时间筛选">
-                  <button class="active" data-rank="today" type="button">今日</button>
-                  <button data-rank="month" type="button">月度</button>
-                  <button data-rank="streak" type="button">连签</button>
-                  <button data-rank="total" type="button">累计</button>
-                </div>
-              </div>
-
-              <div class="activity-head">
-                <div>
-                  <span>群活跃轨道</span>
-                  <small id="trendCaption">最近 7 天</small>
-                </div>
-                <div class="segmented compact" aria-label="趋势统计时间跨度">
-                  <button class="active" data-days="7" type="button">7 天</button>
-                  <button data-days="30" type="button">30 天</button>
-                </div>
-              </div>
-              <div id="activityTrack" class="activity-track" aria-label="签到趋势日期轨道"></div>
-              <div id="rankingContent" class="ranking-content"></div>
-            </div>
-          </div>
-        </section>
-
-        <!-- 成员数值管理模块 -->
-        <section id="membersView" class="workspace" aria-labelledby="membersTitle">
-          <div class="section-heading wide">
-            <p>MEMBER VALUES</p>
-            <h2 id="membersTitle">签到成员数值</h2>
-            <span>搜索已有签到成员并调整当前资料。历史签到记录、群排行和已生成卡片不会被改写。</span>
-          </div>
-
-          <div class="member-notice" role="note">
-            <strong>修改立即生效</strong>
-            <span>金币与签到天数不能小于 0；好感度最低为 -10；连续签到不能大于累计签到。</span>
-          </div>
-
-          <section class="panel member-panel">
-            <div class="panel-title">
-              <div>
-                <p>PROFILE DIRECTORY</p>
-                <h3>成员资料</h3>
-              </div>
-              <span id="memberCount" class="count" aria-live="polite">尚未加载</span>
-            </div>
-            <form id="memberSearchForm" class="member-search-form" role="search">
-              <label for="memberSearch" class="sr-only">搜索成员昵称或用户 ID</label>
-              <input id="memberSearch" name="checkin_member_search" type="search" maxlength="64" autocomplete="off" spellcheck="false" placeholder="输入昵称或用户 ID…" />
-              <button type="submit">搜索成员</button>
-              <button id="memberClearBtn" class="secondary" type="button">清除</button>
-            </form>
-            <div id="memberList" class="member-list" aria-live="polite">
-              <div class="empty">打开本模块后将加载签到成员</div>
-            </div>
-            <button id="memberLoadMore" class="member-load-more" type="button" hidden>加载更多成员</button>
-          </section>
-        </section>
-
-        <!-- 内容安全模块 -->
-        <section id="safetyView" class="workspace" aria-labelledby="safetyTitle">
-          <div class="section-heading wide">
-            <p>CONTENT GUARD</p>
-            <h2 id="safetyTitle">内容安全策略</h2>
-            <span>全局规则适用于所有会话；未分组会话默认仅普通分级，没有内置关键词。</span>
-          </div>
-
-          <div class="safety-columns">
-            <section class="panel safety-mode-panel">
-              <div class="panel-title"><h3>所有分组的匹配方式</h3></div>
-              <label for="keywordMatchMode">关键词过滤</label>
-              <select id="keywordMatchMode"><option>宽松</option><option>严格</option></select>
-              <p id="keywordModeHint" class="safety-hint"></p>
-              <p class="safety-hint">全局与分组关键词使用同一模式。不检查简介，不执行正则或通配符。</p>
-            </section>
-
-            <!-- 自定义屏蔽词 -->
-            <section class="panel">
-              <div class="panel-title">
-                <div>
-                  <p>CUSTOM TERMS</p>
-                  <h3>全局屏蔽关键词</h3>
-                </div>
-                <span id="customCount" class="count" aria-live="polite"></span>
-              </div>
-              <form id="termForm" class="inline-form">
-                <label for="termInput" class="sr-only">自定义屏蔽词</label>
-                <input id="termInput" name="custom_safety_term" maxlength="64" autocomplete="off" spellcheck="false" placeholder="例如：某些敏感词汇…" required />
-                <button type="submit">添加屏蔽词</button>
-                <p id="termError" class="form-error" aria-live="polite"></p>
-              </form>
-              <div id="customTerms" class="term-list"></div>
-            </section>
-          </div>
-
-          <!-- 作品 ID 黑名单 -->
-          <section class="panel blacklist-panel">
-            <div class="panel-title">
-              <div>
-                <p>ILLUSTRATION BLACKLIST</p>
-                <h3>作品 ID 黑名单</h3>
-              </div>
-              <span id="blacklistCount" class="count" aria-live="polite"></span>
-            </div>
-            <form id="blacklistForm" class="blacklist-form">
-              <div>
-                <label for="blacklistId">Pixiv 作品 ID</label>
-                <input id="blacklistId" name="pixiv_illust_id" inputmode="numeric" pattern="[0-9]+" autocomplete="off" spellcheck="false" required placeholder="例如：12345678…" />
-              </div>
-              <div>
-                <label for="blacklistReason">加入原因</label>
-                <input id="blacklistReason" name="blacklist_reason" maxlength="200" autocomplete="off" placeholder="例如：含有不适合的背景…" />
-              </div>
-              <button type="submit">加入黑名单</button>
-              <p id="blacklistError" class="form-error" aria-live="polite"></p>
-            </form>
-            <div id="blacklistContent" class="blacklist-list"></div>
-          </section>
-        </section>
-
-        <section id="policiesView" class="workspace" aria-labelledby="policiesTitle">
-          <div class="section-heading wide"><p>SAFETY GROUPS</p><h2 id="policiesTitle">安全分组</h2><span>一个会话只属于一个分组。全局关键词与作品黑名单始终生效。</span></div>
-          <section class="panel">
-            <div class="panel-title"><h3>规则分组 <span id="policyCount" class="count">0</span></h3><button id="policyAddBtn" type="button">新建分组</button></div>
-            <label for="policySearch">搜索名称或会话</label><input id="policySearch" type="search" placeholder="分组名称或完整 UMO">
-            <div id="policyList" class="safety-group-grid" aria-live="polite"></div>
-          </section>
-          <dialog id="safetyGroupDialog" class="safety-group-dialog" aria-labelledby="safetyGroupTitle">
-            <form id="safetyGroupForm">
-              <header class="safety-group-header">
-                <h3 id="safetyGroupTitle">安全分组</h3>
-                <p>为关联会话设置分级与附加屏蔽词。</p>
-              </header>
-              <div class="safety-group-fields">
-                <div class="safety-group-field">
-                  <label for="safetyGroupName">分组名称</label>
-                  <input id="safetyGroupName" required maxlength="64" placeholder="例如：日常插画" autocomplete="off">
-                </div>
-                <div class="safety-group-field">
-                  <label for="safetyGroupSessions">关联会话 <span>每行一个完整 UMO</span></label>
-                  <textarea id="safetyGroupSessions" rows="3" placeholder="粘贴 /sid 返回的完整值" aria-describedby="safetyGroupSessionsHint" spellcheck="false"></textarea>
-                  <p id="safetyGroupSessionsHint" class="safety-hint">在目标聊天发送 /sid 获取；一个会话只能加入一个分组。</p>
-                </div>
-                <label class="safety-r18-toggle">
-                  <span><strong>允许 R18</strong><small id="safetyGroupR18Hint">默认关闭；开启后允许混合分级，不保证只返回 R18。</small></span>
-                  <input id="safetyGroupR18" type="checkbox" role="switch" aria-label="允许 R18" aria-describedby="safetyGroupR18Hint">
-                </label>
-                <div class="safety-group-field">
-                  <label for="safetyGroupTerms">附加屏蔽关键词 <span>每行一个</span></label>
-                  <textarea id="safetyGroupTerms" rows="3" placeholder="可选，留空仅使用全局关键词" aria-describedby="safetyGroupTermsHint"></textarea>
-                  <p id="safetyGroupTermsHint" class="safety-hint">与全局词叠加，使用全局匹配方式；全局作品黑名单始终生效。</p>
-                </div>
-                <p id="safetyGroupError" class="form-error" role="alert"></p>
-              </div>
-              <div class="dialog-actions"><button id="safetyGroupDelete" class="danger" type="button">删除分组</button><button id="safetyGroupCancel" type="button">关闭</button><button type="submit">保存分组</button></div>
-            </form>
-          </dialog>
-        </section>
-
-        <!-- 数据管理模块 -->
-        <section id="dataView" class="workspace" aria-labelledby="dataTitle">
-          <div class="section-heading wide">
-            <p>DATA OPERATIONS</p>
-            <h2 id="dataTitle">数据管理</h2>
-            <span>导出签到数据、当前安全规则及旧策略归档。导入只恢复签到，安全规则与旧策略不会恢复。</span>
-          </div>
-
-          <div class="data-grid">
-            <!-- 导出备份 -->
-            <section class="data-action export-action">
-              <span class="action-index">EXPORT</span>
-              <h3>数据导出</h3>
-              <p>导出插件数据 JSON。查看旧策略请展开 legacy_safety_archives；旧策略仅供查看，不支持重新导入。包内不含 token 或代理地址。</p>
-              <button id="exportBtn" type="button">下载备份 (.json)</button>
-              <small id="latestBackup" aria-live="polite">最近备份：尚无备份记录</small>
-            </section>
-
-            <!-- 恢复备份 -->
-            <section class="data-action import-action">
-              <span class="action-index">RESTORE</span>
-              <h3>从备份文件恢复</h3>
-              <p>导入 JSON 格式的备份。注意：这会覆盖现有的签到数据。在导入前，系统会自动创建当前数据的回滚备份。</p>
-              <label for="importFile" class="sr-only">选择备份文件</label>
-              <input id="importFile" name="checkin_backup" type="file" accept="application/json,.json" />
-              <button id="importBtn" class="danger" type="button" disabled>确认恢复此备份</button>
-              <small id="importResult" aria-live="polite">尚未选择任何文件 (最大支持 5 MiB)</small>
-            </section>
-
-            <!-- 缓存管理 -->
-            <section class="data-action cache-action">
-              <span class="action-index">STORAGE</span>
-              <h3>临时图片与卡片缓存</h3>
-              <p>保存当天签到卡片及背景摘要，并统计下载临时图片。下载图片通常在发送流程结束后删除；送达未知的路径图片保留 10 分钟后自动清理。手动清理会移除卡片缓存和下载残余，跳过最近 10 分钟的下载临时文件。签到记录及用户数据不受影响，卡片缓存清理后会按需重建。</p>
-              <div class="cache-stat-line">
-                <span id="cacheStorageText">正在统计缓存占用…</span>
-              </div>
-              <div class="cache-actions-row">
-                <button id="clearCacheBtn" class="danger" type="button">一键清理临时缓存</button>
-                <button id="refreshCacheBtn" type="button">刷新统计</button>
-              </div>
-              <small id="cacheStorageDetail" aria-live="polite">卡片缓存：- · 临时下载：-</small>
-            </section>
-          </div>
-        </section>
-      </main>
     </div>
 
-    <!-- 全局轻量通知 -->
+    <main class="main" id="mainContent" tabindex="-1">
+      <section id="globalError" class="global-error" role="alert" hidden>
+        <span id="globalErrorMessage">部分数据加载失败。</span>
+        <button class="btn" id="retryAllBtn" type="button">重新加载</button>
+      </section>
+
+      <!-- 群排行 -->
+      <section id="rankingView" class="view active" role="tabpanel" aria-labelledby="tab-ranking">
+        <div class="view-head"><h2>群排行</h2></div>
+        <div class="ranking-layout">
+          <aside class="panel group-rail">
+            <div class="panel-head">
+              <div>
+                <h2 id="rankingTitle">选择群聊</h2>
+                <p class="panel-sub">按最近签到时间排序</p>
+              </div>
+            </div>
+            <div id="groupList" class="group-list"></div>
+          </aside>
+
+          <div class="panel ranking-main">
+            <div class="ranking-toolbar">
+              <div>
+                <p id="selectedGroupMeta" class="eyebrow">尚未选择群聊</p>
+                <h2 id="selectedGroupName">签到排行</h2>
+              </div>
+              <div class="segmented" aria-label="榜单时间筛选">
+                <button class="active" data-rank="today" type="button">今日</button>
+                <button data-rank="month" type="button">月度</button>
+                <button data-rank="streak" type="button">连签</button>
+                <button data-rank="total" type="button">累计</button>
+              </div>
+            </div>
+
+            <div class="activity-head">
+              <div>
+                <span>签到趋势</span>
+                <small id="trendCaption">最近 7 天</small>
+              </div>
+              <div class="segmented compact" aria-label="趋势统计时间跨度">
+                <button class="active" data-days="7" type="button">7 天</button>
+                <button data-days="30" type="button">30 天</button>
+              </div>
+            </div>
+            <div class="ranking-results">
+              <p id="rankingStatus" class="ranking-status" role="status"></p>
+              <div id="rankingData">
+                <div id="activityTrack" class="activity-track" aria-label="每日签到人数"></div>
+                <div id="rankingContent" class="ranking-content"></div>
+              </div>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <!-- 成员数值 -->
+      <section id="membersView" class="view" role="tabpanel" aria-labelledby="tab-members">
+        <div class="view-head">
+          <div>
+            <h2 id="membersTitle">成员数值</h2>
+            <p>搜索已有签到成员并调整当前资料。历史签到记录、群排行和已生成卡片不会被改写。</p>
+          </div>
+        </div>
+
+        <p class="notice" role="note">
+          <strong>修改立即生效</strong>
+          金币与签到天数不能小于 0；好感度最低为 -10；连续签到不能大于累计签到。
+        </p>
+
+        <section class="panel member-panel">
+          <div class="panel-head">
+            <div>
+              <h3>成员资料</h3>
+              <p class="panel-sub">按昵称或用户 ID 搜索</p>
+            </div>
+            <span id="memberCount" class="count" aria-live="polite">尚未加载</span>
+          </div>
+          <form id="memberSearchForm" class="member-search-form" role="search">
+            <label for="memberSearch" class="sr-only">搜索成员昵称或用户 ID</label>
+            <input id="memberSearch" name="checkin_member_search" type="search" maxlength="64" autocomplete="off" spellcheck="false" placeholder="输入昵称或用户 ID…" />
+            <button class="btn" type="submit">搜索成员</button>
+            <button id="memberClearBtn" class="btn" type="button">清除</button>
+          </form>
+          <div id="memberList" class="member-list" aria-live="polite" tabindex="-1">
+            <div class="empty">打开本模块后将加载签到成员</div>
+          </div>
+          <nav id="memberPager" class="member-pager" aria-label="成员列表分页" hidden>
+            <button id="memberPrevPage" class="btn btn-sm" type="button">上一页</button>
+            <span id="memberPageStatus" role="status"></span>
+            <button id="memberNextPage" class="btn btn-sm" type="button">下一页</button>
+          </nav>
+        </section>
+      </section>
+
+      <!-- 内容安全 -->
+      <section id="safetyView" class="view" role="tabpanel" aria-labelledby="tab-safety">
+        <div class="view-head">
+          <div>
+            <h2 id="safetyTitle">内容安全</h2>
+            <p>全局规则适用于所有会话；未分组会话默认仅普通分级，没有内置关键词。</p>
+          </div>
+        </div>
+
+        <div class="safety-columns">
+          <section class="panel safety-mode-panel">
+            <div class="panel-head"><h3>所有分组的匹配方式</h3></div>
+            <span class="field-label" id="keywordMatchModeLabel">关键词过滤</span>
+            <div id="keywordMatchMode" class="dd-slot"></div>
+            <p id="keywordModeHint" class="hint"></p>
+            <p class="hint">全局与分组关键词使用同一模式。不检查简介，不执行正则或通配符。</p>
+          </section>
+
+          <section class="panel">
+            <div class="panel-head">
+              <div>
+                <h3>全局屏蔽关键词</h3>
+                <p class="panel-sub">对所有会话生效，与分组词叠加</p>
+              </div>
+              <span id="customCount" class="count" aria-live="polite"></span>
+            </div>
+            <form id="termForm" class="inline-form">
+              <label for="termInput" class="sr-only">自定义屏蔽词</label>
+              <input id="termInput" type="text" name="custom_safety_term" maxlength="64" autocomplete="off" spellcheck="false" placeholder="例如：某些敏感词汇…" required />
+              <button class="btn" type="submit">添加屏蔽词</button>
+              <p id="termError" class="form-error" aria-live="polite"></p>
+            </form>
+            <div id="customTerms" class="term-list"></div>
+          </section>
+        </div>
+
+        <section class="panel blacklist-panel">
+          <div class="panel-head">
+            <div>
+              <h3>作品 ID 黑名单</h3>
+              <p class="panel-sub">所有会话生效；同一 PID 的分页图片也会拦截</p>
+            </div>
+            <span id="blacklistCount" class="count" aria-live="polite"></span>
+          </div>
+          <form id="blacklistForm" class="blacklist-form">
+            <div>
+              <label for="blacklistId">Pixiv 作品 ID</label>
+              <input id="blacklistId" type="text" name="pixiv_illust_id" inputmode="numeric" pattern="[0-9]+" autocomplete="off" spellcheck="false" required placeholder="例如：12345678…" />
+            </div>
+            <div>
+              <label for="blacklistReason">加入原因</label>
+              <input id="blacklistReason" type="text" name="blacklist_reason" maxlength="200" autocomplete="off" placeholder="例如：含有不适合的背景…" />
+            </div>
+            <button class="btn" type="submit">加入黑名单</button>
+            <p id="blacklistError" class="form-error" aria-live="polite"></p>
+          </form>
+          <div id="blacklistContent" class="blacklist-list"></div>
+        </section>
+      </section>
+
+      <!-- 安全分组 -->
+      <section id="policiesView" class="view" role="tabpanel" aria-labelledby="tab-policies">
+        <div class="view-head">
+          <div>
+            <h2 id="policiesTitle">安全分组</h2>
+            <p>一个会话只属于一个分组。全局关键词与作品黑名单始终生效。</p>
+          </div>
+          <button id="policyAddBtn" class="btn btn-primary" type="button">新建分组</button>
+        </div>
+        <section class="panel">
+          <div class="panel-head">
+            <p class="hint">点击分组编辑</p>
+            <span id="policyCount" class="count" aria-live="polite">0</span>
+          </div>
+          <label for="policySearch" class="sr-only">搜索分组名称或会话</label>
+          <input id="policySearch" class="search" type="search" placeholder="搜索分组名称或完整 UMO" autocomplete="off" />
+          <div id="policyList" class="safety-group-grid" aria-live="polite"></div>
+        </section>
+
+        <dialog id="safetyGroupDialog" class="safety-group-dialog" aria-labelledby="safetyGroupTitle">
+          <form id="safetyGroupForm">
+            <header class="safety-group-header">
+              <h3 id="safetyGroupTitle">安全分组</h3>
+              <p>为关联会话设置分级与附加屏蔽词。</p>
+            </header>
+            <div class="safety-group-fields">
+              <div class="safety-group-field">
+                <label for="safetyGroupName">分组名称</label>
+                <input id="safetyGroupName" type="text" name="safety_group_name" required maxlength="64" placeholder="例如：日常插画" autocomplete="off" />
+              </div>
+              <div class="safety-group-field">
+                <label for="safetyGroupSessions">关联会话 <span>每行一个完整 UMO</span></label>
+                <textarea id="safetyGroupSessions" rows="3" placeholder="粘贴 /sid 返回的完整值" aria-describedby="safetyGroupSessionsHint" spellcheck="false"></textarea>
+                <p id="safetyGroupSessionsHint" class="hint">在目标聊天发送 /sid 获取；一个会话只能加入一个分组。</p>
+              </div>
+              <label class="safety-r18-toggle">
+                <span class="safety-r18-copy">
+                  <strong>允许 R18</strong>
+                  <small id="safetyGroupR18Hint">默认关闭；开启后允许混合分级，不保证只返回 R18。</small>
+                </span>
+                <input id="safetyGroupR18" type="checkbox" role="switch" aria-label="允许 R18" aria-describedby="safetyGroupR18Hint" />
+                <span class="switch-track" aria-hidden="true"></span>
+              </label>
+              <div class="safety-group-field">
+                <label for="safetyGroupTerms">附加屏蔽关键词 <span>每行一个</span></label>
+                <textarea id="safetyGroupTerms" rows="3" placeholder="可选，留空仅使用全局关键词" aria-describedby="safetyGroupTermsHint"></textarea>
+                <p id="safetyGroupTermsHint" class="hint">与全局词叠加，使用全局匹配方式；全局作品黑名单始终生效。</p>
+              </div>
+              <p id="safetyGroupError" class="form-error" role="alert"></p>
+            </div>
+            <div class="dialog-actions">
+              <button id="safetyGroupDelete" class="btn btn-danger-quiet" type="button">删除分组</button>
+              <button class="btn" id="safetyGroupCancel" type="button">关闭</button>
+              <button class="btn btn-primary" type="submit">保存分组</button>
+            </div>
+          </form>
+        </dialog>
+      </section>
+
+      <!-- 数据管理 -->
+      <section id="dataView" class="view" role="tabpanel" aria-labelledby="tab-data">
+        <div class="view-head">
+          <div>
+            <h2 id="dataTitle">数据管理</h2>
+            <p>导出签到数据、当前安全规则及旧策略归档。导入只恢复签到，安全规则与旧策略不会恢复。</p>
+          </div>
+        </div>
+
+        <div class="data-grid">
+          <section class="panel data-action">
+            <h3>数据导出</h3>
+            <p>导出插件数据 JSON。查看旧策略请展开 legacy_safety_archives；旧策略仅供查看，不支持重新导入。包内不含 token 或代理地址。</p>
+            <button class="btn" id="exportBtn" type="button">下载备份 (.json)</button>
+            <small id="latestBackup" aria-live="polite">最近备份：尚无备份记录</small>
+          </section>
+
+          <section class="panel data-action">
+            <h3>从备份文件恢复</h3>
+            <p>导入 JSON 格式的备份。注意：这会覆盖现有的签到数据。在导入前，系统会自动创建当前数据的回滚备份。</p>
+            <label for="importFile" class="sr-only">选择备份文件</label>
+            <input id="importFile" name="checkin_backup" type="file" accept="application/json,.json" hidden />
+            <button id="selectBackupBtn" class="btn" type="button">选择备份文件</button>
+            <button id="importBtn" class="btn danger" type="button" disabled>确认恢复此备份</button>
+            <small id="importResult" aria-live="polite">尚未选择任何文件 (最大支持 5 MiB)</small>
+          </section>
+
+          <section class="panel data-action">
+            <h3>临时图片与卡片缓存</h3>
+            <p>保存当天签到卡片及背景摘要，并统计下载临时图片。下载图片通常在发送流程结束后删除；送达未知的路径图片保留 10 分钟后自动清理。手动清理会移除卡片缓存和下载残余，跳过最近 10 分钟的下载临时文件。签到记录及用户数据不受影响，卡片缓存清理后会按需重建。</p>
+            <div class="cache-stat-line">
+              <span id="cacheStorageText">正在统计缓存占用…</span>
+            </div>
+            <div class="cache-actions-row">
+              <button id="clearCacheBtn" class="btn danger" type="button">一键清理临时缓存</button>
+              <button id="refreshCacheBtn" class="btn" type="button">刷新统计</button>
+            </div>
+            <small id="cacheStorageDetail" aria-live="polite">卡片缓存：- · 临时下载：-</small>
+          </section>
+        </div>
+      </section>
+
+      <!-- 插件配置 -->
+      <section id="settingsView" class="view" role="tabpanel" aria-labelledby="tab-settings">
+        <div class="config-actionbar">
+          <div class="config-toolbar-heading">
+            <h2 id="settingsTitle">插件配置</h2>
+            <div class="config-current-group">
+              <span id="settingsGroupTitle">插件配置</span>
+              <span id="settingsGroupCount" class="hint"></span>
+            </div>
+          </div>
+          <p id="settingsStatus" class="config-bar-state" role="status" aria-live="polite">正在读取设置…</p>
+          <div class="config-bar-actions">
+            <button id="settingsDiscardBtn" class="btn" type="button">放弃更改</button>
+            <button id="settingsReloadBtn" class="btn" type="button" aria-label="重新载入设置" title="重新载入设置">
+              <svg viewBox="0 0 24 24" width="20" height="20" aria-hidden="true" focusable="false"><path d="M20 7v5h-5M4 17v-5h5M6.3 6.3a8 8 0 0 1 13 2.7M4.7 15a8 8 0 0 0 13 2.7" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" /></svg>
+              <span>重新载入</span>
+            </button>
+            <button id="settingsSaveBtn" class="btn btn-primary" type="submit" form="configSettingsForm" disabled>保存设置</button>
+          </div>
+        </div>
+
+        <form id="configSettingsForm" class="config-layout" novalidate>
+          <aside class="config-nav" aria-label="配置分组">
+            <label for="settingsSearch" class="sr-only">搜索配置项</label>
+            <input id="settingsSearch" class="search" type="search" placeholder="搜索配置项…" autocomplete="off" spellcheck="false" />
+            <div id="settingsNav" class="config-nav-list"></div>
+            <span id="settingsGroupPickerLabel" class="sr-only">配置分组</span>
+            <div id="settingsGroupSelect" class="config-mobile-select"></div>
+            <button id="settingsFixInvalidBtn" class="btn btn-quiet" type="button" hidden>定位待修正项</button>
+            <label class="config-check config-key-toggle"><input id="settingsShowKeys" type="checkbox" />显示配置键</label>
+          </aside>
+          <div class="config-content">
+            <div class="config-main" aria-labelledby="settingsGroupTitle">
+              <div id="settingsGroups" class="config-fields"></div>
+            </div>
+            <details class="config-effect-note">
+              <summary>保存后何时生效？</summary>
+              <p>Pixiv 令牌、出站代理及模式、图片反代、Lolicon 排除 AI、万象画卷联动与网络超时保存后需重载插件。去重期限为内置规则，不再提供天数设置。全局安全规则与安全分组仍由各自页面维护。</p>
+            </details>
+          </div>
+        </form>
+      </section>
+    </main>
+
     <div id="toast" class="toast" role="status" aria-live="polite"></div>
 
-    <!-- 全局确认对话框 -->
-    <dialog id="confirmDialog" aria-labelledby="dialogTitle" aria-describedby="dialogMessage">
+    <dialog id="confirmDialog" class="dialog" aria-labelledby="dialogTitle" aria-describedby="dialogMessage">
       <form method="dialog">
-        <p class="kicker">CONFIRM ACTION</p>
         <h2 id="dialogTitle">确认操作</h2>
         <p id="dialogMessage"></p>
         <div class="dialog-actions">
-          <button value="cancel" type="submit">取消</button>
-          <button id="dialogConfirm" class="danger" value="confirm" type="submit">确认执行</button>
+          <button class="btn" value="cancel" type="submit">取消</button>
+          <button id="dialogConfirm" class="btn danger" value="confirm" type="submit">确认执行</button>
         </div>
       </form>
     </dialog>
 
-    <!-- 成员数值编辑对话框 -->
     <dialog id="memberDialog" class="member-dialog" aria-labelledby="memberDialogTitle">
       <form id="memberForm">
-        <p class="kicker">EDIT MEMBER PROFILE</p>
         <h2 id="memberDialogTitle">调整成员数值</h2>
         <p id="memberDialogIdentity" class="member-dialog-identity"></p>
         <input id="memberUserId" name="user_id" type="hidden" />
@@ -304,24 +403,19 @@
         </div>
         <div class="member-boost-section">
           <div class="member-boost-info">
-            <span class="boost-label">好感度加持状态</span>
+            <span class="field-label">好感度加持状态</span>
             <span id="memberBoostStatus" class="boost-badge">无加持</span>
           </div>
-          <label for="memberBoostAction">调整加持
-            <select id="memberBoostAction" name="boost_action">
-              <option value="keep" selected>保持当前加持不变</option>
-              <option value="clear">清除加持（重置为无加持）</option>
-              <option value="add_1">延长 1 天双倍好感加持</option>
-              <option value="add_3">延长 3 天双倍好感加持</option>
-              <option value="add_7">延长 7 天双倍好感加持</option>
-            </select>
-          </label>
+          <div class="member-boost-field">
+            <span class="field-label" id="memberBoostLabel">调整加持</span>
+            <div id="memberBoostAction" class="dd-slot"></div>
+          </div>
         </div>
         <p class="member-history-note">这里只修改成员当前资料，不会篡改过去的签到奖励或排行榜记录。</p>
         <p id="memberFormError" class="form-error" aria-live="polite"></p>
         <div class="dialog-actions">
-          <button id="memberCancelBtn" type="button">取消</button>
-          <button id="memberSaveBtn" type="submit">保存修改</button>
+          <button class="btn" id="memberCancelBtn" type="button">取消</button>
+          <button class="btn btn-primary" id="memberSaveBtn" type="submit">保存修改</button>
         </div>
       </form>
     </dialog>

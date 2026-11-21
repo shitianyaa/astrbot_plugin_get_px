@@ -24,7 +24,7 @@
         "description": "Lolicon 排除 AI 作品",
         "type": "bool",
         "default": true,
-        "hint": "仅控制 Lolicon 的 AI 作品筛选（excludeAI=true/false）；R18 与普通作品混合由当前会话的“强制普通分级”策略决定。"
+        "hint": "仅控制 Lolicon 的 AI 作品筛选（excludeAI=true/false）；R18 是否混入由安全分组的“允许 R18”决定，未分组默认仅普通分级。"
       },
       "lolicon_image_proxy_origins": {
         "description": "Lolicon 图片反代地址",
@@ -395,17 +395,6 @@
           "step": 1
         },
         "hint": "同一用户两次取图消息的最小间隔，设为 0 禁用。只读查询单独限频；同条模型消息的后续任务共享首次准入，仍受总张数与时间预算限制。"
-      },
-      "webui_font_source": {
-        "description": "WebUI 字体来源",
-        "type": "string",
-        "default": "mirror",
-        "options": [
-          "mirror",
-          "official",
-          "none"
-        ],
-        "hint": "插件管理中心加载 Google Fonts 的方式。mirror = 国内镜像（默认，速度快），official = 官方源，none = 不加载外部字体（使用系统字体）。"
       }
     }
   }

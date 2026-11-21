@@ -1,3 +1,5 @@
+import { createSelect, closeDialog } from "./ui.mjs";
+
 const modeHints = {
   宽松: "仅匹配完整原标签或翻译标签；忽略标题和简介。",
   严格: "匹配完整标签，并检查标题包含关键词；忽略简介。",
@@ -25,25 +27,55 @@ export function mountSafety({ apiGet, apiPost, escapeHtml, showToast, confirmAct
   const $ = id => document.getElementById(id);
   let settings = { safety_groups: [], global_safety_terms: [], keyword_match_mode: "宽松" };
   let draft = null, baseline = null, busy = false, trigger = null;
-  let loadSequence = 0;
-  let restoreTrigger = true;
-  let focusAfterLoad = null;
+  let loadSequence = 0, restoreTrigger = true;
+  let termsSaving = false;
   const dialog = $("safetyGroupDialog");
   const form = $("safetyGroupForm");
+  const modeSelect = createSelect({
+    labelledBy: "keywordMatchModeLabel",
+    value: "宽松",
+    options: [{ value: "宽松", label: "宽松" }, { value: "严格", label: "严格" }],
+    onChange: async (next) => {
+      modeSelect.setDisabled(true);
+      try {
+        await apiPost("content-safety/global", { keyword_match_mode: next });
+        applySaved({ keyword_match_mode: next });
+        showToast("全局匹配方式已保存");
+      } catch (error) {
+        mode();
+        showToast(error.message, "error");
+      } finally {
+        modeSelect.setDisabled(false);
+      }
+    },
+  });
+  $("keywordMatchMode").replaceChildren(modeSelect);
   const dirty = () => draft && JSON.stringify(readDraft()) !== JSON.stringify(baseline);
   const readDraft = () => ({ ...draft, name: $("safetyGroupName").value.trim(), sessions: splitLines($("safetyGroupSessions").value), allow_r18: $("safetyGroupR18").checked, custom_terms: splitLines($("safetyGroupTerms").value) });
   function mode() {
-    $("keywordMatchMode").value = settings.keyword_match_mode;
+    modeSelect.value = settings.keyword_match_mode;
     $("keywordModeHint").textContent = modeHints[settings.keyword_match_mode];
   }
   function render() {
     mode();
     $("customCount").textContent = `${settings.global_safety_terms.length} 项`;
-    $("customTerms").innerHTML = settings.global_safety_terms.map(term => `<div class="term-item"><strong>${escapeHtml(term)}</strong><button type="button" data-remove-term="${escapeHtml(term)}">删除</button></div>`).join("") || '<div class="empty">没有全局屏蔽关键词。点击上方输入框添加。</div>';
+    $("customTerms").innerHTML = settings.global_safety_terms.map(term => `<div class="term-item"><strong>${escapeHtml(term)}</strong><button class="btn btn-sm btn-quiet btn-danger-quiet" type="button" data-remove-term="${escapeHtml(term)}">删除</button></div>`).join("") || '<div class="empty">没有全局屏蔽关键词。点击上方输入框添加。</div>';
     $("policyCount").textContent = String(settings.safety_groups.length);
     const query = $("policySearch").value.trim().toLocaleLowerCase();
     const groups = settings.safety_groups.filter(group => `${group.name} ${group.sessions.join(" ")}`.toLocaleLowerCase().includes(query));
     $("policyList").innerHTML = groups.map(group => `<button type="button" class="safety-group-card" data-edit-group="${escapeHtml(group.group_id)}"><strong>${escapeHtml(group.name)}</strong><span class="safety-rating ${group.allow_r18 ? "sensitive" : ""}">${group.allow_r18 ? "允许 R18" : "仅普通分级"}</span><span>${group.sessions.length} 个会话 · ${group.custom_terms.length} 个附加关键词</span><small>${group.sessions.length ? escapeHtml(group.sessions[0]) : "尚未关联会话"}</small></button>`).join("") || '<div class="empty">暂无匹配分组。未分组会话仍遵循全局规则，R18 关闭。</div>';
+    setTermsBusy(termsSaving);
+  }
+  function setTermsBusy(value) {
+    termsSaving = value;
+    document.querySelectorAll("#termForm input, #termForm button, #customTerms button")
+      .forEach(control => { control.disabled = value; });
+  }
+  function applySaved(values) {
+    ++loadSequence;
+    Object.assign(settings, values);
+    onChange(settings);
+    render();
   }
   async function reload() {
     const sequence = ++loadSequence;
@@ -53,10 +85,6 @@ export function mountSafety({ apiGet, apiPost, escapeHtml, showToast, confirmAct
       settings = value;
       onChange(settings);
       render();
-      if (focusAfterLoad !== null) {
-        focusGroup(focusAfterLoad);
-        focusAfterLoad = null;
-      }
       return settings;
     } catch (error) {
       if (sequence !== loadSequence) return null;
@@ -82,10 +110,18 @@ export function mountSafety({ apiGet, apiPost, escapeHtml, showToast, confirmAct
     dialog.showModal();
     $("safetyGroupName").focus();
   }
+  async function saveTerm(endpoint, term) {
+    if (termsSaving) throw new Error("正在保存全局关键词，请稍后再试");
+    setTermsBusy(true);
+    try {
+      const result = await apiPost(endpoint, { term });
+      applySaved({ global_safety_terms: result.global_safety_terms });
+    } finally { setTermsBusy(false); }
+  }
   async function close() {
     if (busy) return;
     if (dirty() && !await confirmAction("放弃未保存修改", "关闭将丢弃当前分组草稿，确认继续吗？")) return;
-    dialog.close();
+    await closeDialog(dialog);
   }
   dialog.addEventListener("cancel", event => { event.preventDefault(); close(); });
   dialog.addEventListener("close", () => { draft = baseline = null; if (restoreTrigger) trigger?.focus(); });
@@ -99,29 +135,25 @@ export function mountSafety({ apiGet, apiPost, escapeHtml, showToast, confirmAct
   $("customTerms").addEventListener("click", async event => {
     const button = event.target.closest("[data-remove-term]");
     if (!button || !await confirmAction("删除全局关键词", "删除后所有会话都不再使用此关键词，确认继续吗？")) return;
-    button.disabled = true;
-    try { await apiPost("content-safety/terms/remove", { term: button.dataset.removeTerm }); await reload(); }
-    catch (error) { showToast(error.message, "error"); button.disabled = false; }
-  });
-  $("keywordMatchMode").addEventListener("change", async event => {
-    const select = event.target;
-    select.disabled = true;
-    try { await apiPost("content-safety/global", { keyword_match_mode: select.value }); await reload(); showToast("全局匹配方式已保存"); }
-    catch (error) { mode(); showToast(error.message, "error"); }
-    finally { select.disabled = false; }
+    try { await saveTerm("content-safety/terms/remove", button.dataset.removeTerm); }
+    catch (error) { showToast(error.message, "error"); }
   });
   $("termForm").addEventListener("submit", async event => {
     event.preventDefault();
-    const button = event.currentTarget.querySelector("button");
-    button.disabled = true;
     $("termError").textContent = "";
-    try { await apiPost("content-safety/terms/add", { term: $("termInput").value.trim() }); $("termInput").value = ""; await reload(); }
+    try { await saveTerm("content-safety/terms/add", $("termInput").value.trim()); $("termInput").value = ""; }
     catch (error) { $("termError").textContent = error.message; }
-    finally { button.disabled = false; }
   });
-  function setBusy(value) {
+  function setBusy(value, action = "save") {
     busy = value;
+    form.setAttribute("aria-busy", String(value));
     form.querySelectorAll("input,textarea,button").forEach(control => { control.disabled = value; });
+    const save = form.querySelector('button[type="submit"]');
+    const remove = $("safetyGroupDelete");
+    save.textContent = value && action === "save" ? "正在保存…" : "保存分组";
+    save.setAttribute("aria-busy", String(value && action === "save"));
+    remove.textContent = value && action === "remove" ? "正在删除…" : "删除分组";
+    remove.setAttribute("aria-busy", String(value && action === "remove"));
   }
   form.addEventListener("submit", async event => {
     event.preventDefault();
@@ -131,20 +163,33 @@ export function mountSafety({ apiGet, apiPost, escapeHtml, showToast, confirmAct
       if (!payload.group_id) delete payload.group_id;
       setBusy(true);
       const result = await apiPost("content-safety/groups/save", payload);
-      focusAfterLoad = result.group.group_id;
-      baseline = createGroupDraft(payload);
+      const savedGroup = result.group;
+      applySaved({
+        safety_groups: settings.safety_groups.filter(
+          group => group.group_id !== savedGroup.group_id,
+        ).concat(savedGroup),
+      });
+      baseline = createGroupDraft(savedGroup);
       restoreTrigger = false;
-      dialog.close();
-      await reload();
+      await closeDialog(dialog);
+      focusGroup(savedGroup.group_id);
       showToast("安全分组已保存");
-    } catch (error) { if (dialog.open) $("safetyGroupError").textContent = error.message; else { focusGroup(focusAfterLoad); showToast(error.message, "error"); } }
+    } catch (error) { if (dialog.open) $("safetyGroupError").textContent = error.message; else showToast(error.message, "error"); }
     finally { setBusy(false); }
   });
   $("safetyGroupDelete").addEventListener("click", async () => {
     if (busy || !await confirmAction("删除安全分组", "该组会话将恢复全局规则并关闭 R18，确认删除吗？")) return;
-    setBusy(true);
-    try { await apiPost("content-safety/groups/remove", { group_id: draft.group_id }); focusAfterLoad = ""; restoreTrigger = false; dialog.close(); await reload(); showToast("安全分组已删除"); }
-    catch (error) { if (dialog.open) $("safetyGroupError").textContent = error.message; else { focusGroup(); showToast(error.message, "error"); } }
+    setBusy(true, "remove");
+    try {
+      const groupId = draft.group_id;
+      await apiPost("content-safety/groups/remove", { group_id: groupId });
+      applySaved({ safety_groups: settings.safety_groups.filter(group => group.group_id !== groupId) });
+      restoreTrigger = false;
+      await closeDialog(dialog);
+      focusGroup();
+      showToast("安全分组已删除");
+    }
+    catch (error) { if (dialog.open) $("safetyGroupError").textContent = error.message; else showToast(error.message, "error"); }
     finally { setBusy(false); }
   });
   return { reload };

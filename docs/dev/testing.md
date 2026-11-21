@@ -17,8 +17,9 @@
 | --- | --- | --- |
 | Python 语法检查 | 插件目录 | `python -m compileall -q main.py checkin pixiv tools plugin_api scripts/ci tests` |
 | JSON schema 检查 | 插件目录 | `python -m json.tool _conf_schema.json` |
-| JavaScript 语法检查 | 插件目录 | `node --check pages/pluginCenter/app.js` |
-| 管理页状态测试 | 插件目录 | `node --test tests/js/safety.test.mjs` |
+| JavaScript 语法检查 | 插件目录 | `node --check pages/pluginCenter/app.js`，并检查 `settings.mjs`、`safety.mjs`、`ui.mjs` |
+| 管理页状态测试 | 插件目录 | `node --test tests/js/safety.test.mjs tests/js/settings.test.mjs tests/js/ui.test.mjs` |
+| 管理页浏览器回归 | 插件目录 | `python -m pytest -q tests/test_plugin_center_browser.py tests/test_plugin_center_edge_cases.py`（缺 Playwright／Chromium 时跳过） |
 | pytest 全部测试 | 插件目录 | `python -m pytest -v tests` |
 | pytest 快速测试 | 插件目录 | `python -m pytest -q tests` |
 | pytest 特定模块 | 插件目录 | `python -m pytest tests/test_checkin_*.py -v` |
@@ -30,13 +31,15 @@
 
 ## PR 快速 CI
 
-PR 快速 CI（`AstrBot Plugin Quality Gate`，`.github/workflows/plugin-quality-gate.yml`）在 Ubuntu + Python 3.12 下安装最新正式版 AstrBot，通过 `scripts/ci/check_plugin_quality_gate.py` 执行 Python 编译检查、JSON schema 检查、前端 JavaScript/ES module 语法、分组草稿 JS 测试和全量 `python -m pytest -v tests`；同一个检查脚本也可以在本地执行。生命周期检查脚本只服务于独立的 `AstrBot Plugin Lifecycle` CI。
+PR 快速 CI（`AstrBot Plugin Quality Gate`，`.github/workflows/plugin-quality-gate.yml`）在 Ubuntu + Python 3.12 下安装最新正式版 AstrBot，通过 `scripts/ci/check_plugin_quality_gate.py` 执行 Python 编译检查、JSON schema 检查、前端 JavaScript/ES module 语法、分组草稿 JS 测试和全量 `python -m pytest -v tests`；同一个检查脚本也可以在本地执行。门禁枚举页面全部 JS／MJS 和 `tests/js/*.test.mjs`，并从页面入口递归校验本地资源，缺失或越界时失败。生命周期检查脚本只服务于独立的 `AstrBot Plugin Lifecycle` CI。
 
 本地等价质量门禁（在已安装项目依赖、`pytest`、`pytest-asyncio` 和 Node.js 的环境中执行）：
 
 ```bash
 python scripts/ci/check_plugin_quality_gate.py
 ```
+
+页面资源检查解析真实 HTML 属性，并通过有界词法扫描识别 JS 字面量模块路径和 CSS 资源；跳过注释、普通字符串、模板文本及正则示例，验证自增／自减后的除法不会掩盖真实模块引用。动态拼接和模板表达式不执行，新增此类资源加载时需同步补充检查。浏览器回归另覆盖导入期间的成员读取、翻页／搜索失败后保留已显示状态、配置重入与失败恢复、全局词增删与分组保存／删除的并发、键盘焦点和小屏操作；延迟响应测试使用独立快照，避免共享对象掩盖竞态。
 
 ## PR 生命周期 CI
 
@@ -276,6 +279,12 @@ python -m pytest -q tests/test_checkin_cache.py tests/test_checkin_calendar.py t
 运行 `python -m pytest -q tests/test_config_upgrade.py tests/test_group_safety_config.py tests/test_checkin_group_safety.py`。`tests/fixtures/config_v3_8_0_grouped.json` 是按 v3.8.0 分组格式构造的合成配置，不含用户数据。使用已安装 AstrBot 的真实 `AstrBotConfig` 加载、裁剪、保存、重载，核对六组自定义值、首选图源默认与保存重载、旧 Lolicon 地址裁剪、去重天数、隐藏旧列表原样归档、全局人工规则保留、完整 UMO 单组归属、保存／归档失败不清配置，确认旧词在版本 1 重载时不会复活，以及新安装默认值正常。
 
 这些用例不调用 v3.8.0 的旧迁移代码，不证明更早版本可直接升级；它们验证已完成分组迁移的配置与当前 schema 的兼容性。本机验证框架为 AstrBot 4.27.3，不替代生产升级或其他框架版本验证。
+
+## 管理中心设置与界面
+
+`tests/test_plugin_settings_api.py` 覆盖当前六组 schema、部分保存、类型／范围／选项／步长校验、真实 AstrBotConfig 保存重载和失败引用回滚。安全四键与隐藏键拒绝通用写入；文本设置读取当前值、返回规范化后的保存值并允许清空，代理复用正式校验；废弃的自动触发与去重天数不能写入。签到奖励保持主线规则。
+
+`tests/test_plugin_center_resources.py` 校验打包资源递归闭包与相对 bridge 端点；`tests/js/settings.test.mjs`、`ui.test.mjs` 验证草稿、选项及键盘纯函数。浏览器回归使用真实 Chromium 和合成 bridge，按配置编辑／保存／放弃／清空、安全规则增删及旧响应隔离等业务流程组织，共用场景覆盖不同字段；已退役控件、兼容接口及重复竞态用例随实现一起删除。布局回归覆盖长短分组宽度、工具条在滚动及修改状态变化时的位置和高度，以及矮窗口中分组栏独立滚动。交互回归覆盖成员翻页、分页内编辑、搜索重置，以及切群时保留当前内容并拒绝旧请求覆盖新榜单。测试不访问生产 AstrBot、QQ、Pixiv 或真实用户配置；实际宿主集成需另验。
 
 ## OneBot 自动传输与超时结算
 

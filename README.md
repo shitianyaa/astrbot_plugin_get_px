@@ -7,7 +7,7 @@
 AstrBot 图片与签到插件，支持 Lolicon / Pixiv 搜图、模型取图、每日签到和金币商店。
 
 ![AstrBot](https://img.shields.io/badge/AstrBot-plugin-5865f2?style=flat-square)
-![Version](https://img.shields.io/badge/version-3.8.8-22c55e?style=flat-square)
+![Version](https://img.shields.io/badge/version-3.9.0-22c55e?style=flat-square)
 ![Python](https://img.shields.io/badge/Python-3.10%2B-3776ab?style=flat-square)
 ![Platform](https://img.shields.io/badge/platform-OneBot%20%2F%20aiocqhttp-f97316?style=flat-square)
 ![License](https://img.shields.io/badge/license-MIT-3b82f6?style=flat-square)
@@ -64,7 +64,7 @@ AstrBot 图片与签到插件，支持 Lolicon / Pixiv 搜图、模型取图、�
 ### 升级提醒
 
 > [!WARNING]
-> 升级前备份插件配置和数据目录。早于 v3.8.0 的版本须先升级到 v3.8.0 并确认配置迁移成功；v2.8.x 或已有数据库无版本号时，还须先经过 v3.0.0 完成数据迁移。新代理地址默认留空，仍使用直连；图片去重改为固定窗口，不再提供期限配置。详见[配置升级基线](docs/project/configuration.md#升级基线)及[本次版本说明](CHANGELOG.md#v388-2026-11-15)。
+> 升级前备份插件配置和数据目录。早于 v3.8.0 的版本须先升级到 v3.8.0 并确认配置迁移成功；v2.8.x 或已有数据库无版本号时，还须先经过 v3.0.0 完成数据迁移。代理地址默认留空，仍使用直连；图片去重使用固定窗口。管理中心改用系统字体，原在线字体设置不再生效。详见[配置升级基线](docs/project/configuration.md#升级基线)及[本次版本说明](CHANGELOG.md#v390-2026-11-20)。
 
 ## 图片获取
 
@@ -161,16 +161,20 @@ AstrBot 图片与签到插件，支持 Lolicon / Pixiv 搜图、模型取图、�
 ### WebUI 插件管理中心
 
 <div align="center">
-<img src="Webui.jpg" alt="插件管理中心安全分组编辑界面" width="100%">
+<img src="Webui.png" alt="插件管理中心配置页面" width="100%">
 </div>
 
-上图为当前安全分组编辑界面，使用本地演示数据。
+上图为管理中心配置页，使用本地演示数据。
 
 <br>
 
-在 AstrBot 插件页打开「pluginCenter」，可以查看群排行和趋势、调整成员金币与好感度、管理全局安全规则及命名分组、导出插件数据，以及导入签到备份。
+在 AstrBot 插件详情页打开「画境拾珍」管理中心，可以查看群排行和趋势、调整成员金币与好感度、管理安全分组、导出和导入签到备份，并在「插件配置」按六组导航或搜索设置。界面支持明暗主题、移动布局和键盘操作。
 
-修改成员数值只影响当前资料，不回写历史奖励、群排行或已生成卡片。
+设置直接显示当前值，只保存改动项；Pixiv Token 和出站代理地址可直接查看、修改或清空后保存。失败保留草稿，不自动重载插件；安全规则在专用页面维护。代理、Token 及客户端配置保存后需重载。管理中心使用访问设备的系统字体，无需下载。没有新增好感度金币加成或签到奖励配置。
+
+读取设置失败后可重试，已有内容仍可继续编辑。无效数值可通过「定位待修正项」清除搜索并跳到对应字段；极矮窗口下导航和工具条随页面滚动，保持可操作。
+
+成员资料每页显示 20 位。搜索或清除条件后回到第一页，编辑后留在当前页。修改成员数值只影响当前资料，不回写历史奖励、群排行或已生成卡片。
 
 ### 常用配置
 
@@ -240,7 +244,7 @@ OneBot、模型、T2I 和浏览器请求由各自配置管理。容器中的 `12
 | [缓存与去重](docs/project/cache-and-dedupe.md) | 去重范围、缓存与清理 |
 | [项目架构](docs/project/architecture.md) | 模块划分与发送流程 |
 | [T2I 渲染说明](docs/dev/t2i-rendering.md) | 自建服务与渲染排查 |
-| [更新日志](CHANGELOG.md#v388-2026-11-15) | 各版本变化 |
+| [更新日志](CHANGELOG.md#v390-2026-11-20) | 各版本变化 |
 
 ### 依赖
 
@@ -256,6 +260,7 @@ lunar-python
 
 - 默认图片源由 [Lolicon API](https://api.lolicon.app/) 提供
 - Pixiv 图片源基于 [pixivpy-async](https://github.com/Mikubill/pixivpy-async)
+- 管理中心设置页参考 ke mi 的 [PR #27](https://github.com/shitianyaa/astrbot_plugin_get_px/pull/27)，在此基础上整理界面与配置安全边界
 - 作品黑名单缩略图生成基于 [Pillow](https://python-pillow.org/)
 - 签到每日一言由 [Hitokoto API](https://github.com/hitokoto-osc/hitokoto-api) 提供，感谢一言开源社区和公共 API 服务
 - 签到卡片内置字体由 [霞鹜文楷轻便版](https://github.com/lxgw/LxgwWenKai-Lite) 生成，采用 SIL Open Font License 1.1 授权
